@@ -1,0 +1,533 @@
+#!/usr/bin/env bun
+/**
+ * claude-hivemind broker daemon
+ *
+ * Singleton HTTP + WebSocket server on localhost:7899 backed by SQLite.
+ * Tracks peers, routes messages with namespace isolation, serves dashboard.
+ *
+ * Auto-launched by the MCP server if not already running.
+ * Run directly: bun broker.ts
+ */
+
+import { Database } from "bun:sqlite";
+import type {
+  ClientMessage,
+  BrokerMessage,
+  DashboardMessage,
+  Peer,
+  NamespaceInfo,
+} from "./shared/types.ts";
+import dashboard from "./dashboard.html";
+
+const PORT = parseInt(process.env.CLAUDE_HIVEMIND_PORT ?? "7899", 10);
+const DB_PATH =
+  process.env.CLAUDE_HIVEMIND_DB ?? `${process.env.HOME}/.claude-hivemind.db`;
+const GRACE_PERIOD_MS = 30_000;
+
+// --- Database setup ---
+
+const db = new Database(DB_PATH);
+db.run("PRAGMA journal_mode = WAL");
+db.run("PRAGMA busy_timeout = 3000");
+
+db.run(`
+  CREATE TABLE IF NOT EXISTS peers (
+    id TEXT PRIMARY KEY,
+    pid INTEGER NOT NULL,
+    cwd TEXT NOT NULL,
+    git_root TEXT,
+    git_branch TEXT,
+    tty TEXT,
+    summary TEXT NOT NULL DEFAULT '',
+    namespace TEXT NOT NULL DEFAULT 'default',
+    registered_at TEXT NOT NULL,
+    last_seen TEXT NOT NULL,
+    connected INTEGER NOT NULL DEFAULT 0
+  )
+`);
+
+db.run(
+  `CREATE INDEX IF NOT EXISTS idx_peers_namespace ON peers(namespace)`
+);
+
+db.run(`
+  CREATE TABLE IF NOT EXISTS messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_id TEXT NOT NULL,
+    to_id TEXT NOT NULL,
+    text TEXT NOT NULL,
+    sent_at TEXT NOT NULL,
+    delivered INTEGER NOT NULL DEFAULT 0
+  )
+`);
+
+// --- Prepared statements ---
+
+const insertPeer = db.prepare(`
+  INSERT INTO peers (id, pid, cwd, git_root, git_branch, tty, summary, namespace, registered_at, last_seen, connected)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`);
+
+const updateLastSeen = db.prepare(
+  `UPDATE peers SET last_seen = ? WHERE id = ?`
+);
+
+const updateSummary = db.prepare(
+  `UPDATE peers SET summary = ? WHERE id = ?`
+);
+
+const markConnected = db.prepare(
+  `UPDATE peers SET connected = ? WHERE id = ?`
+);
+
+const deletePeerStmt = db.prepare(`DELETE FROM peers WHERE id = ?`);
+
+const selectPeerById = db.prepare(`SELECT * FROM peers WHERE id = ?`);
+
+const selectAllPeers = db.prepare(`SELECT * FROM peers`);
+
+const selectPeersByNamespace = db.prepare(
+  `SELECT * FROM peers WHERE namespace = ?`
+);
+
+const deleteByPid = db.prepare(`DELETE FROM peers WHERE pid = ?`);
+
+const insertMessage = db.prepare(`
+  INSERT INTO messages (from_id, to_id, text, sent_at, delivered)
+  VALUES (?, ?, ?, ?, ?)
+`);
+
+const selectUndelivered = db.prepare(
+  `SELECT * FROM messages WHERE to_id = ? AND delivered = 0 ORDER BY sent_at ASC`
+);
+
+const markDelivered = db.prepare(
+  `UPDATE messages SET delivered = 1 WHERE id = ?`
+);
+
+// --- Helpers ---
+
+function generateId(): string {
+  const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+  let id = "";
+  for (let i = 0; i < 8; i++) {
+    id += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return id;
+}
+
+function getPeer(id: string): Peer | null {
+  return (selectPeerById.get(id) as Peer) ?? null;
+}
+
+function getAllPeers(): Peer[] {
+  return selectAllPeers.all() as Peer[];
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getNamespaceInfos(): NamespaceInfo[] {
+  const peers = getAllPeers();
+  const nsMap = new Map<string, number>();
+  for (const p of peers) {
+    nsMap.set(p.namespace, (nsMap.get(p.namespace) ?? 0) + 1);
+  }
+  return Array.from(nsMap.entries()).map(([name, peer_count]) => ({
+    name,
+    peer_count,
+  }));
+}
+
+function log(msg: string) {
+  console.error(`[claude-hivemind broker] ${msg}`);
+}
+
+// --- Clean up stale peers on startup ---
+
+function cleanStalePeers() {
+  const peers = db
+    .query("SELECT id, pid FROM peers")
+    .all() as { id: string; pid: number }[];
+  for (const peer of peers) {
+    if (!isProcessAlive(peer.pid)) {
+      deletePeerStmt.run(peer.id);
+    }
+  }
+}
+
+cleanStalePeers();
+setInterval(cleanStalePeers, 30_000);
+
+// --- WebSocket state ---
+
+type PeerWSData = { kind: "peer"; peerId: string | null; namespace: string };
+type DashboardWSData = { kind: "dashboard" };
+type WSData = PeerWSData | DashboardWSData;
+
+const peerSockets = new Map<string, import("bun").ServerWebSocket<WSData>>();
+
+// --- Peer message handler ---
+
+function handlePeerMessage(
+  ws: import("bun").ServerWebSocket<PeerWSData>,
+  msg: ClientMessage,
+  server: import("bun").Server
+): void {
+  switch (msg.type) {
+    case "register": {
+      const id = generateId();
+      const now = new Date().toISOString();
+
+      // Remove stale registration for same PID
+      deleteByPid.run(msg.pid);
+
+      insertPeer.run(
+        id,
+        msg.pid,
+        msg.cwd,
+        msg.git_root,
+        msg.git_branch,
+        msg.tty,
+        msg.summary,
+        msg.namespace,
+        now,
+        now,
+        1
+      );
+
+      ws.data.peerId = id;
+      ws.data.namespace = msg.namespace;
+
+      // Subscribe to namespace topic and personal topic
+      ws.subscribe(`ns:${msg.namespace}`);
+      ws.subscribe(`peer:${id}`);
+
+      peerSockets.set(id, ws as import("bun").ServerWebSocket<WSData>);
+
+      // Reply with confirmation
+      const reply: BrokerMessage = {
+        type: "registered",
+        id,
+        namespace: msg.namespace,
+      };
+      ws.send(JSON.stringify(reply));
+
+      // Deliver any queued messages
+      const queued = selectUndelivered.all(id) as import("./shared/types.ts").Message[];
+      for (const m of queued) {
+        const sender = getPeer(m.from_id);
+        const deliverMsg: BrokerMessage = {
+          type: "message",
+          from_id: m.from_id,
+          from_summary: sender?.summary ?? "",
+          from_cwd: sender?.cwd ?? "",
+          text: m.text,
+          sent_at: m.sent_at,
+        };
+        ws.send(JSON.stringify(deliverMsg));
+        markDelivered.run(m.id);
+      }
+
+      // Notify namespace peers and dashboard
+      const peer = getPeer(id)!;
+      const joinMsg = JSON.stringify({ type: "peer_joined", peer });
+      server.publish(`ns:${msg.namespace}`, joinMsg);
+      server.publish(
+        "dashboard",
+        JSON.stringify({
+          type: "peer_joined",
+          peer,
+        } satisfies DashboardMessage)
+      );
+
+      log(`Peer ${id} registered (ns: ${msg.namespace}, cwd: ${msg.cwd})`);
+      break;
+    }
+
+    case "set_summary": {
+      if (!ws.data.peerId) return;
+      updateSummary.run(msg.summary, ws.data.peerId);
+      const peer = getPeer(ws.data.peerId);
+      if (peer) {
+        const updateMsg = JSON.stringify({ type: "peer_updated", peer });
+        server.publish(`ns:${ws.data.namespace}`, updateMsg);
+        server.publish("dashboard", updateMsg);
+      }
+      break;
+    }
+
+    case "send_message": {
+      if (!ws.data.peerId) return;
+      const fromId = ws.data.peerId;
+
+      const target = getPeer(msg.to);
+      if (!target) {
+        ws.send(
+          JSON.stringify({
+            type: "error",
+            error: `Peer ${msg.to} not found`,
+          } satisfies BrokerMessage)
+        );
+        return;
+      }
+
+      // Namespace enforcement
+      if (target.namespace !== ws.data.namespace) {
+        ws.send(
+          JSON.stringify({
+            type: "error",
+            error: `Cannot message peer ${msg.to}: different namespace (${target.namespace} vs ${ws.data.namespace})`,
+          } satisfies BrokerMessage)
+        );
+        return;
+      }
+
+      const now = new Date().toISOString();
+      const sender = getPeer(fromId);
+
+      // Try direct delivery
+      const targetWs = peerSockets.get(msg.to);
+      if (targetWs && targetWs.readyState === 1) {
+        const deliverMsg: BrokerMessage = {
+          type: "message",
+          from_id: fromId,
+          from_summary: sender?.summary ?? "",
+          from_cwd: sender?.cwd ?? "",
+          text: msg.text,
+          sent_at: now,
+        };
+        targetWs.send(JSON.stringify(deliverMsg));
+        insertMessage.run(fromId, msg.to, msg.text, now, 1);
+      } else {
+        // Queue for later delivery
+        insertMessage.run(fromId, msg.to, msg.text, now, 0);
+      }
+
+      // Notify dashboard
+      server.publish(
+        "dashboard",
+        JSON.stringify({
+          type: "message_sent",
+          from_id: fromId,
+          to_id: msg.to,
+          text: msg.text,
+          sent_at: now,
+        } satisfies DashboardMessage)
+      );
+      break;
+    }
+
+    case "list_peers": {
+      if (!ws.data.peerId) return;
+      let peers: Peer[];
+      if (msg.scope === "namespace") {
+        peers = selectPeersByNamespace.all(ws.data.namespace) as Peer[];
+      } else {
+        peers = getAllPeers();
+      }
+      // Exclude self and verify alive
+      peers = peers
+        .filter((p) => p.id !== ws.data.peerId)
+        .filter((p) => isProcessAlive(p.pid));
+
+      ws.send(JSON.stringify({ type: "peers", peers } satisfies BrokerMessage));
+      break;
+    }
+
+    case "heartbeat": {
+      if (!ws.data.peerId) {
+        return;
+      }
+      updateLastSeen.run(new Date().toISOString(), ws.data.peerId);
+      break;
+    }
+  }
+}
+
+// --- HTTP Server ---
+
+const server = Bun.serve<WSData>({
+  port: PORT,
+  hostname: "127.0.0.1",
+
+  routes: {
+    "/": dashboard,
+
+    "/health": () => {
+      const peers = getAllPeers();
+      const namespaces = [...new Set(peers.map((p) => p.namespace))];
+      return Response.json({
+        status: "ok",
+        peers: peers.length,
+        namespaces,
+      });
+    },
+
+    "/api/list-peers": {
+      async POST(req) {
+        const body = (await req.json()) as {
+          scope: string;
+          namespace?: string;
+          cwd?: string;
+          git_root?: string | null;
+          exclude_id?: string;
+        };
+        let peers: Peer[];
+        if (body.scope === "namespace" && body.namespace) {
+          peers = selectPeersByNamespace.all(body.namespace) as Peer[];
+        } else {
+          peers = getAllPeers();
+        }
+        if (body.exclude_id) {
+          peers = peers.filter((p) => p.id !== body.exclude_id);
+        }
+        peers = peers.filter((p) => isProcessAlive(p.pid));
+        return Response.json(peers);
+      },
+    },
+
+    "/api/send-message": {
+      async POST(req) {
+        const body = (await req.json()) as {
+          from_id: string;
+          to_id: string;
+          text: string;
+        };
+        const target = getPeer(body.to_id);
+        if (!target) {
+          return Response.json({
+            ok: false,
+            error: `Peer ${body.to_id} not found`,
+          });
+        }
+
+        const now = new Date().toISOString();
+        const targetWs = peerSockets.get(body.to_id);
+        if (targetWs && targetWs.readyState === 1) {
+          const sender = getPeer(body.from_id);
+          const deliverMsg: BrokerMessage = {
+            type: "message",
+            from_id: body.from_id,
+            from_summary: sender?.summary ?? "",
+            from_cwd: sender?.cwd ?? "",
+            text: body.text,
+            sent_at: now,
+          };
+          targetWs.send(JSON.stringify(deliverMsg));
+          insertMessage.run(body.from_id, body.to_id, body.text, now, 1);
+        } else {
+          insertMessage.run(body.from_id, body.to_id, body.text, now, 0);
+        }
+        return Response.json({ ok: true });
+      },
+    },
+
+    "/api/status": () => {
+      const peers = getAllPeers().filter((p) => isProcessAlive(p.pid));
+      const namespaces = getNamespaceInfos();
+      return Response.json({ peers, namespaces });
+    },
+  },
+
+  fetch(req, server) {
+    const url = new URL(req.url);
+
+    if (url.pathname === "/ws/peer") {
+      const ns = url.searchParams.get("namespace") ?? "default";
+      const success = server.upgrade(req, {
+        data: { kind: "peer", peerId: null, namespace: ns } as PeerWSData,
+      });
+      return success
+        ? undefined
+        : new Response("WebSocket upgrade failed", { status: 500 });
+    }
+
+    if (url.pathname === "/ws/dashboard") {
+      const success = server.upgrade(req, {
+        data: { kind: "dashboard" } as DashboardWSData,
+      });
+      return success
+        ? undefined
+        : new Response("WebSocket upgrade failed", { status: 500 });
+    }
+
+    return new Response("Not found", { status: 404 });
+  },
+
+  websocket: {
+    idleTimeout: 120,
+
+    open(ws) {
+      if (ws.data.kind === "dashboard") {
+        ws.subscribe("dashboard");
+        const peers = getAllPeers().filter((p) => isProcessAlive(p.pid));
+        const namespaces = getNamespaceInfos();
+        ws.send(
+          JSON.stringify({
+            type: "snapshot",
+            peers,
+            namespaces,
+          } satisfies DashboardMessage)
+        );
+      }
+    },
+
+    message(ws, message) {
+      if (ws.data.kind === "peer") {
+        try {
+          const data = JSON.parse(String(message)) as ClientMessage;
+          handlePeerMessage(
+            ws as import("bun").ServerWebSocket<PeerWSData>,
+            data,
+            server
+          );
+        } catch (e) {
+          log(`Invalid message: ${e}`);
+        }
+      }
+      // Dashboard sockets are read-only
+    },
+
+    close(ws) {
+      if (ws.data.kind === "peer" && ws.data.peerId) {
+        const peerId = ws.data.peerId;
+        const namespace = ws.data.namespace;
+        peerSockets.delete(peerId);
+        markConnected.run(0, peerId);
+
+        server.publish(
+          `ns:${namespace}`,
+          JSON.stringify({ type: "peer_left", peer_id: peerId })
+        );
+        server.publish(
+          "dashboard",
+          JSON.stringify({
+            type: "peer_left",
+            peer_id: peerId,
+            namespace,
+          } satisfies DashboardMessage)
+        );
+
+        log(`Peer ${peerId} disconnected (ns: ${namespace})`);
+
+        // Grace period: delete after 30s if still disconnected
+        setTimeout(() => {
+          const current = getPeer(peerId);
+          if (current && !current.connected) {
+            deletePeerStmt.run(peerId);
+            log(`Peer ${peerId} cleaned up after grace period`);
+          }
+        }, GRACE_PERIOD_MS);
+      }
+    },
+  },
+});
+
+log(`Listening on 127.0.0.1:${PORT} (db: ${DB_PATH})`);
