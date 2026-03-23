@@ -8,14 +8,10 @@ const CONFIG_PATH = `${process.env.HOME}/.claude-hivemind-namespaces.json`;
  */
 export async function loadNamespaceConfig(): Promise<NamespaceConfig | null> {
   try {
-    const file = Bun.file(CONFIG_PATH);
-    if (await file.exists()) {
-      return (await file.json()) as NamespaceConfig;
-    }
+    return (await Bun.file(CONFIG_PATH).json()) as NamespaceConfig;
   } catch {
-    // Fall through
+    return null;
   }
-  return null;
 }
 
 /**
@@ -29,7 +25,6 @@ export function resolveNamespace(
   cwd: string,
   config: NamespaceConfig | null
 ): Namespace {
-  // Check explicit rules (longest prefix match)
   if (config?.rules.length) {
     let bestMatch: { name: string; length: number } | null = null;
     for (const rule of config.rules) {
@@ -45,7 +40,6 @@ export function resolveNamespace(
     if (bestMatch) return bestMatch.name;
   }
 
-  // Auto-derive: ~/source/<group>/...
   const home = process.env.HOME ?? "";
   const sourcePrefix = `${home}/source/`;
   if (cwd.startsWith(sourcePrefix)) {

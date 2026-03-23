@@ -12,6 +12,8 @@
  *   bun cli.ts kill-broker     — Stop the broker daemon
  */
 
+import type { Peer } from "./shared/types.ts";
+
 const BROKER_PORT = parseInt(process.env.CLAUDE_HIVEMIND_PORT ?? "7899", 10);
 const BROKER_URL = `http://127.0.0.1:${BROKER_PORT}`;
 
@@ -33,17 +35,20 @@ async function brokerFetch<T>(path: string, body?: unknown): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-interface PeerInfo {
-  id: string;
-  pid: number;
-  cwd: string;
-  git_root: string | null;
-  git_branch: string | null;
-  tty: string | null;
-  summary: string;
-  namespace: string;
-  last_seen: string;
-  connected: number;
+function fetchAllPeers(): Promise<Peer[]> {
+  return brokerFetch<Peer[]>("/api/list-peers", {
+    scope: "machine",
+    cwd: "/",
+    git_root: null,
+  });
+}
+
+function groupByNamespace(peers: Peer[]): Record<string, Peer[]> {
+  const grouped: Record<string, Peer[]> = {};
+  for (const p of peers) {
+    (grouped[p.namespace] ??= []).push(p);
+  }
+  return grouped;
 }
 
 const cmd = process.argv[2];
@@ -63,17 +68,8 @@ switch (cmd) {
       console.log(`Dashboard: ${BROKER_URL}/`);
 
       if (health.peers > 0) {
-        const peers = await brokerFetch<PeerInfo[]>("/api/list-peers", {
-          scope: "machine",
-          cwd: "/",
-          git_root: null,
-        });
-
-        // Group by namespace
-        const grouped: Record<string, PeerInfo[]> = {};
-        for (const p of peers) {
-          (grouped[p.namespace] ??= []).push(p);
-        }
+        const peers = await fetchAllPeers();
+        const grouped = groupByNamespace(peers);
 
         for (const [ns, nsPeers] of Object.entries(grouped).sort()) {
           console.log(`\n[${ns}] (${nsPeers.length} peer(s))`);
@@ -94,19 +90,12 @@ switch (cmd) {
 
   case "peers": {
     try {
-      const peers = await brokerFetch<PeerInfo[]>("/api/list-peers", {
-        scope: "machine",
-        cwd: "/",
-        git_root: null,
-      });
+      const peers = await fetchAllPeers();
 
       if (peers.length === 0) {
         console.log("No peers registered.");
       } else {
-        const grouped: Record<string, PeerInfo[]> = {};
-        for (const p of peers) {
-          (grouped[p.namespace] ??= []).push(p);
-        }
+        const grouped = groupByNamespace(peers);
 
         for (const [ns, nsPeers] of Object.entries(grouped).sort()) {
           console.log(`[${ns}]`);

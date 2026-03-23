@@ -27,15 +27,11 @@ import {
   loadNamespaceConfig,
 } from "./shared/namespace.ts";
 
-// --- Configuration ---
-
 const BROKER_PORT = parseInt(process.env.CLAUDE_HIVEMIND_PORT ?? "7899", 10);
 const BROKER_URL = `http://127.0.0.1:${BROKER_PORT}`;
 const BROKER_WS_URL = `ws://127.0.0.1:${BROKER_PORT}`;
 const BROKER_SCRIPT = new URL("./broker.ts", import.meta.url).pathname;
 const MAX_RECONNECT_DELAY = 30_000;
-
-// --- State ---
 
 let myId: PeerId | null = null;
 let myCwd = process.cwd();
@@ -45,11 +41,8 @@ let myNamespace = "default";
 let ws: WebSocket | null = null;
 let reconnectAttempts = 0;
 
-// Promise-based request/response for list_peers
 let pendingPeersResolve: ((peers: Peer[]) => void) | null = null;
 let pendingPeersReject: ((err: Error) => void) | null = null;
-
-// --- Utility ---
 
 function log(msg: string) {
   console.error(`[claude-hivemind] ${msg}`);
@@ -95,8 +88,6 @@ function getTty(): string | null {
   return null;
 }
 
-// --- Broker lifecycle ---
-
 async function isBrokerAlive(): Promise<boolean> {
   try {
     const res = await fetch(`${BROKER_URL}/health`, {
@@ -129,8 +120,6 @@ async function ensureBroker(): Promise<void> {
   }
   throw new Error("Failed to start broker daemon after 6 seconds");
 }
-
-// --- WebSocket connection ---
 
 function connectToBroker(): void {
   const wsUrl = `${BROKER_WS_URL}/ws/peer?namespace=${encodeURIComponent(myNamespace)}`;
@@ -169,9 +158,7 @@ function connectToBroker(): void {
     scheduleReconnect();
   });
 
-  ws.addEventListener("error", () => {
-    // close event will fire after this
-  });
+  ws.addEventListener("error", () => {});
 }
 
 function scheduleReconnect(): void {
@@ -195,8 +182,6 @@ function scheduleReconnect(): void {
     connectToBroker();
   }, delay);
 }
-
-// --- Handle broker messages ---
 
 function handleBrokerMessage(msg: BrokerMessage): void {
   switch (msg.type) {
@@ -241,12 +226,9 @@ function handleBrokerMessage(msg: BrokerMessage): void {
     case "peer_joined":
     case "peer_left":
     case "peer_updated":
-      // Could optionally surface these to Claude
       break;
   }
 }
-
-// --- WebSocket helpers ---
 
 function wsSend(msg: ClientMessage): boolean {
   if (ws && ws.readyState === WebSocket.OPEN) {
@@ -276,8 +258,6 @@ async function requestPeerList(
   });
 }
 
-// --- MCP Server ---
-
 const mcp = new Server(
   { name: "claude-hivemind", version: "0.2.0" },
   {
@@ -301,7 +281,9 @@ When you start, proactively call set_summary to describe what you're working on.
   }
 );
 
-// --- Tool definitions ---
+function textResult(text: string, isError = false) {
+  return { content: [{ type: "text" as const, text }], ...(isError && { isError: true }) };
+}
 
 const TOOLS = [
   {
@@ -366,8 +348,6 @@ const TOOLS = [
   },
 ];
 
-// --- Tool handlers ---
-
 mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: TOOLS,
 }));
@@ -384,14 +364,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         const peers = await requestPeerList(scope);
 
         if (peers.length === 0) {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: `No other Claude Code instances found (scope: ${scope}, namespace: ${myNamespace}).`,
-              },
-            ],
-          };
+          return textResult(`No other Claude Code instances found (scope: ${scope}, namespace: ${myNamespace}).`);
         }
 
         const lines = peers.map((p) => {
@@ -412,108 +385,31 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
           return parts.join("\n  ");
         });
 
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Found ${peers.length} peer(s) (scope: ${scope}, namespace: ${myNamespace}):\n\n${lines.join("\n\n")}`,
-            },
-          ],
-        };
+        return textResult(`Found ${peers.length} peer(s) (scope: ${scope}, namespace: ${myNamespace}):\n\n${lines.join("\n\n")}`);
       } catch (e) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Error listing peers: ${e instanceof Error ? e.message : String(e)}`,
-            },
-          ],
-          isError: true,
-        };
+        return textResult(`Error listing peers: ${e instanceof Error ? e.message : String(e)}`, true);
       }
     }
 
     case "send_message": {
       const { to, message } = args as { to: string; message: string };
-      if (!myId) {
-        return {
-          content: [
-            { type: "text" as const, text: "Not registered with broker yet" },
-          ],
-          isError: true,
-        };
-      }
-      if (!to) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: "Missing target peer ID (to)",
-            },
-          ],
-          isError: true,
-        };
-      }
+      if (!myId) return textResult("Not registered with broker yet", true);
+      if (!to) return textResult("Missing target peer ID (to)", true);
       const sent = wsSend({ type: "send_message", to, text: message });
-      if (!sent) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: "Not connected to broker. Message not sent.",
-            },
-          ],
-          isError: true,
-        };
-      }
-      return {
-        content: [
-          { type: "text" as const, text: `Message sent to peer ${to}` },
-        ],
-      };
+      if (!sent) return textResult("Not connected to broker. Message not sent.", true);
+      return textResult(`Message sent to peer ${to}`);
     }
 
     case "set_summary": {
       const { summary } = args as { summary: string };
-      if (!myId) {
-        return {
-          content: [
-            { type: "text" as const, text: "Not registered with broker yet" },
-          ],
-          isError: true,
-        };
-      }
+      if (!myId) return textResult("Not registered with broker yet", true);
       const sent = wsSend({ type: "set_summary", summary });
-      if (!sent) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: "Not connected to broker. Summary not updated.",
-            },
-          ],
-          isError: true,
-        };
-      }
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `Summary updated: "${summary}"`,
-          },
-        ],
-      };
+      if (!sent) return textResult("Not connected to broker. Summary not updated.", true);
+      return textResult(`Summary updated: "${summary}"`);
     }
 
     case "check_messages": {
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: "Messages are delivered automatically via WebSocket. No manual check needed.",
-          },
-        ],
-      };
+      return textResult("Messages are delivered automatically via WebSocket. No manual check needed.");
     }
 
     default:
@@ -521,15 +417,13 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
   }
 });
 
-// --- Startup ---
-
 async function main() {
-  // 1. Gather context
   myCwd = process.cwd();
-  myGitRoot = await getGitRoot(myCwd);
-  myGitBranch = await getGitBranch(myCwd);
+  [myGitRoot, myGitBranch] = await Promise.all([
+    getGitRoot(myCwd),
+    getGitBranch(myCwd),
+  ]);
 
-  // 2. Resolve namespace
   const namespaceConfig = await loadNamespaceConfig();
   myNamespace = resolveNamespace(myCwd, namespaceConfig);
 
@@ -538,22 +432,17 @@ async function main() {
   log(`Git branch: ${myGitBranch ?? "(none)"}`);
   log(`Namespace: ${myNamespace}`);
 
-  // 3. Ensure broker is running
   await ensureBroker();
 
-  // 4. Connect MCP over stdio
   await mcp.connect(new StdioServerTransport());
   log("MCP connected");
 
-  // 5. Connect WebSocket to broker
   connectToBroker();
 
-  // 6. Heartbeat every 30s
   setInterval(() => {
     wsSend({ type: "heartbeat" });
   }, 30_000);
 
-  // 7. Cleanup on exit
   const cleanup = () => {
     if (ws) {
       ws.close();

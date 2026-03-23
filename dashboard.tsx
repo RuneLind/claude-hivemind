@@ -1,32 +1,13 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { createRoot } from "react-dom/client";
+import type { Peer, NamespaceInfo } from "./shared/types.ts";
 import "./dashboard.css";
-
-interface Peer {
-  id: string;
-  pid: number;
-  cwd: string;
-  git_root: string | null;
-  git_branch: string | null;
-  tty: string | null;
-  summary: string;
-  namespace: string;
-  registered_at: string;
-  last_seen: string;
-  connected: number;
-}
-
-interface NamespaceInfo {
-  name: string;
-  peer_count: number;
-}
 
 interface ActivityItem {
   time: string;
   text: string;
 }
 
-// Deterministic color from namespace name
 function namespaceColor(name: string): string {
   const colors = [
     "#58a6ff",
@@ -164,14 +145,12 @@ function Dashboard() {
     };
   }, [connect]);
 
-  // Update "time ago" every 30s
   const [, setTick] = useState(0);
   useEffect(() => {
     const timer = setInterval(() => setTick((t) => t + 1), 30_000);
     return () => clearInterval(timer);
   }, []);
 
-  // Group peers by namespace
   const grouped = peers.reduce(
     (acc, peer) => {
       (acc[peer.namespace] ??= []).push(peer);

@@ -23,8 +23,7 @@ const PORT = parseInt(process.env.CLAUDE_HIVEMIND_PORT ?? "7899", 10);
 const DB_PATH =
   process.env.CLAUDE_HIVEMIND_DB ?? `${process.env.HOME}/.claude-hivemind.db`;
 const GRACE_PERIOD_MS = 30_000;
-
-// --- Database setup ---
+const WS_OPEN = 1;
 
 const db = new Database(DB_PATH);
 db.run("PRAGMA journal_mode = WAL");
@@ -61,7 +60,6 @@ db.run(`
   )
 `);
 
-// --- Prepared statements ---
 
 const insertPeer = db.prepare(`
   INSERT INTO peers (id, pid, cwd, git_root, git_branch, tty, summary, namespace, registered_at, last_seen, connected)
@@ -105,7 +103,12 @@ const markDelivered = db.prepare(
   `UPDATE messages SET delivered = 1 WHERE id = ?`
 );
 
-// --- Helpers ---
+const selectPeerIdPid = db.prepare(`SELECT id, pid FROM peers`);
+
+const deleteOldMessages = db.prepare(
+  `DELETE FROM messages WHERE delivered = 1 AND sent_at < ?`
+);
+
 
 function generateId(): string {
   const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
@@ -133,8 +136,12 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-function getNamespaceInfos(): NamespaceInfo[] {
-  const peers = getAllPeers();
+
+function log(msg: string) {
+  console.error(`[claude-hivemind broker] ${msg}`);
+}
+
+function namespacesFromPeers(peers: Peer[]): NamespaceInfo[] {
   const nsMap = new Map<string, number>();
   for (const p of peers) {
     nsMap.set(p.namespace, (nsMap.get(p.namespace) ?? 0) + 1);
@@ -145,27 +152,40 @@ function getNamespaceInfos(): NamespaceInfo[] {
   }));
 }
 
-function log(msg: string) {
-  console.error(`[claude-hivemind broker] ${msg}`);
+function deliverOrQueue(fromId: string, toId: string, text: string, now: string): void {
+  const targetWs = peerSockets.get(toId);
+  if (targetWs && targetWs.readyState === WS_OPEN) {
+    const sender = getPeer(fromId);
+    targetWs.send(JSON.stringify({
+      type: "message",
+      from_id: fromId,
+      from_summary: sender?.summary ?? "",
+      from_cwd: sender?.cwd ?? "",
+      text,
+      sent_at: now,
+    } satisfies BrokerMessage));
+    insertMessage.run(fromId, toId, text, now, 1);
+  } else {
+    insertMessage.run(fromId, toId, text, now, 0);
+  }
 }
 
-// --- Clean up stale peers on startup ---
 
 function cleanStalePeers() {
-  const peers = db
-    .query("SELECT id, pid FROM peers")
-    .all() as { id: string; pid: number }[];
+  const peers = selectPeerIdPid.all() as { id: string; pid: number }[];
   for (const peer of peers) {
     if (!isProcessAlive(peer.pid)) {
       deletePeerStmt.run(peer.id);
     }
   }
+  // Purge delivered messages older than 1 hour
+  const cutoff = new Date(Date.now() - 3_600_000).toISOString();
+  deleteOldMessages.run(cutoff);
 }
 
 cleanStalePeers();
 setInterval(cleanStalePeers, 30_000);
 
-// --- WebSocket state ---
 
 type PeerWSData = { kind: "peer"; peerId: string | null; namespace: string };
 type DashboardWSData = { kind: "dashboard" };
@@ -173,7 +193,6 @@ type WSData = PeerWSData | DashboardWSData;
 
 const peerSockets = new Map<string, import("bun").ServerWebSocket<WSData>>();
 
-// --- Peer message handler ---
 
 function handlePeerMessage(
   ws: import("bun").ServerWebSocket<PeerWSData>,
@@ -185,7 +204,6 @@ function handlePeerMessage(
       const id = generateId();
       const now = new Date().toISOString();
 
-      // Remove stale registration for same PID
       deleteByPid.run(msg.pid);
 
       insertPeer.run(
@@ -205,13 +223,11 @@ function handlePeerMessage(
       ws.data.peerId = id;
       ws.data.namespace = msg.namespace;
 
-      // Subscribe to namespace topic and personal topic
       ws.subscribe(`ns:${msg.namespace}`);
       ws.subscribe(`peer:${id}`);
 
       peerSockets.set(id, ws as import("bun").ServerWebSocket<WSData>);
 
-      // Reply with confirmation
       const reply: BrokerMessage = {
         type: "registered",
         id,
@@ -219,7 +235,6 @@ function handlePeerMessage(
       };
       ws.send(JSON.stringify(reply));
 
-      // Deliver any queued messages
       const queued = selectUndelivered.all(id) as import("./shared/types.ts").Message[];
       for (const m of queued) {
         const sender = getPeer(m.from_id);
@@ -235,7 +250,6 @@ function handlePeerMessage(
         markDelivered.run(m.id);
       }
 
-      // Notify namespace peers and dashboard
       const peer = getPeer(id)!;
       const joinMsg = JSON.stringify({ type: "peer_joined", peer });
       server.publish(`ns:${msg.namespace}`, joinMsg);
@@ -278,7 +292,6 @@ function handlePeerMessage(
         return;
       }
 
-      // Namespace enforcement
       if (target.namespace !== ws.data.namespace) {
         ws.send(
           JSON.stringify({
@@ -290,27 +303,8 @@ function handlePeerMessage(
       }
 
       const now = new Date().toISOString();
-      const sender = getPeer(fromId);
+      deliverOrQueue(fromId, msg.to, msg.text, now);
 
-      // Try direct delivery
-      const targetWs = peerSockets.get(msg.to);
-      if (targetWs && targetWs.readyState === 1) {
-        const deliverMsg: BrokerMessage = {
-          type: "message",
-          from_id: fromId,
-          from_summary: sender?.summary ?? "",
-          from_cwd: sender?.cwd ?? "",
-          text: msg.text,
-          sent_at: now,
-        };
-        targetWs.send(JSON.stringify(deliverMsg));
-        insertMessage.run(fromId, msg.to, msg.text, now, 1);
-      } else {
-        // Queue for later delivery
-        insertMessage.run(fromId, msg.to, msg.text, now, 0);
-      }
-
-      // Notify dashboard
       server.publish(
         "dashboard",
         JSON.stringify({
@@ -332,7 +326,6 @@ function handlePeerMessage(
       } else {
         peers = getAllPeers();
       }
-      // Exclude self and verify alive
       peers = peers
         .filter((p) => p.id !== ws.data.peerId)
         .filter((p) => isProcessAlive(p.pid));
@@ -351,7 +344,6 @@ function handlePeerMessage(
   }
 }
 
-// --- HTTP Server ---
 
 const server = Bun.serve<WSData>({
   port: PORT,
@@ -409,30 +401,14 @@ const server = Bun.serve<WSData>({
         }
 
         const now = new Date().toISOString();
-        const targetWs = peerSockets.get(body.to_id);
-        if (targetWs && targetWs.readyState === 1) {
-          const sender = getPeer(body.from_id);
-          const deliverMsg: BrokerMessage = {
-            type: "message",
-            from_id: body.from_id,
-            from_summary: sender?.summary ?? "",
-            from_cwd: sender?.cwd ?? "",
-            text: body.text,
-            sent_at: now,
-          };
-          targetWs.send(JSON.stringify(deliverMsg));
-          insertMessage.run(body.from_id, body.to_id, body.text, now, 1);
-        } else {
-          insertMessage.run(body.from_id, body.to_id, body.text, now, 0);
-        }
+        deliverOrQueue(body.from_id, body.to_id, body.text, now);
         return Response.json({ ok: true });
       },
     },
 
     "/api/status": () => {
       const peers = getAllPeers().filter((p) => isProcessAlive(p.pid));
-      const namespaces = getNamespaceInfos();
-      return Response.json({ peers, namespaces });
+      return Response.json({ peers, namespaces: namespacesFromPeers(peers) });
     },
   },
 
@@ -468,12 +444,11 @@ const server = Bun.serve<WSData>({
       if (ws.data.kind === "dashboard") {
         ws.subscribe("dashboard");
         const peers = getAllPeers().filter((p) => isProcessAlive(p.pid));
-        const namespaces = getNamespaceInfos();
         ws.send(
           JSON.stringify({
             type: "snapshot",
             peers,
-            namespaces,
+            namespaces: namespacesFromPeers(peers),
           } satisfies DashboardMessage)
         );
       }
@@ -492,7 +467,6 @@ const server = Bun.serve<WSData>({
           log(`Invalid message: ${e}`);
         }
       }
-      // Dashboard sockets are read-only
     },
 
     close(ws) {
