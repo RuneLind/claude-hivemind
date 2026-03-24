@@ -97,15 +97,18 @@ bun install
 claude mcp add --scope user --transport stdio claude-hivemind -- bun ~/claude-hivemind/src/server.ts
 ```
 
-All instances with the MCP server registered will appear on the dashboard. The broker daemon starts automatically on first use.
-
-### 3. Run Claude Code with the channel
+### 3. Run Claude Code with the hivemind
 
 ```bash
-claude --dangerously-skip-permissions --dangerously-load-development-channels server:claude-hivemind
+CLAUDE_HIVEMIND=1 claude --dangerously-skip-permissions --dangerously-load-development-channels server:claude-hivemind
 ```
 
-The channel flag enables real-time push notifications — messages arrive instantly as `<channel>` blocks in the conversation. Without the channel flag, the instance still registers and can use tools (`list_peers`, `send_message`), but cannot receive pushed messages.
+The `CLAUDE_HIVEMIND=1` env var activates the broker connection. Without it, the MCP server stays dormant and the instance won't register — so regular Claude Code sessions are unaffected.
+
+Tip: create an alias for convenience:
+```bash
+alias claude-hive='CLAUDE_HIVEMIND=1 claude --dangerously-skip-permissions --dangerously-load-development-channels server:claude-hivemind'
+```
 
 ### 4. Open the dashboard
 

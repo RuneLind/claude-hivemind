@@ -345,6 +345,8 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
 mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
   const { name, arguments: args } = req.params;
 
+  if (!ws) return textResult("Hivemind not active. Start with: CLAUDE_HIVEMIND=1 claude --dangerously-load-development-channels server:claude-hivemind", true);
+
   switch (name) {
     case "list_peers": {
       const scope =
@@ -403,7 +405,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
   }
 });
 
-async function main() {
+async function startBrokerConnection() {
   myCwd = process.cwd();
   [myGitRoot, myGitBranch] = await Promise.all([
     getGitRoot(myCwd),
@@ -419,15 +421,24 @@ async function main() {
   log(`Namespace: ${myNamespace}`);
 
   await ensureBroker();
-
-  await mcp.connect(new StdioServerTransport());
-  log("MCP connected");
-
   connectToBroker();
 
   setInterval(() => {
     wsSend({ type: "heartbeat" });
   }, 30_000);
+}
+
+async function main() {
+  if (!process.env.CLAUDE_HIVEMIND) {
+    log("CLAUDE_HIVEMIND not set, staying dormant");
+    await mcp.connect(new StdioServerTransport());
+    return;
+  }
+
+  await startBrokerConnection();
+
+  await mcp.connect(new StdioServerTransport());
+  log("MCP connected");
 
   const cleanup = () => {
     if (ws) ws.close();

@@ -35,6 +35,7 @@ bun kill
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `CLAUDE_HIVEMIND` | (unset) | Set to `1` to activate broker connection. Without it, MCP server stays dormant. |
 | `CLAUDE_HIVEMIND_PORT` | `7899` | Broker port |
 | `CLAUDE_HIVEMIND_DB` | `~/.claude-hivemind.db` | SQLite database path |
 
