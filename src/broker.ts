@@ -110,13 +110,14 @@ const deleteOldMessages = db.prepare(
 );
 
 
-function generateId(): string {
-  const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
-  let id = "";
-  for (let i = 0; i < 8; i++) {
-    id += chars[Math.floor(Math.random() * chars.length)];
+function generateId(cwd: string): string {
+  const base = cwd.split("/").pop() ?? "peer";
+  const existing = getAllPeers().filter((p) => p.id === base || p.id.startsWith(base + "-"));
+  if (existing.length === 0) return base;
+  for (let i = 2; ; i++) {
+    const candidate = `${base}-${i}`;
+    if (!existing.some((p) => p.id === candidate)) return candidate;
   }
-  return id;
 }
 
 function getPeer(id: string): Peer | null {
@@ -201,10 +202,9 @@ function handlePeerMessage(
 ): void {
   switch (msg.type) {
     case "register": {
-      const id = generateId();
       const now = new Date().toISOString();
-
       deleteByPid.run(msg.pid);
+      const id = generateId(msg.cwd);
 
       insertPeer.run(
         id,
