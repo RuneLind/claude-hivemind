@@ -33,7 +33,7 @@ bun install
 ### 2. Register the MCP server
 
 ```bash
-claude mcp add --scope user --transport stdio claude-hivemind -- bun ~/claude-hivemind/server.ts
+claude mcp add --scope user --transport stdio claude-hivemind -- bun ~/claude-hivemind/src/server.ts
 ```
 
 ### 3. Run Claude Code with the channel
@@ -47,7 +47,7 @@ The broker daemon starts automatically on first use.
 ### 4. Open the dashboard
 
 ```bash
-bun cli.ts dashboard
+bun src/cli.ts dashboard
 # or open http://127.0.0.1:7899/
 ```
 
@@ -99,11 +99,11 @@ Override with `~/.claude-hivemind-namespaces.json`:
 ## CLI
 
 ```bash
-bun cli.ts status          # broker status + peers by namespace
-bun cli.ts peers           # list peers
-bun cli.ts send <id> <msg> # send a message
-bun cli.ts dashboard       # open web dashboard
-bun cli.ts kill-broker     # stop the broker
+bun src/cli.ts status          # broker status + peers by namespace
+bun src/cli.ts peers           # list peers
+bun src/cli.ts send <id> <msg> # send a message
+bun src/cli.ts dashboard       # open web dashboard
+bun src/cli.ts kill-broker     # stop the broker
 ```
 
 ## Requirements

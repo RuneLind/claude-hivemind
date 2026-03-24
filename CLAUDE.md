@@ -4,25 +4,31 @@ Peer discovery and messaging for Claude Code instances, with namespace isolation
 
 ## Architecture
 
-- `broker.ts` — Singleton HTTP + WebSocket server on localhost:7899, backed by SQLite. Serves dashboard, routes messages, enforces namespace isolation.
-- `server.ts` — MCP stdio server, one per Claude Code instance. Connects to broker via WebSocket, pushes inbound messages via channel notifications.
-- `cli.ts` — CLI utility for inspecting broker state and managing peers.
-- `dashboard.html` + `dashboard.tsx` + `dashboard.css` — Read-only web dashboard showing peers grouped by namespace.
-- `shared/types.ts` — WebSocket protocol types (client/broker/dashboard message unions).
-- `shared/namespace.ts` — Namespace resolution from CWD (auto-derives from ~/source/<group>/).
+- `src/broker.ts` — Singleton HTTP + WebSocket server on localhost:7899, backed by SQLite. Serves dashboard, routes messages, enforces namespace isolation.
+- `src/server.ts` — MCP stdio server, one per Claude Code instance. Connects to broker via WebSocket, pushes inbound messages via channel notifications.
+- `src/cli.ts` — CLI utility for inspecting broker state and managing peers.
+- `src/dashboard/` — Read-only web dashboard (React) showing peers grouped by namespace.
+- `src/shared/types.ts` — WebSocket protocol types (client/broker/dashboard message unions).
+- `src/shared/namespace.ts` — Namespace resolution from CWD (auto-derives from ~/source/<group>/).
 
 ## Running
 
 ```bash
+# Start broker in dev mode (auto-reload):
+bun dev
+
+# Start broker:
+bun start
+
 # Start Claude Code with the channel:
 claude --dangerously-load-development-channels server:claude-hivemind
 
 # CLI:
-bun cli.ts status
-bun cli.ts peers
-bun cli.ts send <peer-id> <message>
-bun cli.ts dashboard
-bun cli.ts kill-broker
+bun src/cli.ts status
+bun src/cli.ts peers
+bun src/cli.ts send <peer-id> <message>
+bun src/cli.ts dashboard
+bun src/cli.ts kill-broker
 ```
 
 ## Environment Variables
@@ -49,4 +55,4 @@ Default to using Bun instead of Node.js.
 
 ## Frontend
 
-Uses Bun HTML imports. dashboard.html imports dashboard.tsx directly, bundled automatically by Bun.
+Uses Bun HTML imports. src/dashboard/index.html imports dashboard.tsx directly, bundled automatically by Bun.

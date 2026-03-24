@@ -17,7 +17,7 @@ import type {
   Peer,
   NamespaceInfo,
 } from "./shared/types.ts";
-import dashboard from "./dashboard.html";
+import dashboard from "./dashboard/index.html";
 
 const PORT = parseInt(process.env.CLAUDE_HIVEMIND_PORT ?? "7899", 10);
 const DB_PATH =

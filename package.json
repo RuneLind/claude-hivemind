@@ -2,12 +2,14 @@
   "name": "claude-hivemind",
   "version": "0.2.0",
   "description": "Peer discovery and messaging for Claude Code instances with namespace isolation",
-  "module": "index.ts",
+  "module": "src/server.ts",
   "type": "module",
   "private": true,
   "scripts": {
-    "broker": "bun broker.ts",
-    "server": "bun server.ts",
+    "dev": "bun run --watch src/broker.ts",
+    "start": "bun run src/broker.ts",
+    "server": "bun src/server.ts",
+    "cli": "bun src/cli.ts",
     "test": "bun test"
   },
   "devDependencies": {

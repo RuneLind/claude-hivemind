@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { createRoot } from "react-dom/client";
-import type { Peer, NamespaceInfo } from "./shared/types.ts";
+import type { Peer, NamespaceInfo } from "../shared/types.ts";
 import "./dashboard.css";
 
 interface ActivityItem {
