@@ -230,34 +230,6 @@ function handleBrokerMessage(msg: BrokerMessage): void {
   }
 }
 
-let brokerInitialized = false;
-
-async function ensureBrokerConnection(): Promise<void> {
-  if (brokerInitialized) return;
-  brokerInitialized = true;
-
-  myCwd = process.cwd();
-  [myGitRoot, myGitBranch] = await Promise.all([
-    getGitRoot(myCwd),
-    getGitBranch(myCwd),
-  ]);
-
-  const namespaceConfig = await loadNamespaceConfig();
-  myNamespace = resolveNamespace(myCwd, namespaceConfig);
-
-  log(`CWD: ${myCwd}`);
-  log(`Git root: ${myGitRoot ?? "(none)"}`);
-  log(`Git branch: ${myGitBranch ?? "(none)"}`);
-  log(`Namespace: ${myNamespace}`);
-
-  await ensureBroker();
-  connectToBroker();
-
-  setInterval(() => {
-    wsSend({ type: "heartbeat" });
-  }, 30_000);
-}
-
 function wsSend(msg: ClientMessage): boolean {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(msg));
@@ -372,7 +344,6 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
 
 mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
   const { name, arguments: args } = req.params;
-  await ensureBrokerConnection();
 
   switch (name) {
     case "list_peers": {
@@ -433,8 +404,30 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
 });
 
 async function main() {
+  myCwd = process.cwd();
+  [myGitRoot, myGitBranch] = await Promise.all([
+    getGitRoot(myCwd),
+    getGitBranch(myCwd),
+  ]);
+
+  const namespaceConfig = await loadNamespaceConfig();
+  myNamespace = resolveNamespace(myCwd, namespaceConfig);
+
+  log(`CWD: ${myCwd}`);
+  log(`Git root: ${myGitRoot ?? "(none)"}`);
+  log(`Git branch: ${myGitBranch ?? "(none)"}`);
+  log(`Namespace: ${myNamespace}`);
+
+  await ensureBroker();
+
   await mcp.connect(new StdioServerTransport());
-  log("MCP connected (broker connection deferred until first tool call)");
+  log("MCP connected");
+
+  connectToBroker();
+
+  setInterval(() => {
+    wsSend({ type: "heartbeat" });
+  }, 30_000);
 
   const cleanup = () => {
     if (ws) ws.close();

@@ -97,7 +97,7 @@ bun install
 claude mcp add --scope user --transport stdio claude-hivemind -- bun ~/claude-hivemind/src/server.ts
 ```
 
-This registers the server but does **not** connect to the broker. The broker connection is deferred until a tool is actually called, so instances without the channel flag stay silent.
+All instances with the MCP server registered will appear on the dashboard. The broker daemon starts automatically on first use.
 
 ### 3. Run Claude Code with the channel
 
@@ -105,7 +105,7 @@ This registers the server but does **not** connect to the broker. The broker con
 claude --dangerously-skip-permissions --dangerously-load-development-channels server:claude-hivemind
 ```
 
-The channel flag enables real-time push notifications. Without it, the MCP server is loaded but dormant — it won't register with the broker until you call a tool. The broker daemon starts automatically on first use.
+The channel flag enables real-time push notifications — messages arrive instantly as `<channel>` blocks in the conversation. Without the channel flag, the instance still registers and can use tools (`list_peers`, `send_message`), but cannot receive pushed messages.
 
 ### 4. Open the dashboard
 
