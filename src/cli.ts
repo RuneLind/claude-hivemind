@@ -159,7 +159,7 @@ switch (cmd) {
       console.log(
         `Broker has ${health.peers} peer(s). Shutting down...`
       );
-      const proc = Bun.spawnSync(["lsof", "-ti", `:${BROKER_PORT}`]);
+      const proc = Bun.spawnSync(["lsof", "-ti", `tcp:${BROKER_PORT}`, "-sTCP:LISTEN"]);
       const pids = new TextDecoder()
         .decode(proc.stdout)
         .trim()
