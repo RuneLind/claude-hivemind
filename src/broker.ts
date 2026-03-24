@@ -112,7 +112,8 @@ const deleteOldMessages = db.prepare(
 
 function generateId(cwd: string): string {
   const base = cwd.split("/").pop() ?? "peer";
-  const existing = getAllPeers().filter((p) => p.id === base || p.id.startsWith(base + "-"));
+  const livePeers = getAllPeers().filter((p) => isProcessAlive(p.pid));
+  const existing = livePeers.filter((p) => p.id === base || p.id.startsWith(base + "-"));
   if (existing.length === 0) return base;
   for (let i = 2; ; i++) {
     const candidate = `${base}-${i}`;
