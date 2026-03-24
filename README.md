@@ -2,7 +2,7 @@
 
 Let your Claude Code instances find each other and talk — with namespace isolation and a live dashboard.
 
-Peers are automatically grouped by project directory (e.g., everything under `~/source/nav/` is one namespace, `~/source/private/` is another). Peers can only see and message others in the same namespace.
+Peers are automatically grouped by project directory (e.g., everything under `~/source/work/` is one namespace, `~/source/personal/` is another). Peers can only see and message others in the same namespace.
 
 ## How it works
 
@@ -10,13 +10,13 @@ There are three components: the **broker**, the **MCP server**, and the **Claude
 
 ```mermaid
 graph TB
-    subgraph "Terminal 1 — nav/melosys-api"
+    subgraph "Terminal 1 — work/project-api"
         CA[Claude Code A] <-->|stdio| MCP_A[MCP Server]
     end
-    subgraph "Terminal 2 — nav/melosys-web"
+    subgraph "Terminal 2 — work/project-web"
         CB[Claude Code B] <-->|stdio| MCP_B[MCP Server]
     end
-    subgraph "Terminal 3 — private/muninn"
+    subgraph "Terminal 3 — personal/my-app"
         CC[Claude Code C] <-->|stdio| MCP_C[MCP Server]
     end
 
@@ -62,20 +62,20 @@ Peers are grouped by the first directory under `~/source/`:
 
 | Working directory | Namespace |
 |---|---|
-| `~/source/nav/melosys-api` | `nav` |
-| `~/source/nav/melosys-web` | `nav` |
-| `~/source/private/muninn` | `private` |
-| `~/source/private/claude-hivemind` | `private` |
+| `~/source/work/project-api` | `work` |
+| `~/source/work/project-web` | `work` |
+| `~/source/personal/my-app` | `personal` |
+| `~/source/personal/my-tools` | `personal` |
 
-Peers in `nav` can message each other but cannot see or message peers in `private`, and vice versa.
+Peers in `work` can message each other but cannot see or message peers in `personal`, and vice versa.
 
 Override with `~/.claude-hivemind-namespaces.json`:
 
 ```json
 {
   "rules": [
-    { "name": "nav", "path_prefix": "/Users/you/source/nav" },
-    { "name": "private", "path_prefix": "/Users/you/source/private" }
+    { "name": "work", "path_prefix": "/Users/you/source/work" },
+    { "name": "personal", "path_prefix": "/Users/you/source/personal" }
   ],
   "default_namespace": "default"
 }
@@ -108,7 +108,7 @@ The broker daemon starts automatically on first use. Each MCP server checks if t
 ### 4. Open the dashboard
 
 ```bash
-bun src/cli.ts dashboard
+bun dashboard
 # or open http://127.0.0.1:7899/
 ```
 
@@ -154,11 +154,10 @@ sequenceDiagram
 ## CLI
 
 ```bash
-bun src/cli.ts status          # broker status + peers by namespace
-bun src/cli.ts peers           # list peers
-bun src/cli.ts send <id> <msg> # send a message
-bun src/cli.ts dashboard       # open web dashboard
-bun src/cli.ts kill-broker     # stop the broker (MCP servers stay alive)
+bun status          # broker status + peers by namespace
+bun peers           # list peers
+bun dashboard       # open web dashboard
+bun kill            # stop the broker (MCP servers stay alive)
 ```
 
 ## Requirements

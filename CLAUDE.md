@@ -24,11 +24,11 @@ bun start
 claude --dangerously-load-development-channels server:claude-hivemind
 
 # CLI:
-bun src/cli.ts status
-bun src/cli.ts peers
+bun status
+bun peers
 bun src/cli.ts send <peer-id> <message>
-bun src/cli.ts dashboard
-bun src/cli.ts kill-broker
+bun dashboard
+bun kill
 ```
 
 ## Environment Variables

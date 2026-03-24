@@ -10,6 +10,10 @@
     "start": "bun src/cli.ts kill-broker 2>/dev/null; bun run src/broker.ts",
     "server": "bun src/server.ts",
     "cli": "bun src/cli.ts",
+    "status": "bun src/cli.ts status",
+    "peers": "bun src/cli.ts peers",
+    "dashboard": "bun src/cli.ts dashboard",
+    "kill": "bun src/cli.ts kill-broker",
     "test": "bun test"
   },
   "devDependencies": {
