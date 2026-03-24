@@ -149,7 +149,6 @@ sequenceDiagram
 | `list_peers` | Find peers — scoped to `namespace` (default) or `machine` |
 | `send_message` | Send a message to a peer by ID (same namespace only) |
 | `set_summary` | Describe what you're working on (visible to other peers) |
-| `check_messages` | No-op — messages arrive automatically via WebSocket |
 
 ## CLI
 

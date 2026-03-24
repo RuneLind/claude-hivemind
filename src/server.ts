@@ -275,7 +275,6 @@ Available tools:
 - list_peers: Discover other Claude Code instances (scope: namespace or machine)
 - send_message: Send a message to another instance by ID (same namespace only)
 - set_summary: Set a 1-2 sentence summary of what you're working on (visible to other peers)
-- check_messages: Messages arrive automatically — use this only as a fallback
 
 When you start, proactively call set_summary to describe what you're working on. This helps other instances understand your context.`,
   }
@@ -335,15 +334,6 @@ const TOOLS = [
         },
       },
       required: ["summary"],
-    },
-  },
-  {
-    name: "check_messages",
-    description:
-      "Messages arrive automatically via WebSocket. This tool is a no-op fallback.",
-    inputSchema: {
-      type: "object" as const,
-      properties: {},
     },
   },
 ];
@@ -406,10 +396,6 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       const sent = wsSend({ type: "set_summary", summary });
       if (!sent) return textResult("Not connected to broker. Summary not updated.", true);
       return textResult(`Summary updated: "${summary}"`);
-    }
-
-    case "check_messages": {
-      return textResult("Messages are delivered automatically via WebSocket. No manual check needed.");
     }
 
     default:
