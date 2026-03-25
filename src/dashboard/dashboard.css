@@ -122,12 +122,39 @@ header h1 {
   font-weight: 400;
 }
 
+/* Namespace content — side-by-side on wide screens */
+
+.namespace-content {
+  display: flex;
+  gap: 12px;
+  align-items: stretch;
+}
+
+.namespace-content > .peer-grid {
+  flex: 1;
+  min-width: 0;
+}
+
+.namespace-content > .graph-view {
+  flex: 0 0 420px;
+}
+
+@media (max-width: 1000px) {
+  .namespace-content {
+    flex-direction: column;
+  }
+  .namespace-content > .graph-view {
+    flex-basis: auto;
+    width: 100%;
+  }
+}
+
 /* Peer grid */
 
 .peer-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 10px;
 }
 
 /* Peer card */
@@ -379,13 +406,16 @@ header h1 {
   background: #161b22;
   border: 1px solid #21262d;
   border-radius: 8px;
-  padding: 16px;
-  margin-top: 12px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
 }
 
 .graph-svg {
   width: 100%;
-  height: auto;
+  height: 100%;
 }
 
 .edge-label {

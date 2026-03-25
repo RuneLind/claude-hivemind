@@ -168,21 +168,20 @@ function NamespaceGraph({
 
   if (relevantPairs.length === 0) return null;
 
-  const CHAR_W = 7.2;
-  const NODE_PAD_X = 14;
-  const NODE_H = 28;
-  const WIDTH = 900;
+  const CHAR_W = 7;
+  const NODE_PAD_X = 12;
+  const NODE_H = 26;
 
-  // Measure node widths from full peer ID
   const nodeWidths = new Map<string, number>();
   for (const p of peers) {
     nodeWidths.set(p.id, p.id.length * CHAR_W + NODE_PAD_X * 2);
   }
 
-  // Layout peers in a circle, scale radius to fit
   const maxNodeW = Math.max(...Array.from(nodeWidths.values()));
-  const radius = Math.max(120, peers.length * (maxNodeW + 20) / (2 * Math.PI));
-  const HEIGHT = radius * 2 + 100;
+  const radius = Math.max(100, peers.length * (maxNodeW + 12) / (2 * Math.PI));
+  const SIZE = radius * 2 + 80;
+  const WIDTH = SIZE;
+  const HEIGHT = SIZE;
   const cx = WIDTH / 2;
   const cy = HEIGHT / 2;
 
@@ -289,8 +288,8 @@ function NamespaceGraph({
                 style={{ cursor: "pointer" }}
               >
                 <rect
-                  x={midX - 16} y={midY - 10}
-                  width={32} height={20}
+                  x={midX - 14} y={midY - 9}
+                  width={28} height={18}
                   rx={4}
                   fill="#21262d" stroke="#30363d" strokeWidth="1"
                 />
@@ -298,7 +297,7 @@ function NamespaceGraph({
                   x={midX} y={midY + 4}
                   textAnchor="middle"
                   fill="#c9d1d9"
-                  fontSize="11"
+                  fontSize="10"
                   fontFamily="monospace"
                 >
                   {total}
@@ -484,21 +483,23 @@ function Dashboard() {
             <span className="ns-count">{grouped[ns].length}</span>
             <span className="ns-badge">Can message each other</span>
           </h2>
-          <div className="peer-grid">
-            {grouped[ns].map((peer) => (
-              <PeerCard
-                key={peer.id}
-                peer={peer}
-                stats={peerStatsMap.get(peer.id)}
-                onClickMessages={() => setModal({ peer1: peer.id, peer2: null })}
-              />
-            ))}
+          <div className="namespace-content">
+            <div className="peer-grid">
+              {grouped[ns].map((peer) => (
+                <PeerCard
+                  key={peer.id}
+                  peer={peer}
+                  stats={peerStatsMap.get(peer.id)}
+                  onClickMessages={() => setModal({ peer1: peer.id, peer2: null })}
+                />
+              ))}
+            </div>
+            <NamespaceGraph
+              peers={grouped[ns] ?? []}
+              pairStats={pairStats}
+              onClickPair={(from, to) => setModal({ peer1: from, peer2: to })}
+            />
           </div>
-          <NamespaceGraph
-            peers={grouped[ns] ?? []}
-            pairStats={pairStats}
-            onClickPair={(from, to) => setModal({ peer1: from, peer2: to })}
-          />
         </section>
       ))}
 
