@@ -65,7 +65,7 @@ export type BrokerMessage =
 // --- WebSocket protocol: Broker → Dashboard ---
 
 export type DashboardMessage =
-  | { type: "snapshot"; peers: Peer[]; namespaces: NamespaceInfo[] }
+  | { type: "snapshot"; peers: Peer[]; namespaces: NamespaceInfo[]; peer_stats: PeerMessageStats[]; pair_stats: PairMessageStats[] }
   | { type: "peer_joined"; peer: Peer }
   | { type: "peer_left"; peer_id: PeerId; namespace: Namespace }
   | { type: "peer_updated"; peer: Peer }
@@ -75,11 +75,36 @@ export type DashboardMessage =
       to_id: PeerId;
       text: string;
       sent_at: string;
-    };
+      peer_stats: PeerMessageStats[];
+      pair_stats: PairMessageStats[];
+    }
+  | { type: "messages_cleared" };
 
 export interface NamespaceInfo {
   name: Namespace;
   peer_count: number;
+}
+
+// --- Message statistics ---
+
+export interface PeerMessageStats {
+  peer_id: PeerId;
+  sent: number;
+  received: number;
+}
+
+export interface PairMessageStats {
+  from_id: PeerId;
+  to_id: PeerId;
+  count: number;
+}
+
+export interface StoredMessage {
+  id: number;
+  from_id: PeerId;
+  to_id: PeerId;
+  text: string;
+  sent_at: string;
 }
 
 // --- Namespace configuration ---

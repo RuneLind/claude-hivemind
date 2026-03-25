@@ -16,6 +16,9 @@ import type {
   DashboardMessage,
   Peer,
   NamespaceInfo,
+  PeerMessageStats,
+  PairMessageStats,
+  StoredMessage,
 } from "./shared/types.ts";
 import dashboard from "./dashboard/index.html";
 
@@ -109,6 +112,32 @@ const deleteOldMessages = db.prepare(
   `DELETE FROM messages WHERE delivered = 1 AND sent_at < ?`
 );
 
+const selectPeerStats = db.prepare(`
+  SELECT peer_id, SUM(sent) as sent, SUM(received) as received FROM (
+    SELECT from_id as peer_id, COUNT(*) as sent, 0 as received FROM messages GROUP BY from_id
+    UNION ALL
+    SELECT to_id as peer_id, 0 as sent, COUNT(*) as received FROM messages GROUP BY to_id
+  ) GROUP BY peer_id
+`);
+
+const selectPairStats = db.prepare(`
+  SELECT from_id, to_id, COUNT(*) as count FROM messages GROUP BY from_id, to_id
+`);
+
+const selectConversation = db.prepare(`
+  SELECT id, from_id, to_id, text, sent_at FROM messages
+  WHERE (from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?)
+  ORDER BY sent_at ASC
+`);
+
+const selectPeerMessages = db.prepare(`
+  SELECT id, from_id, to_id, text, sent_at FROM messages
+  WHERE from_id = ? OR to_id = ?
+  ORDER BY sent_at ASC
+`);
+
+const deleteAllMessages = db.prepare(`DELETE FROM messages`);
+
 
 function generateId(cwd: string): string {
   const base = cwd.split("/").pop() ?? "peer";
@@ -152,6 +181,13 @@ function namespacesFromPeers(peers: Peer[]): NamespaceInfo[] {
     name,
     peer_count,
   }));
+}
+
+function getMessageStats(): { peer_stats: PeerMessageStats[]; pair_stats: PairMessageStats[] } {
+  return {
+    peer_stats: selectPeerStats.all() as PeerMessageStats[],
+    pair_stats: selectPairStats.all() as PairMessageStats[],
+  };
 }
 
 function deliverOrQueue(fromId: string, toId: string, text: string, now: string): void {
@@ -306,6 +342,7 @@ function handlePeerMessage(
       const now = new Date().toISOString();
       deliverOrQueue(fromId, msg.to, msg.text, now);
 
+      const stats = getMessageStats();
       server.publish(
         "dashboard",
         JSON.stringify({
@@ -314,6 +351,8 @@ function handlePeerMessage(
           to_id: msg.to,
           text: msg.text,
           sent_at: now,
+          peer_stats: stats.peer_stats,
+          pair_stats: stats.pair_stats,
         } satisfies DashboardMessage)
       );
       break;
@@ -411,6 +450,35 @@ const server = Bun.serve<WSData>({
       const peers = getAllPeers().filter((p) => isProcessAlive(p.pid));
       return Response.json({ peers, namespaces: namespacesFromPeers(peers) });
     },
+
+    "/api/messages": {
+      GET(req) {
+        const url = new URL(req.url);
+        const peer1 = url.searchParams.get("peer1");
+        const peer2 = url.searchParams.get("peer2");
+        if (!peer1) {
+          return Response.json({ error: "peer1 required" }, { status: 400 });
+        }
+        let messages: StoredMessage[];
+        if (!peer2 || peer2 === "*") {
+          messages = selectPeerMessages.all(peer1, peer1) as StoredMessage[];
+        } else {
+          messages = selectConversation.all(peer1, peer2, peer2, peer1) as StoredMessage[];
+        }
+        return Response.json({ messages });
+      },
+    },
+
+    "/api/messages/clear": {
+      POST() {
+        deleteAllMessages.run();
+        server.publish(
+          "dashboard",
+          JSON.stringify({ type: "messages_cleared" } satisfies DashboardMessage)
+        );
+        return Response.json({ ok: true });
+      },
+    },
   },
 
   fetch(req, server) {
@@ -445,11 +513,14 @@ const server = Bun.serve<WSData>({
       if (ws.data.kind === "dashboard") {
         ws.subscribe("dashboard");
         const peers = getAllPeers().filter((p) => isProcessAlive(p.pid));
+        const stats = getMessageStats();
         ws.send(
           JSON.stringify({
             type: "snapshot",
             peers,
             namespaces: namespacesFromPeers(peers),
+            peer_stats: stats.peer_stats,
+            pair_stats: stats.pair_stats,
           } satisfies DashboardMessage)
         );
       }

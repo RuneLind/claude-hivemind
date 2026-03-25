@@ -27,6 +27,7 @@ header {
   margin-bottom: 32px;
   padding-bottom: 16px;
   border-bottom: 1px solid #21262d;
+  flex-wrap: wrap;
 }
 
 header h1 {
@@ -63,9 +64,26 @@ header h1 {
 }
 
 .count {
-  margin-left: auto;
   font-size: 13px;
   color: #8b949e;
+}
+
+.clear-btn {
+  margin-left: auto;
+  background: none;
+  border: 1px solid #30363d;
+  color: #8b949e;
+  font-family: inherit;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.clear-btn:hover {
+  border-color: #f85149;
+  color: #f85149;
 }
 
 /* Namespace groups */
@@ -154,6 +172,24 @@ header h1 {
   background: #484f58;
 }
 
+.message-count-badge {
+  margin-left: auto;
+  background: #1f2a37;
+  border: 1px solid #30363d;
+  color: #58a6ff;
+  font-family: inherit;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.message-count-badge:hover {
+  background: #263545;
+  border-color: #58a6ff;
+}
+
 .peer-cwd {
   color: #8b949e;
   font-size: 12px;
@@ -219,4 +255,144 @@ header h1 {
 .activity-item .time {
   color: #484f58;
   margin-right: 8px;
+}
+
+/* Modal */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.modal {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 10px;
+  width: 700px;
+  max-width: 90vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid #21262d;
+}
+
+.modal-header h3 {
+  font-size: 14px;
+  font-weight: 500;
+  color: #e6edf3;
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  color: #8b949e;
+  font-size: 20px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.modal-close:hover {
+  color: #e6edf3;
+}
+
+.modal-body {
+  padding: 14px 18px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.modal-loading,
+.modal-empty {
+  color: #484f58;
+  text-align: center;
+  padding: 24px;
+  font-size: 13px;
+}
+
+.message-item {
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  border-radius: 6px;
+  background: #0d1117;
+  border: 1px solid #21262d;
+}
+
+.message-item.sent {
+  border-left: 3px solid #58a6ff;
+}
+
+.message-item.received {
+  border-left: 3px solid #7ee787;
+}
+
+.message-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #8b949e;
+  margin-bottom: 6px;
+}
+
+.message-from {
+  color: #58a6ff;
+  font-weight: 500;
+}
+
+.message-arrow {
+  color: #484f58;
+}
+
+.message-to {
+  color: #7ee787;
+  font-weight: 500;
+}
+
+.message-time {
+  margin-left: auto;
+  color: #484f58;
+}
+
+.message-text {
+  font-size: 12px;
+  color: #c9d1d9;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Graph view */
+
+.graph-view {
+  background: #161b22;
+  border: 1px solid #21262d;
+  border-radius: 8px;
+  padding: 16px;
+  margin-top: 12px;
+}
+
+.graph-svg {
+  width: 100%;
+  height: auto;
+}
+
+.edge-label {
+  cursor: pointer;
+}
+
+.edge-label:hover rect {
+  fill: #30363d;
+  stroke: #58a6ff;
 }
