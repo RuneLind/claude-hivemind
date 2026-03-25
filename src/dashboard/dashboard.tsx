@@ -348,6 +348,7 @@ function Dashboard() {
   const [peerStats, setPeerStats] = useState<PeerMessageStats[]>([]);
   const [pairStats, setPairStats] = useState<PairMessageStats[]>([]);
   const [modal, setModal] = useState<{ peer1: string; peer2: string | null } | null>(null);
+  const [graphView, setGraphView] = useState<Record<string, boolean>>({});
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -481,9 +482,26 @@ function Dashboard() {
           <h2>
             {ns}
             <span className="ns-count">{grouped[ns].length}</span>
+            {pairStats.some((ps) => {
+              const ids = new Set(grouped[ns].map((p) => p.id));
+              return ids.has(ps.from_id) && ids.has(ps.to_id);
+            }) && (
+              <button
+                className="view-toggle"
+                onClick={() => setGraphView((prev) => ({ ...prev, [ns]: !prev[ns] }))}
+              >
+                {graphView[ns] ? "Peers" : "Graph"}
+              </button>
+            )}
             <span className="ns-badge">Can message each other</span>
           </h2>
-          <div className="namespace-content">
+          {graphView[ns] ? (
+            <NamespaceGraph
+              peers={grouped[ns] ?? []}
+              pairStats={pairStats}
+              onClickPair={(from, to) => setModal({ peer1: from, peer2: to })}
+            />
+          ) : (
             <div className="peer-grid">
               {grouped[ns].map((peer) => (
                 <PeerCard
@@ -494,12 +512,7 @@ function Dashboard() {
                 />
               ))}
             </div>
-            <NamespaceGraph
-              peers={grouped[ns] ?? []}
-              pairStats={pairStats}
-              onClickPair={(from, to) => setModal({ peer1: from, peer2: to })}
-            />
-          </div>
+          )}
         </section>
       ))}
 
