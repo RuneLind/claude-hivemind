@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { createRoot } from "react-dom/client";
 import type {
   Peer,
@@ -51,8 +51,6 @@ function formatTime(iso: string): string {
   });
 }
 
-// --- Conversation Modal ---
-
 function ConversationModal({
   peer1,
   peer2,
@@ -66,18 +64,11 @@ function ConversationModal({
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!peer2) {
-      // Load all messages involving peer1
-      fetch(`/api/messages?peer1=${encodeURIComponent(peer1)}&peer2=${encodeURIComponent("*")}`)
-        .then((r) => r.json() as Promise<{ messages?: StoredMessage[] }>)
-        .then((data) => { setMessages(data.messages ?? []); setLoading(false); })
-        .catch(() => setLoading(false));
-    } else {
-      fetch(`/api/messages?peer1=${encodeURIComponent(peer1)}&peer2=${encodeURIComponent(peer2)}`)
-        .then((r) => r.json() as Promise<{ messages?: StoredMessage[] }>)
-        .then((data) => { setMessages(data.messages ?? []); setLoading(false); })
-        .catch(() => setLoading(false));
-    }
+    const p2 = encodeURIComponent(peer2 ?? "*");
+    fetch(`/api/messages?peer1=${encodeURIComponent(peer1)}&peer2=${p2}`)
+      .then((r) => r.json() as Promise<{ messages?: StoredMessage[] }>)
+      .then((data) => { setMessages(data.messages ?? []); setLoading(false); })
+      .catch(() => setLoading(false));
   }, [peer1, peer2]);
 
   const title = peer2 ? `${peer1} \u2194 ${peer2}` : `Messages for ${peer1}`;
@@ -110,8 +101,6 @@ function ConversationModal({
     </div>
   );
 }
-
-// --- Peer Card ---
 
 function PeerCard({
   peer,
@@ -149,8 +138,6 @@ function PeerCard({
     </div>
   );
 }
-
-// --- Graph View ---
 
 function NamespaceGraph({
   peers,
@@ -285,7 +272,6 @@ function NamespaceGraph({
               <g
                 className="edge-label"
                 onClick={() => onClickPair(edge.from, edge.to)}
-                style={{ cursor: "pointer" }}
               >
                 <rect
                   x={midX - 14} y={midY - 9}
@@ -338,8 +324,6 @@ function NamespaceGraph({
     </div>
   );
 }
-
-// --- Main Dashboard ---
 
 function Dashboard() {
   const [peers, setPeers] = useState<Peer[]>([]);
@@ -442,7 +426,7 @@ function Dashboard() {
     await fetch("/api/messages/clear", { method: "POST" });
   };
 
-  const peerStatsMap = new Map(peerStats.map((s) => [s.peer_id, s]));
+  const peerStatsMap = useMemo(() => new Map(peerStats.map((s) => [s.peer_id, s])), [peerStats]);
 
   const grouped = peers.reduce(
     (acc, peer) => {
@@ -453,7 +437,7 @@ function Dashboard() {
   );
 
   const sortedNamespaces = Object.keys(grouped).sort();
-  const totalMessages = peerStats.reduce((sum, s) => sum + s.sent, 0);
+  const totalMessages = useMemo(() => peerStats.reduce((sum, s) => sum + s.sent, 0), [peerStats]);
 
   return (
     <div className="dashboard">
@@ -473,7 +457,10 @@ function Dashboard() {
         )}
       </header>
 
-      {sortedNamespaces.map((ns) => (
+      {sortedNamespaces.map((ns) => {
+        const nsPeerIds = new Set(grouped[ns].map((p) => p.id));
+        const hasMessages = pairStats.some((ps) => nsPeerIds.has(ps.from_id) && nsPeerIds.has(ps.to_id));
+        return (
         <section
           key={ns}
           className="namespace-group"
@@ -482,10 +469,7 @@ function Dashboard() {
           <h2>
             {ns}
             <span className="ns-count">{grouped[ns].length}</span>
-            {pairStats.some((ps) => {
-              const ids = new Set(grouped[ns].map((p) => p.id));
-              return ids.has(ps.from_id) && ids.has(ps.to_id);
-            }) && (
+            {hasMessages && (
               <button
                 className="view-toggle"
                 onClick={() => setGraphView((prev) => ({ ...prev, [ns]: !prev[ns] }))}
@@ -514,7 +498,8 @@ function Dashboard() {
             </div>
           )}
         </section>
-      ))}
+      );
+      })}
 
       {peers.length === 0 && (
         <div className="empty">
