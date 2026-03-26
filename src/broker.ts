@@ -217,7 +217,7 @@ function cleanStalePeers() {
     }
   }
   // Purge delivered messages older than 1 hour
-  const cutoff = new Date(Date.now() - 3_600_000).toISOString();
+  const cutoff = new Date(Date.now() - 7 * 24 * 3_600_000).toISOString();
   deleteOldMessages.run(cutoff);
 }
 
