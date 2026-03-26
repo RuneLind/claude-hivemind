@@ -13,7 +13,6 @@ interface ActivityItem {
   text: string;
 }
 
-
 function namespaceColor(name: string): string {
   const colors = [
     "#58a6ff",
@@ -187,7 +186,6 @@ function NamespaceGraph({
     });
   });
 
-  // Aggregate bidirectional edges
   const edgeMap = new Map<string, { from: string; to: string; fwdCount: number; revCount: number }>();
   for (const ps of relevantPairs) {
     const key = [ps.from_id, ps.to_id].sort().join("|");
@@ -428,6 +426,8 @@ function Dashboard() {
     return () => clearInterval(timer);
   }, []);
 
+  const closeModal = useCallback(() => setModal(null), []);
+
   const clearMessages = async () => {
     await fetch("/api/messages/clear", { method: "POST" });
   };
@@ -529,7 +529,7 @@ function Dashboard() {
         <ConversationModal
           peer1={modal.peer1}
           peer2={modal.peer2}
-          onClose={() => setModal(null)}
+          onClose={closeModal}
         />
       )}
     </div>

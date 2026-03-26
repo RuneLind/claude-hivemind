@@ -233,7 +233,6 @@ function cleanStalePeers() {
       deletePeerStmt.run(peer.id);
     }
   }
-  // Purge delivered messages older than 1 hour
   const cutoff = new Date(Date.now() - 7 * 24 * 3_600_000).toISOString();
   deleteOldMessages.run(cutoff);
 }
@@ -326,8 +325,8 @@ function handlePeerMessage(
       if (!ws.data.peerId) return;
       updateSummary.run(msg.summary, ws.data.peerId);
       const peer = getPeer(ws.data.peerId);
-      if (peer) upsertSummary.run(peer.cwd, msg.summary, new Date().toISOString());
       if (peer) {
+        upsertSummary.run(peer.cwd, msg.summary, new Date().toISOString());
         const updateMsg = JSON.stringify({ type: "peer_updated", peer });
         server.publish(`ns:${ws.data.namespace}`, updateMsg);
         server.publish("dashboard", updateMsg);
