@@ -53,6 +53,14 @@ db.run(
 );
 
 db.run(`
+  CREATE TABLE IF NOT EXISTS saved_summaries (
+    cwd TEXT PRIMARY KEY,
+    summary TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )
+`);
+
+db.run(`
   CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     from_id TEXT NOT NULL,
@@ -92,6 +100,15 @@ const selectPeersByNamespace = db.prepare(
 );
 
 const deleteByPid = db.prepare(`DELETE FROM peers WHERE pid = ?`);
+
+const upsertSummary = db.prepare(`
+  INSERT INTO saved_summaries (cwd, summary, updated_at) VALUES (?, ?, ?)
+  ON CONFLICT(cwd) DO UPDATE SET summary = excluded.summary, updated_at = excluded.updated_at
+`);
+
+const selectSavedSummary = db.prepare(
+  `SELECT summary FROM saved_summaries WHERE cwd = ?`
+);
 
 const insertMessage = db.prepare(`
   INSERT INTO messages (from_id, to_id, text, sent_at, delivered)
@@ -243,6 +260,9 @@ function handlePeerMessage(
       deleteByPid.run(msg.pid);
       const id = generateId(msg.cwd);
 
+      const saved = selectSavedSummary.get(msg.cwd) as { summary: string } | null;
+      const summary = msg.summary || saved?.summary || "";
+
       insertPeer.run(
         id,
         msg.pid,
@@ -250,7 +270,7 @@ function handlePeerMessage(
         msg.git_root,
         msg.git_branch,
         msg.tty,
-        msg.summary,
+        summary,
         msg.namespace,
         now,
         now,
@@ -306,6 +326,7 @@ function handlePeerMessage(
       if (!ws.data.peerId) return;
       updateSummary.run(msg.summary, ws.data.peerId);
       const peer = getPeer(ws.data.peerId);
+      if (peer) upsertSummary.run(peer.cwd, msg.summary, new Date().toISOString());
       if (peer) {
         const updateMsg = JSON.stringify({ type: "peer_updated", peer });
         server.publish(`ns:${ws.data.namespace}`, updateMsg);
