@@ -71,6 +71,12 @@ function ConversationModal({
       .catch(() => setLoading(false));
   }, [peer1, peer2]);
 
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [onClose]);
+
   const title = peer2 ? `${peer1} \u2194 ${peer2}` : `Messages for ${peer1}`;
 
   return (
@@ -155,9 +161,9 @@ function NamespaceGraph({
 
   if (relevantPairs.length === 0) return null;
 
-  const CHAR_W = 7;
-  const NODE_PAD_X = 12;
-  const NODE_H = 26;
+  const CHAR_W = 10;
+  const NODE_PAD_X = 20;
+  const NODE_H = 38;
 
   const nodeWidths = new Map<string, number>();
   for (const p of peers) {
@@ -165,7 +171,7 @@ function NamespaceGraph({
   }
 
   const maxNodeW = Math.max(...Array.from(nodeWidths.values()));
-  const radius = Math.max(100, peers.length * (maxNodeW + 12) / (2 * Math.PI));
+  const radius = Math.max(180, peers.length * (maxNodeW + 28) / (2 * Math.PI));
   const SIZE = radius * 2 + 80;
   const WIDTH = SIZE;
   const HEIGHT = SIZE;
@@ -274,8 +280,8 @@ function NamespaceGraph({
                 onClick={() => onClickPair(edge.from, edge.to)}
               >
                 <rect
-                  x={midX - 14} y={midY - 9}
-                  width={28} height={18}
+                  x={midX - 18} y={midY - 12}
+                  width={36} height={24}
                   rx={4}
                   fill="#21262d" stroke="#30363d" strokeWidth="1"
                 />
@@ -283,7 +289,7 @@ function NamespaceGraph({
                   x={midX} y={midY + 4}
                   textAnchor="middle"
                   fill="#c9d1d9"
-                  fontSize="10"
+                  fontSize="14"
                   fontFamily="monospace"
                 >
                   {total}
@@ -312,7 +318,7 @@ function NamespaceGraph({
                 x={pos.x} y={pos.y + 4}
                 textAnchor="middle"
                 fill="#c9d1d9"
-                fontSize="11"
+                fontSize="15"
                 fontFamily="monospace"
               >
                 {peer.id}
