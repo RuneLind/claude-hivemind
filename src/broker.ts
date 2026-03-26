@@ -16,6 +16,9 @@ import type {
   DashboardMessage,
   Peer,
   NamespaceInfo,
+  PeerMessageStats,
+  PairMessageStats,
+  StoredMessage,
 } from "./shared/types.ts";
 import dashboard from "./dashboard/index.html";
 
@@ -48,6 +51,14 @@ db.run(`
 db.run(
   `CREATE INDEX IF NOT EXISTS idx_peers_namespace ON peers(namespace)`
 );
+
+db.run(`
+  CREATE TABLE IF NOT EXISTS saved_summaries (
+    cwd TEXT PRIMARY KEY,
+    summary TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )
+`);
 
 db.run(`
   CREATE TABLE IF NOT EXISTS messages (
@@ -90,6 +101,15 @@ const selectPeersByNamespace = db.prepare(
 
 const deleteByPid = db.prepare(`DELETE FROM peers WHERE pid = ?`);
 
+const upsertSummary = db.prepare(`
+  INSERT INTO saved_summaries (cwd, summary, updated_at) VALUES (?, ?, ?)
+  ON CONFLICT(cwd) DO UPDATE SET summary = excluded.summary, updated_at = excluded.updated_at
+`);
+
+const selectSavedSummary = db.prepare(
+  `SELECT summary FROM saved_summaries WHERE cwd = ?`
+);
+
 const insertMessage = db.prepare(`
   INSERT INTO messages (from_id, to_id, text, sent_at, delivered)
   VALUES (?, ?, ?, ?, ?)
@@ -108,6 +128,32 @@ const selectPeerIdPid = db.prepare(`SELECT id, pid FROM peers`);
 const deleteOldMessages = db.prepare(
   `DELETE FROM messages WHERE delivered = 1 AND sent_at < ?`
 );
+
+const selectPeerStats = db.prepare(`
+  SELECT peer_id, SUM(sent) as sent, SUM(received) as received FROM (
+    SELECT from_id as peer_id, COUNT(*) as sent, 0 as received FROM messages GROUP BY from_id
+    UNION ALL
+    SELECT to_id as peer_id, 0 as sent, COUNT(*) as received FROM messages GROUP BY to_id
+  ) GROUP BY peer_id
+`);
+
+const selectPairStats = db.prepare(`
+  SELECT from_id, to_id, COUNT(*) as count FROM messages GROUP BY from_id, to_id
+`);
+
+const selectConversation = db.prepare(`
+  SELECT id, from_id, to_id, text, sent_at FROM messages
+  WHERE (from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?)
+  ORDER BY sent_at ASC
+`);
+
+const selectPeerMessages = db.prepare(`
+  SELECT id, from_id, to_id, text, sent_at FROM messages
+  WHERE from_id = ? OR to_id = ?
+  ORDER BY sent_at ASC
+`);
+
+const deleteAllMessages = db.prepare(`DELETE FROM messages`);
 
 
 function generateId(cwd: string): string {
@@ -154,6 +200,13 @@ function namespacesFromPeers(peers: Peer[]): NamespaceInfo[] {
   }));
 }
 
+function getMessageStats(): { peer_stats: PeerMessageStats[]; pair_stats: PairMessageStats[] } {
+  return {
+    peer_stats: selectPeerStats.all() as PeerMessageStats[],
+    pair_stats: selectPairStats.all() as PairMessageStats[],
+  };
+}
+
 function deliverOrQueue(fromId: string, toId: string, text: string, now: string): void {
   const targetWs = peerSockets.get(toId);
   if (targetWs && targetWs.readyState === WS_OPEN) {
@@ -180,8 +233,7 @@ function cleanStalePeers() {
       deletePeerStmt.run(peer.id);
     }
   }
-  // Purge delivered messages older than 1 hour
-  const cutoff = new Date(Date.now() - 3_600_000).toISOString();
+  const cutoff = new Date(Date.now() - 7 * 24 * 3_600_000).toISOString();
   deleteOldMessages.run(cutoff);
 }
 
@@ -207,6 +259,9 @@ function handlePeerMessage(
       deleteByPid.run(msg.pid);
       const id = generateId(msg.cwd);
 
+      const saved = selectSavedSummary.get(msg.cwd) as { summary: string } | null;
+      const summary = msg.summary || saved?.summary || "";
+
       insertPeer.run(
         id,
         msg.pid,
@@ -214,7 +269,7 @@ function handlePeerMessage(
         msg.git_root,
         msg.git_branch,
         msg.tty,
-        msg.summary,
+        summary,
         msg.namespace,
         now,
         now,
@@ -271,6 +326,7 @@ function handlePeerMessage(
       updateSummary.run(msg.summary, ws.data.peerId);
       const peer = getPeer(ws.data.peerId);
       if (peer) {
+        upsertSummary.run(peer.cwd, msg.summary, new Date().toISOString());
         const updateMsg = JSON.stringify({ type: "peer_updated", peer });
         server.publish(`ns:${ws.data.namespace}`, updateMsg);
         server.publish("dashboard", updateMsg);
@@ -306,6 +362,7 @@ function handlePeerMessage(
       const now = new Date().toISOString();
       deliverOrQueue(fromId, msg.to, msg.text, now);
 
+      const stats = getMessageStats();
       server.publish(
         "dashboard",
         JSON.stringify({
@@ -314,6 +371,8 @@ function handlePeerMessage(
           to_id: msg.to,
           text: msg.text,
           sent_at: now,
+          peer_stats: stats.peer_stats,
+          pair_stats: stats.pair_stats,
         } satisfies DashboardMessage)
       );
       break;
@@ -411,6 +470,35 @@ const server = Bun.serve<WSData>({
       const peers = getAllPeers().filter((p) => isProcessAlive(p.pid));
       return Response.json({ peers, namespaces: namespacesFromPeers(peers) });
     },
+
+    "/api/messages": {
+      GET(req) {
+        const url = new URL(req.url);
+        const peer1 = url.searchParams.get("peer1");
+        const peer2 = url.searchParams.get("peer2");
+        if (!peer1) {
+          return Response.json({ error: "peer1 required" }, { status: 400 });
+        }
+        let messages: StoredMessage[];
+        if (!peer2 || peer2 === "*") {
+          messages = selectPeerMessages.all(peer1, peer1) as StoredMessage[];
+        } else {
+          messages = selectConversation.all(peer1, peer2, peer2, peer1) as StoredMessage[];
+        }
+        return Response.json({ messages });
+      },
+    },
+
+    "/api/messages/clear": {
+      POST() {
+        deleteAllMessages.run();
+        server.publish(
+          "dashboard",
+          JSON.stringify({ type: "messages_cleared" } satisfies DashboardMessage)
+        );
+        return Response.json({ ok: true });
+      },
+    },
   },
 
   fetch(req, server) {
@@ -445,11 +533,14 @@ const server = Bun.serve<WSData>({
       if (ws.data.kind === "dashboard") {
         ws.subscribe("dashboard");
         const peers = getAllPeers().filter((p) => isProcessAlive(p.pid));
+        const stats = getMessageStats();
         ws.send(
           JSON.stringify({
             type: "snapshot",
             peers,
             namespaces: namespacesFromPeers(peers),
+            peer_stats: stats.peer_stats,
+            pair_stats: stats.pair_stats,
           } satisfies DashboardMessage)
         );
       }
