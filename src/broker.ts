@@ -29,7 +29,7 @@ import type {
   PairMessageStats,
   StoredMessage,
 } from "./shared/types.ts";
-import dashboard from "./dashboard/index.html";
+import { renderDashboardPage } from "./dashboard/views/page.ts";
 
 const PORT = parseInt(process.env.CLAUDE_HIVEMIND_PORT ?? "7899", 10);
 const DB_PATH =
@@ -718,7 +718,9 @@ const server = Bun.serve<WSData>({
   hostname: "127.0.0.1",
 
   routes: {
-    "/": dashboard,
+    "/": () => new Response(renderDashboardPage(), {
+      headers: { "Content-Type": "text/html; charset=utf-8" },
+    }),
 
     "/health": () => {
       const peers = getAllPeers();
