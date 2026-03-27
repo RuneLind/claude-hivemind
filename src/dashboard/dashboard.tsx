@@ -9,6 +9,14 @@ import type {
 } from "../shared/types.ts";
 import "./dashboard.css";
 
+const START_SERVICE_MESSAGE = `Please ensure your application is running and healthy, then register it:
+
+1. **Build**: Run a clean build (e.g. \`mvn package -DskipTests\`) to ensure you have the latest version.
+2. **Kill zombies**: Check if anything is already running on your application port (e.g. \`lsof -i :<port> -t\`). If a process is found, kill it before starting fresh.
+3. **Start**: Start the application with the appropriate local profile.
+4. **Health check**: Wait for the application to be ready, then verify the health endpoint returns a healthy status (e.g. curl the health URL and confirm \`"status":"UP"\`). Common health paths: \`/internal/health\`, \`/actuator/health\`, \`/health\`.
+5. **Register**: Once healthy, call \`register_service\` with the correct port, health URL, and log format.`;
+
 interface ActivityItem {
   time: string;
   text: string;
@@ -143,6 +151,16 @@ function PeerCard({
       <div className="peer-header">
         <span className="connection-dot" />
         <span className="peer-id">{peer.id}</span>
+        {peer.connected && (
+          <button
+            className={`service-play-btn ${service?.status === "up" ? "up" : ""}`}
+            onClick={onStartService}
+            title={service?.status === "up" ? `Running on :${service.port}` : "Start service"}
+            disabled={service?.status === "up"}
+          >
+            &#9654;
+          </button>
+        )}
         {service && <ServiceBadge service={service} />}
         {total > 0 && (
           <button className="message-count-badge" onClick={onClickMessages} title="View messages">
@@ -161,11 +179,6 @@ function PeerCard({
           {peer.connected ? "Connected" : `Last seen ${timeAgo(peer.last_seen)}`}
         </span>
       </div>
-      {peer.connected && !service && (
-        <button className="start-service-btn" onClick={onStartService}>
-          Start service
-        </button>
-      )}
     </div>
   );
 }
@@ -438,10 +451,13 @@ function Dashboard() {
           break;
         case "service_update":
           setServices((prev) => {
+            const old = prev.find((s) => s.peer_id === msg.service.peer_id);
+            if (old?.status !== msg.service.status) {
+              addActivity(`Service ${msg.service.peer_id} :${msg.service.port} → ${msg.service.status}`);
+            }
             const filtered = prev.filter((s) => s.peer_id !== msg.service.peer_id);
             return [...filtered, msg.service];
           });
-          addActivity(`Service ${msg.service.peer_id} :${msg.service.port} → ${msg.service.status}`);
           break;
       }
     };
@@ -543,7 +559,7 @@ function Dashboard() {
                   stats={peerStatsMap.get(peer.id)}
                   service={serviceMap.get(peer.id)}
                   onClickMessages={() => setModal({ peer1: peer.id, peer2: null })}
-                  onStartService={() => sendToPeer(peer.id, "Please start your application and register it using the register_service tool.")}
+                  onStartService={() => sendToPeer(peer.id, START_SERVICE_MESSAGE)}
                 />
               ))}
             </div>

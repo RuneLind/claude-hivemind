@@ -304,15 +304,13 @@ async function pollServiceHealth() {
         } catch {
           newStatus = "down";
         }
-        if (newStatus !== svc.status) {
-          const now = new Date().toISOString();
-          updateServiceStatus.run(newStatus, now, svc.peer_id);
-          const updated: ServiceInfo = { ...svc, status: newStatus, last_check: now };
-          server.publish(
-            "dashboard",
-            JSON.stringify({ type: "service_update", service: updated } satisfies DashboardMessage)
-          );
-        }
+        const now = new Date().toISOString();
+        updateServiceStatus.run(newStatus, now, svc.peer_id);
+        const updated: ServiceInfo = { ...svc, status: newStatus, last_check: now };
+        server.publish(
+          "dashboard",
+          JSON.stringify({ type: "service_update", service: updated } satisfies DashboardMessage)
+        );
       })
     );
   } finally {
