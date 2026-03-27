@@ -90,14 +90,18 @@ export function stateScript(): string {
 
         case 'baseline_set':
           STATE.baselines[msg.namespace] = msg.baseline_at;
-          STATE.logStatsMap = {};
+          STATE.peers.forEach(function(p) {
+            if (p.namespace === msg.namespace) delete STATE.logStatsMap[p.id];
+          });
           addActivity('Baseline set for ' + msg.namespace);
           renderAll();
           break;
 
         case 'baseline_cleared':
           delete STATE.baselines[msg.namespace];
-          STATE.logStatsMap = {};
+          STATE.peers.forEach(function(p) {
+            if (p.namespace === msg.namespace) delete STATE.logStatsMap[p.id];
+          });
           addActivity('Baseline cleared for ' + msg.namespace);
           renderAll();
           break;

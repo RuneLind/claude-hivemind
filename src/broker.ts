@@ -219,8 +219,6 @@ const upsertBaseline = db.prepare(`
 
 const deleteBaseline = db.prepare(`DELETE FROM log_baselines WHERE namespace = ?`);
 
-const selectBaseline = db.prepare(`SELECT * FROM log_baselines WHERE namespace = ?`);
-
 const selectAllBaselines = db.prepare(`SELECT * FROM log_baselines`);
 
 const upsertBaselineOffset = db.prepare(`
@@ -590,13 +588,20 @@ function parseLogLine(raw: string, format: ServiceInfo["log_format"]): LogLine {
   };
 }
 
-async function readTailLines(filePath: string, format: ServiceInfo["log_format"], maxBytes = 65536): Promise<LogLine[]> {
+const MAX_LOG_READ_BYTES = 65536;
+
+async function readLinesFromOffset(filePath: string, format: ServiceInfo["log_format"], fromOffset: number, maxBytes = MAX_LOG_READ_BYTES): Promise<LogLine[]> {
   const file = Bun.file(filePath);
   const size = file.size;
-  const readFrom = Math.max(0, size - maxBytes);
-  const text = await (file.slice(readFrom, size)).text();
+  if (fromOffset >= size) return [];
+  const readFrom = Math.max(fromOffset, size - maxBytes);
+  const text = await file.slice(readFrom, size).text();
   const rawLines = text.split("\n").filter((l) => l.length > 0);
   return rawLines.map((l) => parseLogLine(l, format));
+}
+
+async function readTailLines(filePath: string, format: ServiceInfo["log_format"]): Promise<LogLine[]> {
+  return readLinesFromOffset(filePath, format, 0);
 }
 
 const INITIAL_LOG_LINES = 200;
@@ -618,23 +623,11 @@ class LogTailer {
 
   private async start(startOffset?: number) {
     try {
-      if (startOffset !== undefined) {
-        // Baseline mode: read only from the given offset
-        const file = Bun.file(this.filePath);
-        const size = file.size;
-        if (startOffset < size) {
-          const text = await file.slice(startOffset, size).text();
-          const rawLines = text.split("\n").filter((l) => l.length > 0);
-          const lines = rawLines.map((l) => parseLogLine(l, this.format));
-          if (lines.length > 0) this.onLines(lines);
-        }
-        this.offset = Bun.file(this.filePath).size;
-      } else {
-        const lines = await readTailLines(this.filePath, this.format);
-        const tail = lines.slice(-INITIAL_LOG_LINES);
-        if (tail.length > 0) this.onLines(tail);
-        this.offset = Bun.file(this.filePath).size;
-      }
+      const lines = startOffset !== undefined
+        ? await readLinesFromOffset(this.filePath, this.format, startOffset)
+        : (await readTailLines(this.filePath, this.format)).slice(-INITIAL_LOG_LINES);
+      if (lines.length > 0) this.onLines(lines);
+      this.offset = Bun.file(this.filePath).size;
     } catch {
       this.offset = 0;
     }
@@ -695,18 +688,11 @@ async function subscribeLogs(peerId: string, ws: import("bun").ServerWebSocket<W
   const existing = logSubscriptions.get(peerId);
   if (existing) {
     existing.subscribers.add(ws);
-    // Send initial lines from baseline offset to just this subscriber
-    if (baselineOffset && svc.log_file) {
+    if (baselineOffset) {
       try {
-        const file = Bun.file(svc.log_file);
-        const size = file.size;
-        if (baselineOffset.file_offset < size) {
-          const text = await file.slice(baselineOffset.file_offset, size).text();
-          const rawLines = text.split("\n").filter((l) => l.length > 0);
-          const lines = rawLines.map((l) => parseLogLine(l, svc.log_format));
-          if (lines.length > 0) {
-            ws.send(JSON.stringify({ type: "log_lines", peer_id: peerId, lines } satisfies DashboardMessage));
-          }
+        const lines = await readLinesFromOffset(svc.log_file, svc.log_format, baselineOffset.file_offset);
+        if (lines.length > 0) {
+          ws.send(JSON.stringify({ type: "log_lines", peer_id: peerId, lines } satisfies DashboardMessage));
         }
       } catch { /* ignore */ }
     }
@@ -774,7 +760,7 @@ function handleDashboardMessage(msg: DashboardClientMessage, ws: import("bun").S
     }
 
     case "subscribe_logs": {
-      subscribeLogs(msg.peer_id, ws);
+      subscribeLogs(msg.peer_id, ws).catch((e) => log(`Log subscribe error: ${e}`));
       log(`Dashboard subscribed to logs for ${msg.peer_id}`);
       break;
     }
@@ -943,21 +929,9 @@ const server = Bun.serve<WSData>({
           ? (selectBaselineOffset.get(ns, peerId) as { file_offset: number } | undefined)
           : undefined;
         try {
-          let lines: LogLine[];
-          if (baselineOffset) {
-            const file = Bun.file(svc.log_file);
-            const size = file.size;
-            const readFrom = baselineOffset.file_offset;
-            if (readFrom >= size) {
-              lines = [];
-            } else {
-              const text = await file.slice(readFrom, size).text();
-              const rawLines = text.split("\n").filter((l) => l.length > 0);
-              lines = rawLines.map((l) => parseLogLine(l, svc.log_format));
-            }
-          } else {
-            lines = await readTailLines(svc.log_file, svc.log_format);
-          }
+          const lines = baselineOffset
+            ? await readLinesFromOffset(svc.log_file, svc.log_format, baselineOffset.file_offset)
+            : await readTailLines(svc.log_file, svc.log_format);
           const stats = { ERROR: 0, WARN: 0, INFO: 0, DEBUG: 0, TRACE: 0, total: lines.length };
           for (const l of lines) stats[l.level]++;
           return Response.json(stats);
