@@ -6,6 +6,7 @@ export function rendererScript(): string {
       renderHeader();
       renderNamespaces();
       renderActivityLog();
+      fetchLogStatsIfNeeded();
     }
 
     function renderHeader() {
