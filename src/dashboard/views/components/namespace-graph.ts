@@ -129,7 +129,7 @@ export function namespaceGraphScript(): string {
             + '" stroke="#7ee787" stroke-width="1.5" opacity="0.6" marker-end="url(#arrow-rev)"/>';
         }
 
-        svg += '<g class="edge-label" onclick="openConversation(\\'' + escapeHtml(edge.from) + '\\',\\'' + escapeHtml(edge.to) + '\\')">';
+        svg += '<g class="edge-label" onclick="openConversation(\\'' + escapeJs(edge.from) + '\\',\\'' + escapeJs(edge.to) + '\\')">';
         svg += '<rect x="' + (midX - 18) + '" y="' + (midY - 12) + '" width="36" height="24" rx="4" fill="#21262d" stroke="#30363d" stroke-width="1"/>';
         svg += '<text x="' + midX + '" y="' + (midY + 4) + '" text-anchor="middle" fill="#c9d1d9" font-size="14" font-family="monospace">' + total + '</text>';
         svg += '</g>';

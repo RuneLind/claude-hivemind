@@ -26,7 +26,6 @@ export function activityLogScript(): string {
     function addActivity(text) {
       STATE.activity.unshift({ time: new Date().toISOString(), text: text });
       if (STATE.activity.length > MAX_ACTIVITY) STATE.activity = STATE.activity.slice(0, MAX_ACTIVITY);
-      renderActivityLog();
     }
 
     function renderActivityLog() {

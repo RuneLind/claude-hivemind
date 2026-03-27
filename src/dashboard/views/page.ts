@@ -66,6 +66,14 @@ function baseStyles(): string {
     .view-toggle:hover { border-color: #58a6ff; color: #58a6ff; }
     .ns-badge { margin-left: auto; font-size: 11px; color: #8b949e; font-weight: 400; }
     .empty { text-align: center; padding: 60px 20px; color: #484f58; font-size: 14px; }
+    .modal-loading, .modal-empty {
+      color: #484f58; text-align: center; padding: 24px; font-size: 13px;
+    }
+    .modal-close {
+      background: none; border: none; color: #8b949e;
+      font-size: 20px; cursor: pointer; padding: 0 4px; line-height: 1;
+    }
+    .modal-close:hover { color: #e6edf3; }
   `;
 }
 

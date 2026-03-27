@@ -86,9 +86,7 @@ export function peerCardStyles(): string {
 
 export function peerCardScript(): string {
   return `
-    function renderPeerCard(peer) {
-      var statsMap = getPeerStatsMap();
-      var svcMap = getServiceMap();
+    function renderPeerCard(peer, statsMap, svcMap) {
       var stats = statsMap[peer.id];
       var svc = svcMap[peer.id];
       var logStats = STATE.logStatsMap[peer.id];
@@ -103,7 +101,7 @@ export function peerCardScript(): string {
       if (connected) {
         var isUp = svc && svc.status === 'up';
         html += '<button class="service-play-btn' + (isUp ? ' up' : '') + '"'
-          + ' onclick="startService(\\'' + escapeHtml(peer.id) + '\\')"'
+          + ' onclick="startService(\\'' + escapeJs(peer.id) + '\\')"'
           + ' title="' + (isUp ? 'Running on :' + svc.port : 'Start service') + '"'
           + (isUp ? ' disabled' : '') + '>&#9654;</button>';
       }
@@ -120,7 +118,7 @@ export function peerCardScript(): string {
       }
 
       if (total > 0) {
-        html += '<button class="message-count-badge" onclick="openConversation(\\'' + escapeHtml(peer.id) + '\\', null)" title="View messages">';
+        html += '<button class="message-count-badge" onclick="openConversation(\\'' + escapeJs(peer.id) + '\\', null)" title="View messages">';
         html += total + ' msg' + (total !== 1 ? 's' : '');
         html += '</button>';
       }
@@ -141,7 +139,7 @@ export function peerCardScript(): string {
       if (logStats) {
         var hasLogFile = svc && svc.log_file;
         html += '<div class="peer-log-stats' + (hasLogFile ? ' clickable' : '') + '"'
-          + (hasLogFile ? ' onclick="openLogViewer(\\'' + escapeHtml(peer.id) + '\\')"' : '') + '>';
+          + (hasLogFile ? ' onclick="openLogViewer(\\'' + escapeJs(peer.id) + '\\')"' : '') + '>';
         if (logStats.ERROR > 0) html += '<span style="color:#f85149;font-weight:600">' + logStats.ERROR + ' errors</span>';
         if (logStats.WARN > 0) html += '<span style="color:#d29922;font-weight:500">' + logStats.WARN + ' warn</span>';
         html += '<span style="color:#484f58">' + logStats.INFO + ' info</span>';

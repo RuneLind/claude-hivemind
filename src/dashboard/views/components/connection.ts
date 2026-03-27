@@ -25,8 +25,12 @@ export function connectionScript(): string {
       };
 
       ws.onmessage = function(event) {
-        var msg = JSON.parse(event.data);
-        handleMessage(msg);
+        try {
+          var msg = JSON.parse(event.data);
+          handleMessage(msg);
+        } catch (e) {
+          console.error('Invalid WS message:', e);
+        }
       };
     }
 

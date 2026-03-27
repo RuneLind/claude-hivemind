@@ -6,7 +6,6 @@ export function rendererScript(): string {
       renderHeader();
       renderNamespaces();
       renderActivityLog();
-      fetchLogStatsIfNeeded();
     }
 
     function renderHeader() {
@@ -32,7 +31,6 @@ export function rendererScript(): string {
       var container = $('namespacesContainer');
       if (!container) return;
 
-      // Group peers by namespace
       var grouped = {};
       STATE.peers.forEach(function(peer) {
         if (!grouped[peer.namespace]) grouped[peer.namespace] = [];
@@ -45,6 +43,9 @@ export function rendererScript(): string {
         container.innerHTML = '<div class="empty">No peers connected. Start a Claude Code session to see it here.</div>';
         return;
       }
+
+      var statsMap = getPeerStatsMap();
+      var svcMap = getServiceMap();
 
       var html = '';
       namespaces.forEach(function(ns) {
@@ -63,7 +64,7 @@ export function rendererScript(): string {
 
         if (hasMessages) {
           var isGraph = STATE.graphView[ns];
-          html += '<button class="view-toggle" onclick="toggleGraphView(\\'' + escapeHtml(ns) + '\\')">'
+          html += '<button class="view-toggle" onclick="toggleGraphView(\\'' + escapeJs(ns) + '\\')">'
             + (isGraph ? 'Peers' : 'Graph') + '</button>';
         }
 
@@ -75,7 +76,7 @@ export function rendererScript(): string {
         } else {
           html += '<div class="peer-grid">';
           peers.forEach(function(peer) {
-            html += renderPeerCard(peer);
+            html += renderPeerCard(peer, statsMap, svcMap);
           });
           html += '</div>';
         }
@@ -95,9 +96,6 @@ export function rendererScript(): string {
       fetch('/api/messages/clear', { method: 'POST' });
     }
 
-    // Log stats polling
-    var logStatsTimer = null;
-
     function fetchLogStatsIfNeeded() {
       var svcs = STATE.services.filter(function(s) { return s.log_file; });
       if (svcs.length === 0) return;
@@ -107,14 +105,20 @@ export function rendererScript(): string {
           .then(function(r) { return r.ok ? r.json() : null; })
           .catch(function() { return null; });
       })).then(function(results) {
+        var changed = false;
         svcs.forEach(function(svc, i) {
-          if (results[i]) STATE.logStatsMap[svc.peer_id] = results[i];
+          if (results[i]) {
+            var prev = STATE.logStatsMap[svc.peer_id];
+            if (!prev || prev.total !== results[i].total || prev.ERROR !== results[i].ERROR || prev.WARN !== results[i].WARN) {
+              STATE.logStatsMap[svc.peer_id] = results[i];
+              changed = true;
+            }
+          }
         });
-        renderNamespaces();
+        if (changed) renderNamespaces();
       });
     }
 
-    // Escape key handler for modals
     document.addEventListener('keydown', function(e) {
       if (e.key === 'Escape') {
         if ($('logViewerModal').style.display !== 'none') {
@@ -125,13 +129,12 @@ export function rendererScript(): string {
       }
     });
 
-    // Periodic refresh for timestamps
-    setInterval(function() { renderNamespaces(); }, 30000);
+    // Single 30s interval for timestamp refresh + log stats polling
+    setInterval(function() {
+      renderNamespaces();
+      fetchLogStatsIfNeeded();
+    }, 30000);
 
-    // Log stats polling every 30s
-    setInterval(fetchLogStatsIfNeeded, 30000);
-
-    // Boot
     connectWs();
   `;
 }

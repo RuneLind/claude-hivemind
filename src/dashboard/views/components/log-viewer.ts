@@ -68,7 +68,6 @@ export function logViewerStyles(): string {
 
 export function logViewerScript(): string {
   return `
-    var LOG_LEVELS = ['ERROR', 'WARN', 'INFO', 'DEBUG', 'TRACE'];
     var logActiveLevels = { ERROR: true, WARN: true, INFO: true, DEBUG: true, TRACE: false };
     var logFilter = '';
     var logAutoScroll = true;
@@ -185,7 +184,7 @@ export function logViewerHtml(): string {
           </div>
           <input type="text" class="log-search" id="logFilterInput" placeholder="Filter..." oninput="onLogFilter(this.value)">
           <span id="logLineCount" class="log-line-count">0 lines</span>
-          <button onclick="closeLogViewer()" style="background:none;border:none;color:#8b949e;font-size:20px;cursor:pointer;padding:0 4px;line-height:1">&times;</button>
+          <button class="modal-close" onclick="closeLogViewer()">&times;</button>
         </div>
         <div class="log-body" id="logBody" onscroll="onLogScroll()"></div>
       </div>

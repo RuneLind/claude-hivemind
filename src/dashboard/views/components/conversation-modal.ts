@@ -21,15 +21,7 @@ export function conversationModalStyles(): string {
       border-bottom: 1px solid #21262d;
     }
     .modal-header h3 { font-size: 14px; font-weight: 500; color: #e6edf3; }
-    .modal-close {
-      background: none; border: none; color: #8b949e;
-      font-size: 20px; cursor: pointer; padding: 0 4px; line-height: 1;
-    }
-    .modal-close:hover { color: #e6edf3; }
     .modal-body { padding: 14px 18px; overflow-y: auto; flex: 1; }
-    .modal-loading, .modal-empty {
-      color: #484f58; text-align: center; padding: 24px; font-size: 13px;
-    }
     .message-item {
       padding: 10px 12px; margin-bottom: 8px;
       border-radius: 6px; background: #0d1117;

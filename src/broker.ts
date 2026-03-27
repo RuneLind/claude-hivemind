@@ -31,6 +31,7 @@ import type {
 } from "./shared/types.ts";
 import { renderDashboardPage } from "./dashboard/views/page.ts";
 
+const dashboardHtml = renderDashboardPage();
 const PORT = parseInt(process.env.CLAUDE_HIVEMIND_PORT ?? "7899", 10);
 const DB_PATH =
   process.env.CLAUDE_HIVEMIND_DB ?? `${process.env.HOME}/.claude-hivemind.db`;
@@ -718,7 +719,7 @@ const server = Bun.serve<WSData>({
   hostname: "127.0.0.1",
 
   routes: {
-    "/": () => new Response(renderDashboardPage(), {
+    "/": () => new Response(dashboardHtml, {
       headers: { "Content-Type": "text/html; charset=utf-8" },
     }),
 
