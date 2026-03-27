@@ -10,11 +10,18 @@
  */
 
 import { Database } from "bun:sqlite";
+import {
+  DEFAULT_HEALTH_URL,
+  DEFAULT_LOG_FORMAT,
+  DASHBOARD_SENDER_ID,
+} from "./shared/types.ts";
 import type {
   ClientMessage,
   BrokerMessage,
   DashboardMessage,
+  DashboardClientMessage,
   Peer,
+  ServiceInfo,
   NamespaceInfo,
   PeerMessageStats,
   PairMessageStats,
@@ -68,6 +75,18 @@ db.run(`
     text TEXT NOT NULL,
     sent_at TEXT NOT NULL,
     delivered INTEGER NOT NULL DEFAULT 0
+  )
+`);
+
+db.run(`
+  CREATE TABLE IF NOT EXISTS services (
+    peer_id TEXT PRIMARY KEY REFERENCES peers(id),
+    port INTEGER NOT NULL,
+    health_url TEXT NOT NULL DEFAULT '/health',
+    log_file TEXT,
+    log_format TEXT NOT NULL DEFAULT 'plain',
+    status TEXT NOT NULL DEFAULT 'unknown',
+    last_check TEXT
   )
 `);
 
@@ -155,6 +174,24 @@ const selectPeerMessages = db.prepare(`
 
 const deleteAllMessages = db.prepare(`DELETE FROM messages`);
 
+const upsertService = db.prepare(`
+  INSERT INTO services (peer_id, port, health_url, log_file, log_format, status, last_check)
+  VALUES (?, ?, ?, ?, ?, 'unknown', NULL)
+  ON CONFLICT(peer_id) DO UPDATE SET
+    port = excluded.port, health_url = excluded.health_url,
+    log_file = excluded.log_file, log_format = excluded.log_format
+`);
+
+const selectAllServices = db.prepare(`SELECT * FROM services`);
+
+const selectServiceByPeer = db.prepare(`SELECT * FROM services WHERE peer_id = ?`);
+
+const updateServiceStatus = db.prepare(
+  `UPDATE services SET status = ?, last_check = ? WHERE peer_id = ?`
+);
+
+const deleteServiceByPeer = db.prepare(`DELETE FROM services WHERE peer_id = ?`);
+
 
 function generateId(cwd: string): string {
   const base = cwd.split("/").pop() ?? "peer";
@@ -230,6 +267,7 @@ function cleanStalePeers() {
   const peers = selectPeerIdPid.all() as { id: string; pid: number }[];
   for (const peer of peers) {
     if (!isProcessAlive(peer.pid)) {
+      deleteServiceByPeer.run(peer.id);
       deletePeerStmt.run(peer.id);
     }
   }
@@ -239,6 +277,48 @@ function cleanStalePeers() {
 
 cleanStalePeers();
 setInterval(cleanStalePeers, 30_000);
+
+let polling = false;
+
+async function pollServiceHealth() {
+  if (polling) return;
+  polling = true;
+  try {
+    const services = selectAllServices.all() as ServiceInfo[];
+    if (services.length === 0) return;
+
+    const peerIds = new Set(getAllPeers().map((p) => p.id));
+
+    await Promise.all(
+      services.map(async (svc) => {
+        if (!peerIds.has(svc.peer_id)) {
+          deleteServiceByPeer.run(svc.peer_id);
+          return;
+        }
+        let newStatus: "up" | "down";
+        try {
+          const res = await fetch(`http://127.0.0.1:${svc.port}${svc.health_url}`, {
+            signal: AbortSignal.timeout(3000),
+          });
+          newStatus = res.ok ? "up" : "down";
+        } catch {
+          newStatus = "down";
+        }
+        const now = new Date().toISOString();
+        updateServiceStatus.run(newStatus, now, svc.peer_id);
+        const updated: ServiceInfo = { ...svc, status: newStatus, last_check: now };
+        server.publish(
+          "dashboard",
+          JSON.stringify({ type: "service_update", service: updated } satisfies DashboardMessage)
+        );
+      })
+    );
+  } finally {
+    polling = false;
+  }
+}
+
+setInterval(pollServiceHealth, 15_000);
 
 
 type PeerWSData = { kind: "peer"; peerId: string | null; namespace: string };
@@ -401,9 +481,61 @@ function handlePeerMessage(
       updateLastSeen.run(new Date().toISOString(), ws.data.peerId);
       break;
     }
+
+    case "register_service": {
+      if (!ws.data.peerId) return;
+      const healthUrl = msg.health_url || DEFAULT_HEALTH_URL;
+      const logFormat = msg.log_format || DEFAULT_LOG_FORMAT;
+      upsertService.run(
+        ws.data.peerId,
+        msg.port,
+        healthUrl,
+        msg.log_file ?? null,
+        logFormat
+      );
+      const service: ServiceInfo = {
+        peer_id: ws.data.peerId,
+        port: msg.port,
+        health_url: healthUrl,
+        log_file: msg.log_file ?? null,
+        log_format: logFormat,
+        status: "unknown",
+        last_check: null,
+      };
+      server.publish(
+        "dashboard",
+        JSON.stringify({ type: "service_update", service } satisfies DashboardMessage)
+      );
+      log(`Service registered for ${ws.data.peerId} on port ${msg.port}`);
+      break;
+    }
   }
 }
 
+
+function handleDashboardMessage(msg: DashboardClientMessage): void {
+  switch (msg.type) {
+    case "send_to_peer": {
+      const peer = getPeer(msg.peer_id);
+      if (!peer) return;
+      const targetWs = peerSockets.get(msg.peer_id);
+      if (targetWs && targetWs.readyState === WS_OPEN) {
+        targetWs.send(
+          JSON.stringify({
+            type: "message",
+            from_id: DASHBOARD_SENDER_ID,
+            from_summary: "Hivemind Dashboard",
+            from_cwd: "",
+            text: msg.message,
+            sent_at: new Date().toISOString(),
+          } satisfies BrokerMessage)
+        );
+        log(`Dashboard sent message to ${msg.peer_id}`);
+      }
+      break;
+    }
+  }
+}
 
 const server = Bun.serve<WSData>({
   port: PORT,
@@ -489,6 +621,11 @@ const server = Bun.serve<WSData>({
       },
     },
 
+    "/api/services": () => {
+      const services = selectAllServices.all() as ServiceInfo[];
+      return Response.json({ services });
+    },
+
     "/api/messages/clear": {
       POST() {
         deleteAllMessages.run();
@@ -534,6 +671,7 @@ const server = Bun.serve<WSData>({
         ws.subscribe("dashboard");
         const peers = getAllPeers().filter((p) => isProcessAlive(p.pid));
         const stats = getMessageStats();
+        const services = selectAllServices.all() as ServiceInfo[];
         ws.send(
           JSON.stringify({
             type: "snapshot",
@@ -541,6 +679,7 @@ const server = Bun.serve<WSData>({
             namespaces: namespacesFromPeers(peers),
             peer_stats: stats.peer_stats,
             pair_stats: stats.pair_stats,
+            services,
           } satisfies DashboardMessage)
         );
       }
@@ -557,6 +696,13 @@ const server = Bun.serve<WSData>({
           );
         } catch (e) {
           log(`Invalid message: ${e}`);
+        }
+      } else if (ws.data.kind === "dashboard") {
+        try {
+          const data = JSON.parse(String(message)) as DashboardClientMessage;
+          handleDashboardMessage(data);
+        } catch (e) {
+          log(`Invalid dashboard message: ${e}`);
         }
       }
     },
@@ -587,6 +733,7 @@ const server = Bun.serve<WSData>({
         setTimeout(() => {
           const current = getPeer(peerId);
           if (current && !current.connected) {
+            deleteServiceByPeer.run(peerId);
             deletePeerStmt.run(peerId);
             log(`Peer ${peerId} cleaned up after grace period`);
           }

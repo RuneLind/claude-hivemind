@@ -26,6 +26,20 @@ export interface Message {
   delivered: number; // 0 or 1
 }
 
+export const DEFAULT_HEALTH_URL = "/health";
+export const DEFAULT_LOG_FORMAT = "plain" as const;
+export const DASHBOARD_SENDER_ID = "__dashboard__";
+
+export interface ServiceInfo {
+  peer_id: PeerId;
+  port: number;
+  health_url: string;
+  log_file: string | null;
+  log_format: "spring" | "json" | "plain";
+  status: "up" | "down" | "unknown";
+  last_check: string | null; // ISO timestamp
+}
+
 // --- WebSocket protocol: Client → Broker ---
 
 export type ClientMessage =
@@ -42,7 +56,14 @@ export type ClientMessage =
   | { type: "set_summary"; summary: string }
   | { type: "send_message"; to: PeerId; text: string }
   | { type: "list_peers"; scope: "namespace" | "machine" }
-  | { type: "heartbeat" };
+  | { type: "heartbeat" }
+  | {
+      type: "register_service";
+      port: number;
+      health_url: string;
+      log_file?: string;
+      log_format?: "spring" | "json" | "plain";
+    };
 
 // --- WebSocket protocol: Broker → Client ---
 
@@ -65,7 +86,7 @@ export type BrokerMessage =
 // --- WebSocket protocol: Broker → Dashboard ---
 
 export type DashboardMessage =
-  | { type: "snapshot"; peers: Peer[]; namespaces: NamespaceInfo[]; peer_stats: PeerMessageStats[]; pair_stats: PairMessageStats[] }
+  | { type: "snapshot"; peers: Peer[]; namespaces: NamespaceInfo[]; peer_stats: PeerMessageStats[]; pair_stats: PairMessageStats[]; services: ServiceInfo[] }
   | { type: "peer_joined"; peer: Peer }
   | { type: "peer_left"; peer_id: PeerId; namespace: Namespace }
   | { type: "peer_updated"; peer: Peer }
@@ -78,7 +99,13 @@ export type DashboardMessage =
       peer_stats: PeerMessageStats[];
       pair_stats: PairMessageStats[];
     }
-  | { type: "messages_cleared" };
+  | { type: "messages_cleared" }
+  | { type: "service_update"; service: ServiceInfo };
+
+// --- WebSocket protocol: Dashboard → Broker ---
+
+export type DashboardClientMessage =
+  | { type: "send_to_peer"; peer_id: PeerId; message: string };
 
 export interface NamespaceInfo {
   name: Namespace;

@@ -16,6 +16,7 @@ import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import { DEFAULT_HEALTH_URL } from "./shared/types.ts";
 import type {
   PeerId,
   Peer,
@@ -336,6 +337,34 @@ const TOOLS = [
       required: ["summary"],
     },
   },
+  {
+    name: "register_service",
+    description:
+      "Register the application service running in your project. This enables health monitoring from the hivemind dashboard.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        port: {
+          type: "number" as const,
+          description: "Port the service listens on (e.g. 8080)",
+        },
+        health_url: {
+          type: "string" as const,
+          description: 'Health endpoint path (default: "/health")',
+        },
+        log_file: {
+          type: "string" as const,
+          description: "Absolute path to log file for log viewing",
+        },
+        log_format: {
+          type: "string" as const,
+          enum: ["spring", "json", "plain"],
+          description: 'Log format for parsing (default: "plain")',
+        },
+      },
+      required: ["port"],
+    },
+  },
 ];
 
 mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -398,6 +427,26 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       const sent = wsSend({ type: "set_summary", summary });
       if (!sent) return textResult("Not connected to broker. Summary not updated.", true);
       return textResult(`Summary updated: "${summary}"`);
+    }
+
+    case "register_service": {
+      const { port, health_url, log_file, log_format } = args as {
+        port: number;
+        health_url?: string;
+        log_file?: string;
+        log_format?: "spring" | "json" | "plain";
+      };
+      if (!myId) return textResult("Not registered with broker yet", true);
+      const resolvedHealthUrl = health_url || DEFAULT_HEALTH_URL;
+      const sent = wsSend({
+        type: "register_service",
+        port,
+        health_url: resolvedHealthUrl,
+        log_file,
+        log_format,
+      });
+      if (!sent) return textResult("Not connected to broker. Service not registered.", true);
+      return textResult(`Service registered on port ${port} (health: ${resolvedHealthUrl})`);
     }
 
     default:

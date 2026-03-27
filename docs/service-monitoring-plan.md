@@ -151,34 +151,35 @@ Log line parsing per format:
 - Max 1000 lines in browser (ring buffer)
 - Red highlight for ERROR lines, yellow for WARN
 
-### Phase 3: Auto-detection (optional)
+### Dashboard-triggered service startup
 
-Instead of requiring `register_service`, detect services automatically:
+The dashboard shows a "Start service" button on each peer card. Clicking it sends a message through the broker to that peer's Claude Code instance, asking it to start the application and call `register_service`.
 
-**Spring Boot detection:**
-- Read `src/main/resources/application.properties` or `application.yml` for `server.port`
-- Default health endpoint: `/actuator/health`
-- Log file: check `logging.file.name` property, or scan for `logs/*.log`
+New dashboard-to-broker WebSocket message:
 
-**Node/Bun detection:**
-- Read `package.json` scripts for port patterns (`PORT=3000`, `--port 3000`)
-- Check common health endpoints: `/health`, `/healthz`, `/api/health`
+```ts
+| { type: "send_to_peer"; peer_id: string; message: string }
+```
 
-**Docker Compose detection:**
-- Parse `docker-compose.yml` for port mappings and service names
-- Health checks defined in compose file
+The broker translates this into a regular message delivery to the target peer. The Claude Code instance handles it like any incoming peer message — it starts the app and registers it.
 
-This phase is nice-to-have. Manual registration via the tool is sufficient for v1.
+Flow:
+1. User clicks "Start service" on a peer card in the dashboard
+2. Dashboard sends `send_to_peer` to the broker
+3. Broker delivers the message to the peer's MCP server
+4. Claude Code instance starts the app and calls `register_service`
+5. Health polling picks up the new service, dashboard shows status
 
 ## API changes summary
 
 ### New ClientMessage types
 - `register_service` — peer registers its application service
 
-### New BrokerMessage types
-- `service_status` — broker pushes status updates to peers
+### New DashboardMessage types (dashboard → broker)
+- `send_to_peer` — dashboard sends a message to a specific peer
+- `subscribe_logs` / `unsubscribe_logs` — client requests log streaming
 
-### New DashboardMessage types
+### New DashboardMessage types (broker → dashboard)
 - `service_update` — health status change for a peer's service
 - `log_lines` — streamed log lines for subscribed viewers
 
@@ -186,17 +187,13 @@ This phase is nice-to-have. Manual registration via the tool is sufficient for v
 - `GET /api/services` — list all registered services and their status
 - `GET /api/logs?peer_id=X&lines=100&level=ERROR` — fetch recent log lines
 
-### New dashboard WebSocket messages
-- `subscribe_logs` / `unsubscribe_logs` — client requests log streaming
-- `log_lines` — server pushes new log lines
-
 ## Implementation order
 
 1. `register_service` tool + SQLite table + broker handler
 2. Health polling + dashboard status indicators on peer cards
-3. Log tailing infrastructure (broker-side file watcher + parser)
-4. Dashboard log viewer panel with level filtering
-5. (Optional) Auto-detection of services
+3. `send_to_peer` dashboard message + "Start service" button
+4. Log tailing infrastructure (broker-side file watcher + parser)
+5. Dashboard log viewer panel with level filtering
 
 ## Open questions
 

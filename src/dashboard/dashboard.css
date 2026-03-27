@@ -238,6 +238,56 @@ header h1 {
   color: #484f58;
 }
 
+/* Service badge */
+
+.service-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: #c9d1d9;
+  padding: 2px 8px;
+  border-radius: 10px;
+  border: 1px solid;
+}
+
+.service-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.service-check {
+  color: #484f58;
+  font-size: 10px;
+}
+
+.service-play-btn {
+  background: none;
+  border: none;
+  color: #484f58;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 4px 6px;
+  margin: -4px 0;
+  line-height: 1;
+  transition: color 0.15s;
+}
+
+.service-play-btn:hover:not(:disabled) {
+  color: #58a6ff;
+}
+
+.service-play-btn.up {
+  color: #3fb950;
+  cursor: default;
+}
+
+.service-play-btn:disabled {
+  opacity: 1;
+}
+
 /* Empty state */
 
 .empty {

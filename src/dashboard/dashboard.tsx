@@ -2,11 +2,20 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from "react"
 import { createRoot } from "react-dom/client";
 import type {
   Peer,
+  ServiceInfo,
   PeerMessageStats,
   PairMessageStats,
   StoredMessage,
 } from "../shared/types.ts";
 import "./dashboard.css";
+
+const START_SERVICE_MESSAGE = `Please ensure your application is running and healthy, then register it:
+
+1. **Build**: Run a clean build (e.g. \`mvn package -DskipTests\`) to ensure you have the latest version.
+2. **Kill zombies**: Check if anything is already running on your application port (e.g. \`lsof -i :<port> -t\`). If a process is found, kill it before starting fresh.
+3. **Start**: Start the application with the appropriate local profile.
+4. **Health check**: Wait for the application to be ready, then verify the health endpoint returns a healthy status (e.g. curl the health URL and confirm \`"status":"UP"\`). Common health paths: \`/internal/health\`, \`/actuator/health\`, \`/health\`.
+5. **Register**: Once healthy, call \`register_service\` with the correct port, health URL, and log format.`;
 
 interface ActivityItem {
   time: string;
@@ -107,14 +116,33 @@ function ConversationModal({
   );
 }
 
+function ServiceBadge({ service }: { service: ServiceInfo }) {
+  const color = service.status === "up" ? "#3fb950" : service.status === "down" ? "#f85149" : "#848d97";
+  return (
+    <span className="service-badge" style={{ borderColor: color }}>
+      <span className="service-dot" style={{ background: color }} />
+      :{service.port}
+      {service.last_check && (
+        <span className="service-check" title={`Last check: ${service.last_check}`}>
+          {timeAgo(service.last_check)}
+        </span>
+      )}
+    </span>
+  );
+}
+
 function PeerCard({
   peer,
   stats,
+  service,
   onClickMessages,
+  onStartService,
 }: {
   peer: Peer;
   stats: PeerMessageStats | undefined;
+  service: ServiceInfo | undefined;
   onClickMessages: () => void;
+  onStartService: () => void;
 }) {
   const total = stats ? stats.sent + stats.received : 0;
 
@@ -123,6 +151,17 @@ function PeerCard({
       <div className="peer-header">
         <span className="connection-dot" />
         <span className="peer-id">{peer.id}</span>
+        {peer.connected && (
+          <button
+            className={`service-play-btn ${service?.status === "up" ? "up" : ""}`}
+            onClick={onStartService}
+            title={service?.status === "up" ? `Running on :${service.port}` : "Start service"}
+            disabled={service?.status === "up"}
+          >
+            &#9654;
+          </button>
+        )}
+        {service && <ServiceBadge service={service} />}
         {total > 0 && (
           <button className="message-count-badge" onClick={onClickMessages} title="View messages">
             {total} msg{total !== 1 ? "s" : ""}
@@ -335,6 +374,7 @@ function Dashboard() {
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [peerStats, setPeerStats] = useState<PeerMessageStats[]>([]);
   const [pairStats, setPairStats] = useState<PairMessageStats[]>([]);
+  const [services, setServices] = useState<ServiceInfo[]>([]);
   const [modal, setModal] = useState<{ peer1: string; peer2: string | null } | null>(null);
   const [graphView, setGraphView] = useState<Record<string, boolean>>({});
   const wsRef = useRef<WebSocket | null>(null);
@@ -374,6 +414,7 @@ function Dashboard() {
           setPeers(msg.peers);
           setPeerStats(msg.peer_stats ?? []);
           setPairStats(msg.pair_stats ?? []);
+          setServices(msg.services ?? []);
           addActivity(`Loaded ${msg.peers.length} peer(s)`);
           break;
         case "peer_joined":
@@ -408,6 +449,16 @@ function Dashboard() {
           setPairStats([]);
           addActivity("Message history cleared");
           break;
+        case "service_update":
+          setServices((prev) => {
+            const old = prev.find((s) => s.peer_id === msg.service.peer_id);
+            if (old?.status !== msg.service.status) {
+              addActivity(`Service ${msg.service.peer_id} :${msg.service.port} → ${msg.service.status}`);
+            }
+            const filtered = prev.filter((s) => s.peer_id !== msg.service.peer_id);
+            return [...filtered, msg.service];
+          });
+          break;
       }
     };
   }, [addActivity]);
@@ -432,7 +483,15 @@ function Dashboard() {
     await fetch("/api/messages/clear", { method: "POST" });
   };
 
+  const sendToPeer = useCallback((peerId: string, message: string) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: "send_to_peer", peer_id: peerId, message }));
+      addActivity(`Sent to ${peerId}: ${message.slice(0, 60)}`);
+    }
+  }, [addActivity]);
+
   const peerStatsMap = useMemo(() => new Map(peerStats.map((s) => [s.peer_id, s])), [peerStats]);
+  const serviceMap = useMemo(() => new Map(services.map((s) => [s.peer_id, s])), [services]);
 
   const grouped = peers.reduce(
     (acc, peer) => {
@@ -498,7 +557,9 @@ function Dashboard() {
                   key={peer.id}
                   peer={peer}
                   stats={peerStatsMap.get(peer.id)}
+                  service={serviceMap.get(peer.id)}
                   onClickMessages={() => setModal({ peer1: peer.id, peer2: null })}
+                  onStartService={() => sendToPeer(peer.id, START_SERVICE_MESSAGE)}
                 />
               ))}
             </div>
