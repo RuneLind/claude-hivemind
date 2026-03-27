@@ -85,8 +85,13 @@ export type BrokerMessage =
 
 // --- WebSocket protocol: Broker → Dashboard ---
 
+export interface LogBaseline {
+  namespace: Namespace;
+  baseline_at: string; // ISO timestamp
+}
+
 export type DashboardMessage =
-  | { type: "snapshot"; peers: Peer[]; namespaces: NamespaceInfo[]; peer_stats: PeerMessageStats[]; pair_stats: PairMessageStats[]; services: ServiceInfo[] }
+  | { type: "snapshot"; peers: Peer[]; namespaces: NamespaceInfo[]; peer_stats: PeerMessageStats[]; pair_stats: PairMessageStats[]; services: ServiceInfo[]; baselines: LogBaseline[] }
   | { type: "peer_joined"; peer: Peer }
   | { type: "peer_left"; peer_id: PeerId; namespace: Namespace }
   | { type: "peer_updated"; peer: Peer }
@@ -101,14 +106,18 @@ export type DashboardMessage =
     }
   | { type: "messages_cleared" }
   | { type: "service_update"; service: ServiceInfo }
-  | { type: "log_lines"; peer_id: PeerId; lines: LogLine[] };
+  | { type: "log_lines"; peer_id: PeerId; lines: LogLine[] }
+  | { type: "baseline_set"; namespace: Namespace; baseline_at: string }
+  | { type: "baseline_cleared"; namespace: Namespace };
 
 // --- WebSocket protocol: Dashboard → Broker ---
 
 export type DashboardClientMessage =
   | { type: "send_to_peer"; peer_id: PeerId; message: string }
   | { type: "subscribe_logs"; peer_id: PeerId }
-  | { type: "unsubscribe_logs"; peer_id: PeerId };
+  | { type: "unsubscribe_logs"; peer_id: PeerId }
+  | { type: "set_baseline"; namespace: Namespace }
+  | { type: "clear_baseline"; namespace: Namespace };
 
 export interface NamespaceInfo {
   name: Namespace;

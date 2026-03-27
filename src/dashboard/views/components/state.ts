@@ -9,6 +9,7 @@ export function stateScript(): string {
       services: [],
       activity: [],
       logStatsMap: {},
+      baselines: {},
       graphView: {},
       logViewerPeer: null,
       logLines: [],
@@ -30,6 +31,8 @@ export function stateScript(): string {
           STATE.peerStats = msg.peer_stats || [];
           STATE.pairStats = msg.pair_stats || [];
           STATE.services = msg.services || [];
+          STATE.baselines = {};
+          (msg.baselines || []).forEach(function(b) { STATE.baselines[b.namespace] = b.baseline_at; });
           addActivity('Loaded ' + msg.peers.length + ' peer(s)');
           renderAll();
           break;
@@ -83,6 +86,20 @@ export function stateScript(): string {
             STATE.logLines = STATE.logLines.slice(-MAX_LOG_LINES);
           }
           renderLogLines();
+          break;
+
+        case 'baseline_set':
+          STATE.baselines[msg.namespace] = msg.baseline_at;
+          STATE.logStatsMap = {};
+          addActivity('Baseline set for ' + msg.namespace);
+          renderAll();
+          break;
+
+        case 'baseline_cleared':
+          delete STATE.baselines[msg.namespace];
+          STATE.logStatsMap = {};
+          addActivity('Baseline cleared for ' + msg.namespace);
+          renderAll();
           break;
       }
     }

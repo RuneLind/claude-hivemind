@@ -58,6 +58,8 @@ export function rendererScript(): string {
           return peerIds[ps.from_id] && peerIds[ps.to_id];
         });
 
+        var baseline = STATE.baselines[ns];
+
         var nsColor = namespaceColor(ns);
         html += '<section class="namespace-group" style="--ns-color:' + nsColor + '">';
         html += '<h2>' + escapeHtml(ns);
@@ -67,6 +69,15 @@ export function rendererScript(): string {
           var isGraph = STATE.graphView[ns];
           html += '<button class="view-toggle" onclick="toggleGraphView(\\'' + escapeJs(ns) + '\\')">'
             + (isGraph ? 'Peers' : 'Graph') + '</button>';
+        }
+
+        if (baseline) {
+          html += '<button class="baseline-btn active" onclick="clearBaseline(\\'' + escapeJs(ns) + '\\')"'
+            + ' title="Baseline: ' + formatTime(baseline) + '">'
+            + 'Baseline ' + timeAgo(baseline) + ' \\u00d7</button>';
+        } else {
+          html += '<button class="baseline-btn" onclick="setBaseline(\\'' + escapeJs(ns) + '\\')">'
+            + 'Set Baseline</button>';
         }
 
         html += '<span class="ns-badge">Can message each other</span>';
@@ -91,6 +102,14 @@ export function rendererScript(): string {
     function toggleGraphView(ns) {
       STATE.graphView[ns] = !STATE.graphView[ns];
       renderNamespaces();
+    }
+
+    function setBaseline(ns) {
+      wsSend({ type: 'set_baseline', namespace: ns });
+    }
+
+    function clearBaseline(ns) {
+      wsSend({ type: 'clear_baseline', namespace: ns });
     }
 
     function clearMessages() {
