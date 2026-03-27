@@ -291,11 +291,6 @@ function PeerCard({
           </button>
         )}
         {service && <ServiceBadge service={service} />}
-        {service?.log_file && (
-          <button className="message-count-badge" onClick={onViewLogs} title="View logs">
-            Logs
-          </button>
-        )}
         {total > 0 && (
           <button className="message-count-badge" onClick={onClickMessages} title="View messages">
             {total} msg{total !== 1 ? "s" : ""}
