@@ -128,6 +128,7 @@ function ConversationModal({
 }
 
 const LOG_LEVELS: LogLevel[] = ["ERROR", "WARN", "INFO", "DEBUG", "TRACE"];
+const LEVEL_COLORS: Record<string, string> = { error: "#f85149", warn: "#d29922", info: "#58a6ff", debug: "#8b949e", trace: "#6e7681" };
 const MAX_LOG_LINES = 1000;
 
 function LogViewer({
@@ -194,8 +195,7 @@ function LogViewer({
           <div style={{ display: "flex", gap: 4 }}>
             {LOG_LEVELS.map((level) => {
               const active = activeLevels.has(level);
-              const colorMap: Record<string, string> = { error: "#f85149", warn: "#d29922", info: "#58a6ff", debug: "#8b949e", trace: "#6e7681" };
-              const c = colorMap[level.toLowerCase()] ?? "#8b949e";
+              const c = LEVEL_COLORS[level.toLowerCase()] ?? "#8b949e";
               return (
                 <button
                   key={level}

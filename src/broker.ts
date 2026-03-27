@@ -521,7 +521,7 @@ const ANSI_RE = /\x1b\[[0-9;]*m/g;
 const SPRING_LOG_RE = /^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[.\d]*|[\d]{2}:\d{2}:\d{2}[,.\d]*)\s+(ERROR|WARN|INFO|DEBUG|TRACE)\s+(.*)$/;
 const PLAIN_LEVEL_RE = /\b(ERROR|WARN|INFO|DEBUG|TRACE)\b/;
 
-function parseLogLine(raw: string, format: string): LogLine {
+function parseLogLine(raw: string, format: ServiceInfo["log_format"]): LogLine {
   const clean = raw.replace(ANSI_RE, "");
   if (format === "json") {
     try {
@@ -552,17 +552,26 @@ function parseLogLine(raw: string, format: string): LogLine {
   };
 }
 
+async function readTailLines(filePath: string, format: ServiceInfo["log_format"], maxBytes = 65536): Promise<LogLine[]> {
+  const file = Bun.file(filePath);
+  const size = file.size;
+  const readFrom = Math.max(0, size - maxBytes);
+  const text = await (file.slice(readFrom, size)).text();
+  const rawLines = text.split("\n").filter((l) => l.length > 0);
+  return rawLines.map((l) => parseLogLine(l, format));
+}
+
 const INITIAL_LOG_LINES = 200;
 
 class LogTailer {
   private offset: number = 0;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
-  private format: string;
+  private format: ServiceInfo["log_format"];
   private filePath: string;
   private onLines: (lines: LogLine[]) => void;
   private stopped = false;
 
-  constructor(filePath: string, format: string, onLines: (lines: LogLine[]) => void) {
+  constructor(filePath: string, format: ServiceInfo["log_format"], onLines: (lines: LogLine[]) => void) {
     this.filePath = filePath;
     this.format = format;
     this.onLines = onLines;
@@ -570,20 +579,11 @@ class LogTailer {
   }
 
   private async start() {
-    // Send initial lines from end of file
     try {
-      const file = Bun.file(this.filePath);
-      const size = file.size;
-      // Read last ~64KB to find initial lines
-      const readFrom = Math.max(0, size - 65536);
-      const chunk = file.slice(readFrom, size);
-      const text = await chunk.text();
-      const rawLines = text.split("\n").filter((l) => l.length > 0);
-      const tail = rawLines.slice(-INITIAL_LOG_LINES);
-      if (tail.length > 0) {
-        this.onLines(tail.map((l) => parseLogLine(l, this.format)));
-      }
-      this.offset = size;
+      const lines = await readTailLines(this.filePath, this.format);
+      const tail = lines.slice(-INITIAL_LOG_LINES);
+      if (tail.length > 0) this.onLines(tail);
+      this.offset = Bun.file(this.filePath).size;
     } catch {
       this.offset = 0;
     }
@@ -807,14 +807,11 @@ const server = Bun.serve<WSData>({
         const lines = parseInt(url.searchParams.get("lines") ?? "100", 10);
         const level = url.searchParams.get("level") as LogLevel | null;
         try {
-          const file = Bun.file(svc.log_file);
-          const text = await file.text();
-          const rawLines = text.split("\n").filter((l) => l.length > 0);
-          let parsed = rawLines.slice(-lines * 2).map((l) => parseLogLine(l, svc.log_format));
+          let parsed = await readTailLines(svc.log_file, svc.log_format);
           if (level) {
-            const levels: LogLevel[] = ["ERROR", "WARN", "INFO", "DEBUG", "TRACE"];
-            const maxIdx = levels.indexOf(level);
-            if (maxIdx >= 0) parsed = parsed.filter((l) => levels.indexOf(l.level) <= maxIdx);
+            const LOG_LEVEL_ORDER: LogLevel[] = ["ERROR", "WARN", "INFO", "DEBUG", "TRACE"];
+            const maxIdx = LOG_LEVEL_ORDER.indexOf(level);
+            if (maxIdx >= 0) parsed = parsed.filter((l) => LOG_LEVEL_ORDER.indexOf(l.level) <= maxIdx);
           }
           return Response.json({ lines: parsed.slice(-lines) });
         } catch {
@@ -831,16 +828,9 @@ const server = Bun.serve<WSData>({
         const svc = selectServiceByPeer.get(peerId) as ServiceInfo | undefined;
         if (!svc?.log_file) return Response.json({ error: "No log file" }, { status: 404 });
         try {
-          const file = Bun.file(svc.log_file);
-          const size = file.size;
-          const readFrom = Math.max(0, size - 65536);
-          const text = await (file.slice(readFrom, size)).text();
-          const rawLines = text.split("\n").filter((l) => l.length > 0);
-          const stats = { ERROR: 0, WARN: 0, INFO: 0, DEBUG: 0, TRACE: 0, total: rawLines.length };
-          for (const raw of rawLines) {
-            const parsed = parseLogLine(raw, svc.log_format);
-            stats[parsed.level]++;
-          }
+          const lines = await readTailLines(svc.log_file, svc.log_format);
+          const stats = { ERROR: 0, WARN: 0, INFO: 0, DEBUG: 0, TRACE: 0, total: lines.length };
+          for (const l of lines) stats[l.level]++;
           return Response.json(stats);
         } catch {
           return Response.json({ error: "Could not read log file" }, { status: 500 });
