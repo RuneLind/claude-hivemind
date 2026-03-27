@@ -3,6 +3,8 @@ import { createRoot } from "react-dom/client";
 import type {
   Peer,
   ServiceInfo,
+  LogLine,
+  LogLevel,
   PeerMessageStats,
   PairMessageStats,
   StoredMessage,
@@ -15,7 +17,16 @@ const START_SERVICE_MESSAGE = `Please ensure your application is running and hea
 2. **Kill zombies**: Check if anything is already running on your application port (e.g. \`lsof -i :<port> -t\`). If a process is found, kill it before starting fresh.
 3. **Start**: Start the application with the appropriate local profile.
 4. **Health check**: Wait for the application to be ready, then verify the health endpoint returns a healthy status (e.g. curl the health URL and confirm \`"status":"UP"\`). Common health paths: \`/internal/health\`, \`/actuator/health\`, \`/health\`.
-5. **Register**: Once healthy, call \`register_service\` with the correct port, health URL, and log format.`;
+5. **Register**: Once healthy, call \`register_service\` with the correct port, health URL, log format, and **log_file** (absolute path to the application log file, e.g. \`target/app.log\` or check \`logging.file.name\` in application properties). The log_file is required for log viewing in the dashboard.`;
+
+interface LogStats {
+  ERROR: number;
+  WARN: number;
+  INFO: number;
+  DEBUG: number;
+  TRACE: number;
+  total: number;
+}
 
 interface ActivityItem {
   time: string;
@@ -116,6 +127,120 @@ function ConversationModal({
   );
 }
 
+const LOG_LEVELS: LogLevel[] = ["ERROR", "WARN", "INFO", "DEBUG", "TRACE"];
+const LEVEL_COLORS: Record<string, string> = { error: "#f85149", warn: "#d29922", info: "#58a6ff", debug: "#8b949e", trace: "#6e7681" };
+const MAX_LOG_LINES = 1000;
+
+function LogViewer({
+  peerId,
+  lines,
+  onClose,
+}: {
+  peerId: string;
+  lines: LogLine[];
+  onClose: () => void;
+}) {
+  const [filter, setFilter] = useState("");
+  const [activeLevels, setActiveLevels] = useState<Set<LogLevel>>(
+    () => new Set<LogLevel>(["ERROR", "WARN", "INFO", "DEBUG"])
+  );
+  const [autoScroll, setAutoScroll] = useState(true);
+  const bodyRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (autoScroll && bodyRef.current) {
+      bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
+    }
+  }, [lines, autoScroll]);
+
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [onClose]);
+
+  const toggleLevel = (level: LogLevel) => {
+    setActiveLevels((prev) => {
+      const next = new Set(prev);
+      if (next.has(level)) next.delete(level);
+      else next.add(level);
+      return next;
+    });
+  };
+
+  const counts = useMemo(() => {
+    const c = { ERROR: 0, WARN: 0, INFO: 0, DEBUG: 0, TRACE: 0 };
+    for (const l of lines) c[l.level]++;
+    return c;
+  }, [lines]);
+
+  const filterLower = filter.toLowerCase();
+  const filtered = lines.filter(
+    (l) => activeLevels.has(l.level) && (!filterLower || l.raw.toLowerCase().includes(filterLower))
+  );
+
+  const handleScroll = () => {
+    if (!bodyRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = bodyRef.current;
+    setAutoScroll(scrollHeight - scrollTop - clientHeight < 40);
+  };
+
+  return (
+    <div className="log-viewer-overlay" onClick={onClose}
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "stretch", justifyContent: "center", zIndex: 100, padding: 40 }}>
+      <div className="log-viewer" onClick={(e) => e.stopPropagation()}
+        style={{ background: "#0d1117", border: "1px solid #30363d", borderRadius: 10, width: "100%", maxWidth: 1100, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", borderBottom: "1px solid #21262d", background: "#161b22", flexShrink: 0, flexWrap: "wrap" }}>
+          <h3 style={{ fontSize: 13, fontWeight: 500, color: "#e6edf3", whiteSpace: "nowrap", margin: 0 }}>Logs: {peerId}</h3>
+          <div style={{ display: "flex", gap: 4 }}>
+            {LOG_LEVELS.map((level) => {
+              const active = activeLevels.has(level);
+              const c = LEVEL_COLORS[level.toLowerCase()] ?? "#8b949e";
+              return (
+                <button
+                  key={level}
+                  onClick={() => toggleLevel(level)}
+                  style={{
+                    background: active ? "#21262d" : "transparent",
+                    border: `1px solid ${active ? c : "#30363d"}`,
+                    color: active ? c : "#484f58",
+                    fontFamily: "inherit", fontSize: 10, padding: "2px 8px", borderRadius: 4, cursor: "pointer",
+                  }}
+                >
+                  {level} {counts[level] > 0 ? `(${counts[level]})` : ""}
+                </button>
+              );
+            })}
+          </div>
+          <input
+            type="text"
+            placeholder="Filter..."
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            style={{ background: "#0d1117", border: "1px solid #30363d", color: "#c9d1d9", fontFamily: "inherit", fontSize: 12, padding: "4px 10px", borderRadius: 4, width: 160, marginLeft: "auto" }}
+          />
+          <span style={{ color: "#484f58", fontSize: 11 }}>{lines.length} lines</span>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "#8b949e", fontSize: 20, cursor: "pointer", padding: "0 4px", lineHeight: 1 }}>&times;</button>
+        </div>
+        <div className="log-body" ref={bodyRef} onScroll={handleScroll}
+          style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "8px 0", fontSize: 12, lineHeight: 1.6 }}>
+          {filtered.length === 0 && (
+            <div className="modal-empty">
+              {lines.length === 0 ? "Waiting for log lines..." : "No lines match filters"}
+            </div>
+          )}
+          {filtered.map((line, i) => (
+            <div key={i} className={`log-line ${line.level.toLowerCase()}`}>
+              <span className="log-level-tag">{line.level.padEnd(5)}</span>
+              <span className="log-message">{line.raw}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ServiceBadge({ service }: { service: ServiceInfo }) {
   const color = service.status === "up" ? "#3fb950" : service.status === "down" ? "#f85149" : "#848d97";
   return (
@@ -135,14 +260,18 @@ function PeerCard({
   peer,
   stats,
   service,
+  logStats,
   onClickMessages,
   onStartService,
+  onViewLogs,
 }: {
   peer: Peer;
   stats: PeerMessageStats | undefined;
   service: ServiceInfo | undefined;
+  logStats: LogStats | undefined;
   onClickMessages: () => void;
   onStartService: () => void;
+  onViewLogs: () => void;
 }) {
   const total = stats ? stats.sent + stats.received : 0;
 
@@ -179,6 +308,15 @@ function PeerCard({
           {peer.connected ? "Connected" : `Last seen ${timeAgo(peer.last_seen)}`}
         </span>
       </div>
+      {logStats && (
+        <div style={{ display: "flex", gap: 8, marginTop: 8, fontSize: 11, cursor: service?.log_file ? "pointer" : undefined }}
+          onClick={service?.log_file ? onViewLogs : undefined}>
+          {logStats.ERROR > 0 && <span style={{ color: "#f85149", fontWeight: 600 }}>{logStats.ERROR} errors</span>}
+          {logStats.WARN > 0 && <span style={{ color: "#d29922", fontWeight: 500 }}>{logStats.WARN} warn</span>}
+          <span style={{ color: "#484f58" }}>{logStats.INFO} info</span>
+          <span style={{ color: "#484f58" }}>{logStats.total} lines</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -376,6 +514,9 @@ function Dashboard() {
   const [pairStats, setPairStats] = useState<PairMessageStats[]>([]);
   const [services, setServices] = useState<ServiceInfo[]>([]);
   const [modal, setModal] = useState<{ peer1: string; peer2: string | null } | null>(null);
+  const [logViewerPeer, setLogViewerPeer] = useState<string | null>(null);
+  const [logLines, setLogLines] = useState<LogLine[]>([]);
+  const [logStatsMap, setLogStatsMap] = useState<Map<string, LogStats>>(new Map());
   const [graphView, setGraphView] = useState<Record<string, boolean>>({});
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -459,6 +600,14 @@ function Dashboard() {
             return [...filtered, msg.service];
           });
           break;
+        case "log_lines":
+          setLogLines((prev) => {
+            const combined = [...prev, ...msg.lines];
+            return combined.length > MAX_LOG_LINES
+              ? combined.slice(-MAX_LOG_LINES)
+              : combined;
+          });
+          break;
       }
     };
   }, [addActivity]);
@@ -478,6 +627,53 @@ function Dashboard() {
   }, []);
 
   const closeModal = useCallback(() => setModal(null), []);
+
+  const openLogViewer = useCallback((peerId: string) => {
+    setLogLines([]);
+    setLogViewerPeer(peerId);
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "subscribe_logs", peer_id: peerId }));
+    }
+  }, []);
+
+  const closeLogViewer = useCallback(() => {
+    if (logViewerPeer) {
+      const ws = wsRef.current;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "unsubscribe_logs", peer_id: logViewerPeer }));
+      }
+    }
+    setLogViewerPeer(null);
+    setLogLines([]);
+  }, [logViewerPeer]);
+
+  const fetchLogStats = useCallback(async () => {
+    const svcs = services.filter((s) => s.log_file);
+    if (svcs.length === 0) return;
+    const results = await Promise.all(
+      svcs.map(async (svc) => {
+        try {
+          const res = await fetch(`/api/log-stats?peer_id=${encodeURIComponent(svc.peer_id)}`);
+          if (res.ok) return [svc.peer_id, await res.json() as LogStats] as const;
+        } catch {}
+        return null;
+      })
+    );
+    setLogStatsMap((prev) => {
+      const next = new Map(prev);
+      for (const r of results) {
+        if (r) next.set(r[0], r[1]);
+      }
+      return next;
+    });
+  }, [services]);
+
+  useEffect(() => {
+    fetchLogStats();
+    const timer = setInterval(fetchLogStats, 30_000);
+    return () => clearInterval(timer);
+  }, [fetchLogStats]);
 
   const clearMessages = async () => {
     await fetch("/api/messages/clear", { method: "POST" });
@@ -558,8 +754,10 @@ function Dashboard() {
                   peer={peer}
                   stats={peerStatsMap.get(peer.id)}
                   service={serviceMap.get(peer.id)}
+                  logStats={logStatsMap.get(peer.id)}
                   onClickMessages={() => setModal({ peer1: peer.id, peer2: null })}
                   onStartService={() => sendToPeer(peer.id, START_SERVICE_MESSAGE)}
+                  onViewLogs={() => openLogViewer(peer.id)}
                 />
               ))}
             </div>
@@ -591,6 +789,14 @@ function Dashboard() {
           peer1={modal.peer1}
           peer2={modal.peer2}
           onClose={closeModal}
+        />
+      )}
+
+      {logViewerPeer && (
+        <LogViewer
+          peerId={logViewerPeer}
+          lines={logLines}
+          onClose={closeLogViewer}
         />
       )}
     </div>
