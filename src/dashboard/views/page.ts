@@ -64,6 +64,17 @@ function baseStyles(): string {
       cursor: pointer; transition: all 0.15s;
     }
     .view-toggle:hover { border-color: #58a6ff; color: #58a6ff; }
+    .baseline-btn {
+      background: none; border: 1px solid #30363d; color: #8b949e;
+      font-family: inherit; font-size: 11px;
+      padding: 2px 10px; border-radius: 4px;
+      cursor: pointer; transition: all 0.15s;
+    }
+    .baseline-btn:hover { border-color: #3fb950; color: #3fb950; }
+    .baseline-btn.active {
+      border-color: #3fb950; color: #3fb950; font-weight: 500;
+    }
+    .baseline-btn.active:hover { border-color: #f85149; color: #f85149; }
     .ns-badge { margin-left: auto; font-size: 11px; color: #8b949e; font-weight: 400; }
     .empty { text-align: center; padding: 60px 20px; color: #484f58; font-size: 14px; }
     .modal-loading, .modal-empty {

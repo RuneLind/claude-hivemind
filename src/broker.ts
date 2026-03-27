@@ -22,6 +22,7 @@ import type {
   DashboardClientMessage,
   Peer,
   ServiceInfo,
+  LogBaseline,
   LogLine,
   LogLevel,
   NamespaceInfo,
@@ -90,6 +91,22 @@ db.run(`
     log_format TEXT NOT NULL DEFAULT 'plain',
     status TEXT NOT NULL DEFAULT 'unknown',
     last_check TEXT
+  )
+`);
+
+db.run(`
+  CREATE TABLE IF NOT EXISTS log_baselines (
+    namespace TEXT PRIMARY KEY,
+    baseline_at TEXT NOT NULL
+  )
+`);
+
+db.run(`
+  CREATE TABLE IF NOT EXISTS log_baseline_offsets (
+    namespace TEXT NOT NULL,
+    peer_id TEXT NOT NULL,
+    file_offset INTEGER NOT NULL,
+    PRIMARY KEY (namespace, peer_id)
   )
 `);
 
@@ -194,6 +211,24 @@ const updateServiceStatus = db.prepare(
 );
 
 const deleteServiceByPeer = db.prepare(`DELETE FROM services WHERE peer_id = ?`);
+
+const upsertBaseline = db.prepare(`
+  INSERT INTO log_baselines (namespace, baseline_at) VALUES (?, ?)
+  ON CONFLICT(namespace) DO UPDATE SET baseline_at = excluded.baseline_at
+`);
+
+const deleteBaseline = db.prepare(`DELETE FROM log_baselines WHERE namespace = ?`);
+
+const selectAllBaselines = db.prepare(`SELECT * FROM log_baselines`);
+
+const upsertBaselineOffset = db.prepare(`
+  INSERT INTO log_baseline_offsets (namespace, peer_id, file_offset) VALUES (?, ?, ?)
+  ON CONFLICT(namespace, peer_id) DO UPDATE SET file_offset = excluded.file_offset
+`);
+
+const deleteBaselineOffsets = db.prepare(`DELETE FROM log_baseline_offsets WHERE namespace = ?`);
+
+const selectBaselineOffset = db.prepare(`SELECT file_offset FROM log_baseline_offsets WHERE namespace = ? AND peer_id = ?`);
 
 
 function generateId(cwd: string): string {
@@ -553,13 +588,20 @@ function parseLogLine(raw: string, format: ServiceInfo["log_format"]): LogLine {
   };
 }
 
-async function readTailLines(filePath: string, format: ServiceInfo["log_format"], maxBytes = 65536): Promise<LogLine[]> {
+const MAX_LOG_READ_BYTES = 65536;
+
+async function readLinesFromOffset(filePath: string, format: ServiceInfo["log_format"], fromOffset: number, maxBytes = MAX_LOG_READ_BYTES): Promise<LogLine[]> {
   const file = Bun.file(filePath);
   const size = file.size;
-  const readFrom = Math.max(0, size - maxBytes);
-  const text = await (file.slice(readFrom, size)).text();
+  if (fromOffset >= size) return [];
+  const readFrom = Math.max(fromOffset, size - maxBytes);
+  const text = await file.slice(readFrom, size).text();
   const rawLines = text.split("\n").filter((l) => l.length > 0);
   return rawLines.map((l) => parseLogLine(l, format));
+}
+
+async function readTailLines(filePath: string, format: ServiceInfo["log_format"]): Promise<LogLine[]> {
+  return readLinesFromOffset(filePath, format, 0);
 }
 
 const INITIAL_LOG_LINES = 200;
@@ -572,18 +614,19 @@ class LogTailer {
   private onLines: (lines: LogLine[]) => void;
   private stopped = false;
 
-  constructor(filePath: string, format: ServiceInfo["log_format"], onLines: (lines: LogLine[]) => void) {
+  constructor(filePath: string, format: ServiceInfo["log_format"], onLines: (lines: LogLine[]) => void, startOffset?: number) {
     this.filePath = filePath;
     this.format = format;
     this.onLines = onLines;
-    this.start();
+    this.start(startOffset);
   }
 
-  private async start() {
+  private async start(startOffset?: number) {
     try {
-      const lines = await readTailLines(this.filePath, this.format);
-      const tail = lines.slice(-INITIAL_LOG_LINES);
-      if (tail.length > 0) this.onLines(tail);
+      const lines = startOffset !== undefined
+        ? await readLinesFromOffset(this.filePath, this.format, startOffset)
+        : (await readTailLines(this.filePath, this.format)).slice(-INITIAL_LOG_LINES);
+      if (lines.length > 0) this.onLines(lines);
       this.offset = Bun.file(this.filePath).size;
     } catch {
       this.offset = 0;
@@ -631,17 +674,33 @@ const logSubscriptions = new Map<string, {
   subscribers: Set<import("bun").ServerWebSocket<WSData>>;
 }>();
 
-function subscribeLogs(peerId: string, ws: import("bun").ServerWebSocket<WSData>) {
+async function subscribeLogs(peerId: string, ws: import("bun").ServerWebSocket<WSData>) {
   const svc = selectServiceByPeer.get(peerId) as ServiceInfo | undefined;
   if (!svc?.log_file) return;
+
+  // Check if baseline exists for this peer's namespace
+  const peer = getPeer(peerId);
+  const ns = peer?.namespace;
+  const baselineOffset = ns
+    ? (selectBaselineOffset.get(ns, peerId) as { file_offset: number } | undefined)
+    : undefined;
 
   const existing = logSubscriptions.get(peerId);
   if (existing) {
     existing.subscribers.add(ws);
+    if (baselineOffset) {
+      try {
+        const lines = await readLinesFromOffset(svc.log_file, svc.log_format, baselineOffset.file_offset);
+        if (lines.length > 0) {
+          ws.send(JSON.stringify({ type: "log_lines", peer_id: peerId, lines } satisfies DashboardMessage));
+        }
+      } catch { /* ignore */ }
+    }
     return;
   }
 
   const subscribers = new Set<import("bun").ServerWebSocket<WSData>>([ws]);
+  const startOffset = baselineOffset?.file_offset;
   const tailer = new LogTailer(svc.log_file, svc.log_format, (lines) => {
     const msg = JSON.stringify({
       type: "log_lines",
@@ -653,7 +712,7 @@ function subscribeLogs(peerId: string, ws: import("bun").ServerWebSocket<WSData>
         sub.send(msg);
       }
     }
-  });
+  }, startOffset);
 
   logSubscriptions.set(peerId, { tailer, subscribers });
 }
@@ -701,7 +760,7 @@ function handleDashboardMessage(msg: DashboardClientMessage, ws: import("bun").S
     }
 
     case "subscribe_logs": {
-      subscribeLogs(msg.peer_id, ws);
+      subscribeLogs(msg.peer_id, ws).catch((e) => log(`Log subscribe error: ${e}`));
       log(`Dashboard subscribed to logs for ${msg.peer_id}`);
       break;
     }
@@ -709,6 +768,40 @@ function handleDashboardMessage(msg: DashboardClientMessage, ws: import("bun").S
     case "unsubscribe_logs": {
       unsubscribeLogs(msg.peer_id, ws);
       log(`Dashboard unsubscribed from logs for ${msg.peer_id}`);
+      break;
+    }
+
+    case "set_baseline": {
+      const now = new Date().toISOString();
+      upsertBaseline.run(msg.namespace, now);
+      deleteBaselineOffsets.run(msg.namespace);
+      // Record current file sizes for all services in namespace
+      const nsPeers = selectPeersByNamespace.all(msg.namespace) as Peer[];
+      for (const p of nsPeers) {
+        const svc = selectServiceByPeer.get(p.id) as ServiceInfo | undefined;
+        if (svc?.log_file) {
+          try {
+            const size = Bun.file(svc.log_file).size;
+            upsertBaselineOffset.run(msg.namespace, p.id, size);
+          } catch { /* file may not exist yet */ }
+        }
+      }
+      server.publish(
+        "dashboard",
+        JSON.stringify({ type: "baseline_set", namespace: msg.namespace, baseline_at: now } satisfies DashboardMessage)
+      );
+      log(`Baseline set for namespace ${msg.namespace}`);
+      break;
+    }
+
+    case "clear_baseline": {
+      deleteBaseline.run(msg.namespace);
+      deleteBaselineOffsets.run(msg.namespace);
+      server.publish(
+        "dashboard",
+        JSON.stringify({ type: "baseline_cleared", namespace: msg.namespace } satisfies DashboardMessage)
+      );
+      log(`Baseline cleared for namespace ${msg.namespace}`);
       break;
     }
   }
@@ -830,8 +923,15 @@ const server = Bun.serve<WSData>({
         if (!peerId) return Response.json({ error: "peer_id required" }, { status: 400 });
         const svc = selectServiceByPeer.get(peerId) as ServiceInfo | undefined;
         if (!svc?.log_file) return Response.json({ error: "No log file" }, { status: 404 });
+        const peer = getPeer(peerId);
+        const ns = peer?.namespace;
+        const baselineOffset = ns
+          ? (selectBaselineOffset.get(ns, peerId) as { file_offset: number } | undefined)
+          : undefined;
         try {
-          const lines = await readTailLines(svc.log_file, svc.log_format);
+          const lines = baselineOffset
+            ? await readLinesFromOffset(svc.log_file, svc.log_format, baselineOffset.file_offset)
+            : await readTailLines(svc.log_file, svc.log_format);
           const stats = { ERROR: 0, WARN: 0, INFO: 0, DEBUG: 0, TRACE: 0, total: lines.length };
           for (const l of lines) stats[l.level]++;
           return Response.json(stats);
@@ -892,6 +992,7 @@ const server = Bun.serve<WSData>({
         const peers = getAllPeers().filter((p) => isProcessAlive(p.pid));
         const stats = getMessageStats();
         const services = selectAllServices.all() as ServiceInfo[];
+        const baselines = selectAllBaselines.all() as LogBaseline[];
         ws.send(
           JSON.stringify({
             type: "snapshot",
@@ -900,6 +1001,7 @@ const server = Bun.serve<WSData>({
             peer_stats: stats.peer_stats,
             pair_stats: stats.pair_stats,
             services,
+            baselines,
           } satisfies DashboardMessage)
         );
       }

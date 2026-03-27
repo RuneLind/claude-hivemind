@@ -7,7 +7,7 @@ export function helpersScript(): string {
     }
 
     function escapeJs(text) {
-      return String(text).replace(/\\\\/g,'\\\\\\\\').replace(/'/g,"\\\\'");
+      return String(text).replace(/\\\\/g,'\\\\\\\\').replace(/'/g,"\\\\'").replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     }
 
     function shortPath(cwd) {
