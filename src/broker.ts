@@ -609,19 +609,32 @@ class LogTailer {
   private onLines: (lines: LogLine[]) => void;
   private stopped = false;
 
-  constructor(filePath: string, format: ServiceInfo["log_format"], onLines: (lines: LogLine[]) => void) {
+  constructor(filePath: string, format: ServiceInfo["log_format"], onLines: (lines: LogLine[]) => void, startOffset?: number) {
     this.filePath = filePath;
     this.format = format;
     this.onLines = onLines;
-    this.start();
+    this.start(startOffset);
   }
 
-  private async start() {
+  private async start(startOffset?: number) {
     try {
-      const lines = await readTailLines(this.filePath, this.format);
-      const tail = lines.slice(-INITIAL_LOG_LINES);
-      if (tail.length > 0) this.onLines(tail);
-      this.offset = Bun.file(this.filePath).size;
+      if (startOffset !== undefined) {
+        // Baseline mode: read only from the given offset
+        const file = Bun.file(this.filePath);
+        const size = file.size;
+        if (startOffset < size) {
+          const text = await file.slice(startOffset, size).text();
+          const rawLines = text.split("\n").filter((l) => l.length > 0);
+          const lines = rawLines.map((l) => parseLogLine(l, this.format));
+          if (lines.length > 0) this.onLines(lines);
+        }
+        this.offset = Bun.file(this.filePath).size;
+      } else {
+        const lines = await readTailLines(this.filePath, this.format);
+        const tail = lines.slice(-INITIAL_LOG_LINES);
+        if (tail.length > 0) this.onLines(tail);
+        this.offset = Bun.file(this.filePath).size;
+      }
     } catch {
       this.offset = 0;
     }
@@ -668,17 +681,40 @@ const logSubscriptions = new Map<string, {
   subscribers: Set<import("bun").ServerWebSocket<WSData>>;
 }>();
 
-function subscribeLogs(peerId: string, ws: import("bun").ServerWebSocket<WSData>) {
+async function subscribeLogs(peerId: string, ws: import("bun").ServerWebSocket<WSData>) {
   const svc = selectServiceByPeer.get(peerId) as ServiceInfo | undefined;
   if (!svc?.log_file) return;
+
+  // Check if baseline exists for this peer's namespace
+  const peer = getPeer(peerId);
+  const ns = peer?.namespace;
+  const baselineOffset = ns
+    ? (selectBaselineOffset.get(ns, peerId) as { file_offset: number } | undefined)
+    : undefined;
 
   const existing = logSubscriptions.get(peerId);
   if (existing) {
     existing.subscribers.add(ws);
+    // Send initial lines from baseline offset to just this subscriber
+    if (baselineOffset && svc.log_file) {
+      try {
+        const file = Bun.file(svc.log_file);
+        const size = file.size;
+        if (baselineOffset.file_offset < size) {
+          const text = await file.slice(baselineOffset.file_offset, size).text();
+          const rawLines = text.split("\n").filter((l) => l.length > 0);
+          const lines = rawLines.map((l) => parseLogLine(l, svc.log_format));
+          if (lines.length > 0) {
+            ws.send(JSON.stringify({ type: "log_lines", peer_id: peerId, lines } satisfies DashboardMessage));
+          }
+        }
+      } catch { /* ignore */ }
+    }
     return;
   }
 
   const subscribers = new Set<import("bun").ServerWebSocket<WSData>>([ws]);
+  const startOffset = baselineOffset?.file_offset;
   const tailer = new LogTailer(svc.log_file, svc.log_format, (lines) => {
     const msg = JSON.stringify({
       type: "log_lines",
@@ -690,7 +726,7 @@ function subscribeLogs(peerId: string, ws: import("bun").ServerWebSocket<WSData>
         sub.send(msg);
       }
     }
-  });
+  }, startOffset);
 
   logSubscriptions.set(peerId, { tailer, subscribers });
 }
