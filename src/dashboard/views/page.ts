@@ -8,6 +8,7 @@ import { namespaceGraphStyles, namespaceGraphScript } from "./components/namespa
 import { conversationModalStyles, conversationModalScript, conversationModalHtml } from "./components/conversation-modal.ts";
 import { logViewerStyles, logViewerScript, logViewerHtml } from "./components/log-viewer.ts";
 import { activityLogStyles, activityLogScript, activityLogHtml } from "./components/activity-log.ts";
+import { containerCardStyles, containerCardScript } from "./components/container-card.ts";
 import { rendererScript } from "./components/renderer.ts";
 
 function baseStyles(): string {
@@ -101,6 +102,7 @@ export function renderDashboardPage(): string {
     ${namespaceGraphStyles()}
     ${conversationModalStyles()}
     ${logViewerStyles()}
+    ${containerCardStyles()}
     ${activityLogStyles()}
   </style>
 </head>
@@ -117,6 +119,8 @@ export function renderDashboardPage(): string {
       <div class="empty">No peers connected. Start a Claude Code session to see it here.</div>
     </div>
 
+    <div id="dockerContainer" style="display:none"></div>
+
     ${activityLogHtml()}
   </div>
 
@@ -131,6 +135,7 @@ export function renderDashboardPage(): string {
       ${namespaceGraphScript()}
       ${conversationModalScript()}
       ${logViewerScript()}
+      ${containerCardScript()}
       ${activityLogScript()}
       ${rendererScript()}
   </script>

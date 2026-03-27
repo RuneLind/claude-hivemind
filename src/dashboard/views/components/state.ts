@@ -13,6 +13,9 @@ export function stateScript(): string {
       graphView: {},
       logViewerPeer: null,
       logLines: [],
+      dockerContainers: [],
+      dockerLogStats: {},
+      dockerLogViewerContainer: null,
     };
 
     var MAX_LOG_LINES = 1000;
@@ -103,6 +106,43 @@ export function stateScript(): string {
             if (p.namespace === msg.namespace) delete STATE.logStatsMap[p.id];
           });
           addActivity('Baseline cleared for ' + msg.namespace);
+          renderAll();
+          break;
+
+        case 'docker_snapshot':
+          STATE.dockerContainers = msg.containers || [];
+          STATE.dockerLogStats = {};
+          (msg.logStats || []).forEach(function(s) { STATE.dockerLogStats[s.containerId] = s; });
+          addActivity('Loaded ' + STATE.dockerContainers.length + ' Docker container(s)');
+          renderAll();
+          break;
+
+        case 'docker_update':
+          STATE.dockerContainers = msg.containers || [];
+          renderAll();
+          break;
+
+        case 'docker_event':
+          if (msg.container) {
+            STATE.dockerContainers = STATE.dockerContainers.filter(function(c) { return c.id !== msg.containerId; });
+            STATE.dockerContainers.push(msg.container);
+          } else {
+            STATE.dockerContainers = STATE.dockerContainers.filter(function(c) { return c.id !== msg.containerId; });
+          }
+          addActivity('Container ' + (msg.container ? msg.container.service || msg.container.name : msg.containerId) + ': ' + msg.event);
+          renderAll();
+          break;
+
+        case 'docker_log_lines':
+          STATE.logLines = STATE.logLines.concat(msg.lines);
+          if (STATE.logLines.length > MAX_LOG_LINES) {
+            STATE.logLines = STATE.logLines.slice(-MAX_LOG_LINES);
+          }
+          renderLogLines();
+          break;
+
+        case 'docker_log_stats':
+          (msg.logStats || []).forEach(function(s) { STATE.dockerLogStats[s.containerId] = s; });
           renderAll();
           break;
       }

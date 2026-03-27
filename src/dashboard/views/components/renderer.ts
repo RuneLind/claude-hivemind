@@ -5,6 +5,7 @@ export function rendererScript(): string {
     function renderAll() {
       renderHeader();
       renderNamespaces();
+      renderDockerSection();
       renderActivityLog();
       fetchLogStatsIfNeeded();
     }
