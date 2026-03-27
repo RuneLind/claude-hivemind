@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from "react"
 import { createRoot } from "react-dom/client";
 import type {
   Peer,
+  ServiceInfo,
   PeerMessageStats,
   PairMessageStats,
   StoredMessage,
@@ -107,14 +108,33 @@ function ConversationModal({
   );
 }
 
+function ServiceBadge({ service }: { service: ServiceInfo }) {
+  const color = service.status === "up" ? "#3fb950" : service.status === "down" ? "#f85149" : "#848d97";
+  return (
+    <span className="service-badge" style={{ borderColor: color }}>
+      <span className="service-dot" style={{ background: color }} />
+      :{service.port}
+      {service.last_check && (
+        <span className="service-check" title={`Last check: ${service.last_check}`}>
+          {timeAgo(service.last_check)}
+        </span>
+      )}
+    </span>
+  );
+}
+
 function PeerCard({
   peer,
   stats,
+  service,
   onClickMessages,
+  onStartService,
 }: {
   peer: Peer;
   stats: PeerMessageStats | undefined;
+  service: ServiceInfo | undefined;
   onClickMessages: () => void;
+  onStartService: () => void;
 }) {
   const total = stats ? stats.sent + stats.received : 0;
 
@@ -123,6 +143,7 @@ function PeerCard({
       <div className="peer-header">
         <span className="connection-dot" />
         <span className="peer-id">{peer.id}</span>
+        {service && <ServiceBadge service={service} />}
         {total > 0 && (
           <button className="message-count-badge" onClick={onClickMessages} title="View messages">
             {total} msg{total !== 1 ? "s" : ""}
@@ -140,6 +161,11 @@ function PeerCard({
           {peer.connected ? "Connected" : `Last seen ${timeAgo(peer.last_seen)}`}
         </span>
       </div>
+      {peer.connected && !service && (
+        <button className="start-service-btn" onClick={onStartService}>
+          Start service
+        </button>
+      )}
     </div>
   );
 }
@@ -335,6 +361,7 @@ function Dashboard() {
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [peerStats, setPeerStats] = useState<PeerMessageStats[]>([]);
   const [pairStats, setPairStats] = useState<PairMessageStats[]>([]);
+  const [services, setServices] = useState<ServiceInfo[]>([]);
   const [modal, setModal] = useState<{ peer1: string; peer2: string | null } | null>(null);
   const [graphView, setGraphView] = useState<Record<string, boolean>>({});
   const wsRef = useRef<WebSocket | null>(null);
@@ -374,6 +401,7 @@ function Dashboard() {
           setPeers(msg.peers);
           setPeerStats(msg.peer_stats ?? []);
           setPairStats(msg.pair_stats ?? []);
+          setServices(msg.services ?? []);
           addActivity(`Loaded ${msg.peers.length} peer(s)`);
           break;
         case "peer_joined":
@@ -408,6 +436,13 @@ function Dashboard() {
           setPairStats([]);
           addActivity("Message history cleared");
           break;
+        case "service_update":
+          setServices((prev) => {
+            const filtered = prev.filter((s) => s.peer_id !== msg.service.peer_id);
+            return [...filtered, msg.service];
+          });
+          addActivity(`Service ${msg.service.peer_id} :${msg.service.port} → ${msg.service.status}`);
+          break;
       }
     };
   }, [addActivity]);
@@ -432,7 +467,15 @@ function Dashboard() {
     await fetch("/api/messages/clear", { method: "POST" });
   };
 
+  const sendToPeer = useCallback((peerId: string, message: string) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: "send_to_peer", peer_id: peerId, message }));
+      addActivity(`Sent to ${peerId}: ${message.slice(0, 60)}`);
+    }
+  }, [addActivity]);
+
   const peerStatsMap = useMemo(() => new Map(peerStats.map((s) => [s.peer_id, s])), [peerStats]);
+  const serviceMap = useMemo(() => new Map(services.map((s) => [s.peer_id, s])), [services]);
 
   const grouped = peers.reduce(
     (acc, peer) => {
@@ -498,7 +541,9 @@ function Dashboard() {
                   key={peer.id}
                   peer={peer}
                   stats={peerStatsMap.get(peer.id)}
+                  service={serviceMap.get(peer.id)}
                   onClickMessages={() => setModal({ peer1: peer.id, peer2: null })}
+                  onStartService={() => sendToPeer(peer.id, "Please start your application and register it using the register_service tool.")}
                 />
               ))}
             </div>
