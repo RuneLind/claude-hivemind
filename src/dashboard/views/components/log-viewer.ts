@@ -128,6 +128,7 @@ export function logViewerScript(): string {
     }
 
     function renderLogLines() {
+      renderLogLevelButtons();
       var body = $('logBody');
       if (!body) return;
 
