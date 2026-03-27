@@ -115,14 +115,8 @@ export function logViewerScript(): string {
     }
 
     function renderLogLevelButtons() {
-      var apiStats = STATE.logViewerPeer ? STATE.logStatsMap[STATE.logViewerPeer] : null;
-      var counts;
-      if (apiStats) {
-        counts = { ERROR: apiStats.ERROR || 0, WARN: apiStats.WARN || 0, INFO: apiStats.INFO || 0, DEBUG: apiStats.DEBUG || 0, TRACE: apiStats.TRACE || 0 };
-      } else {
-        counts = { ERROR: 0, WARN: 0, INFO: 0, DEBUG: 0, TRACE: 0 };
-        STATE.logLines.forEach(function(l) { counts[l.level]++; });
-      }
+      var counts = { ERROR: 0, WARN: 0, INFO: 0, DEBUG: 0, TRACE: 0 };
+      STATE.logLines.forEach(function(l) { counts[l.level]++; });
 
       var btns = document.querySelectorAll('.log-level-btn');
       btns.forEach(function(btn) {
