@@ -22,6 +22,8 @@ import type {
   DashboardClientMessage,
   Peer,
   ServiceInfo,
+  LogLine,
+  LogLevel,
   NamespaceInfo,
   PeerMessageStats,
   PairMessageStats,
@@ -513,7 +515,169 @@ function handlePeerMessage(
 }
 
 
-function handleDashboardMessage(msg: DashboardClientMessage): void {
+// --- Log tailing ---
+
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
+const SPRING_LOG_RE = /^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[.\d]*|[\d]{2}:\d{2}:\d{2}[,.\d]*)\s+(ERROR|WARN|INFO|DEBUG|TRACE)\s+(.*)$/;
+const PLAIN_LEVEL_RE = /\b(ERROR|WARN|INFO|DEBUG|TRACE)\b/;
+
+function parseLogLine(raw: string, format: string): LogLine {
+  const clean = raw.replace(ANSI_RE, "");
+  if (format === "json") {
+    try {
+      const obj = JSON.parse(clean);
+      return {
+        timestamp: obj.timestamp ?? obj["@timestamp"] ?? new Date().toISOString(),
+        level: (obj.level ?? obj.severity ?? "INFO").toUpperCase() as LogLevel,
+        message: obj.message ?? obj.msg ?? clean,
+        raw: clean,
+      };
+    } catch { /* fall through to plain */ }
+  }
+
+  if (format === "spring") {
+    const m = clean.match(SPRING_LOG_RE);
+    if (m) {
+      return { timestamp: m[1], level: m[2] as LogLevel, message: m[3], raw: clean };
+    }
+  }
+
+  // plain: best-effort
+  const levelMatch = clean.match(PLAIN_LEVEL_RE);
+  return {
+    timestamp: new Date().toISOString(),
+    level: (levelMatch?.[1] ?? "INFO") as LogLevel,
+    message: clean,
+    raw: clean,
+  };
+}
+
+const INITIAL_LOG_LINES = 200;
+
+class LogTailer {
+  private offset: number = 0;
+  private pollTimer: ReturnType<typeof setInterval> | null = null;
+  private format: string;
+  private filePath: string;
+  private onLines: (lines: LogLine[]) => void;
+  private stopped = false;
+
+  constructor(filePath: string, format: string, onLines: (lines: LogLine[]) => void) {
+    this.filePath = filePath;
+    this.format = format;
+    this.onLines = onLines;
+    this.start();
+  }
+
+  private async start() {
+    // Send initial lines from end of file
+    try {
+      const file = Bun.file(this.filePath);
+      const size = file.size;
+      // Read last ~64KB to find initial lines
+      const readFrom = Math.max(0, size - 65536);
+      const chunk = file.slice(readFrom, size);
+      const text = await chunk.text();
+      const rawLines = text.split("\n").filter((l) => l.length > 0);
+      const tail = rawLines.slice(-INITIAL_LOG_LINES);
+      if (tail.length > 0) {
+        this.onLines(tail.map((l) => parseLogLine(l, this.format)));
+      }
+      this.offset = size;
+    } catch {
+      this.offset = 0;
+    }
+
+    // Poll for new content — more reliable than fs.watch across platforms
+    this.pollTimer = setInterval(() => this.readNew(), 1000);
+  }
+
+  private async readNew() {
+    if (this.stopped) return;
+    try {
+      const file = Bun.file(this.filePath);
+      const size = file.size;
+      if (size < this.offset) {
+        this.offset = 0; // file was truncated
+      }
+      if (size <= this.offset) return;
+
+      const chunk = file.slice(this.offset, size);
+      const text = await chunk.text();
+      this.offset = size;
+
+      const rawLines = text.split("\n").filter((l) => l.length > 0);
+      if (rawLines.length === 0) return;
+
+      this.onLines(rawLines.map((l) => parseLogLine(l, this.format)));
+    } catch (e) {
+      log(`LogTailer error for ${this.filePath}: ${e}`);
+    }
+  }
+
+  stop() {
+    this.stopped = true;
+    if (this.pollTimer) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    }
+  }
+}
+
+// Track active log subscriptions: peerId -> { tailer, subscribers }
+const logSubscriptions = new Map<string, {
+  tailer: LogTailer;
+  subscribers: Set<import("bun").ServerWebSocket<WSData>>;
+}>();
+
+function subscribeLogs(peerId: string, ws: import("bun").ServerWebSocket<WSData>) {
+  const svc = selectServiceByPeer.get(peerId) as ServiceInfo | undefined;
+  if (!svc?.log_file) return;
+
+  const existing = logSubscriptions.get(peerId);
+  if (existing) {
+    existing.subscribers.add(ws);
+    return;
+  }
+
+  const subscribers = new Set<import("bun").ServerWebSocket<WSData>>([ws]);
+  const tailer = new LogTailer(svc.log_file, svc.log_format, (lines) => {
+    const msg = JSON.stringify({
+      type: "log_lines",
+      peer_id: peerId,
+      lines,
+    } satisfies DashboardMessage);
+    for (const sub of subscribers) {
+      if (sub.readyState === WS_OPEN) {
+        sub.send(msg);
+      }
+    }
+  });
+
+  logSubscriptions.set(peerId, { tailer, subscribers });
+}
+
+function unsubscribeLogs(peerId: string, ws: import("bun").ServerWebSocket<WSData>) {
+  const sub = logSubscriptions.get(peerId);
+  if (!sub) return;
+  sub.subscribers.delete(ws);
+  if (sub.subscribers.size === 0) {
+    sub.tailer.stop();
+    logSubscriptions.delete(peerId);
+  }
+}
+
+function unsubscribeAllLogs(ws: import("bun").ServerWebSocket<WSData>) {
+  for (const [peerId, sub] of logSubscriptions) {
+    sub.subscribers.delete(ws);
+    if (sub.subscribers.size === 0) {
+      sub.tailer.stop();
+      logSubscriptions.delete(peerId);
+    }
+  }
+}
+
+function handleDashboardMessage(msg: DashboardClientMessage, ws: import("bun").ServerWebSocket<WSData>): void {
   switch (msg.type) {
     case "send_to_peer": {
       const peer = getPeer(msg.peer_id);
@@ -532,6 +696,18 @@ function handleDashboardMessage(msg: DashboardClientMessage): void {
         );
         log(`Dashboard sent message to ${msg.peer_id}`);
       }
+      break;
+    }
+
+    case "subscribe_logs": {
+      subscribeLogs(msg.peer_id, ws);
+      log(`Dashboard subscribed to logs for ${msg.peer_id}`);
+      break;
+    }
+
+    case "unsubscribe_logs": {
+      unsubscribeLogs(msg.peer_id, ws);
+      log(`Dashboard unsubscribed from logs for ${msg.peer_id}`);
       break;
     }
   }
@@ -621,6 +797,57 @@ const server = Bun.serve<WSData>({
       },
     },
 
+    "/api/logs": {
+      async GET(req) {
+        const url = new URL(req.url);
+        const peerId = url.searchParams.get("peer_id");
+        if (!peerId) return Response.json({ error: "peer_id required" }, { status: 400 });
+        const svc = selectServiceByPeer.get(peerId) as ServiceInfo | undefined;
+        if (!svc?.log_file) return Response.json({ error: "No log file registered" }, { status: 404 });
+        const lines = parseInt(url.searchParams.get("lines") ?? "100", 10);
+        const level = url.searchParams.get("level") as LogLevel | null;
+        try {
+          const file = Bun.file(svc.log_file);
+          const text = await file.text();
+          const rawLines = text.split("\n").filter((l) => l.length > 0);
+          let parsed = rawLines.slice(-lines * 2).map((l) => parseLogLine(l, svc.log_format));
+          if (level) {
+            const levels: LogLevel[] = ["ERROR", "WARN", "INFO", "DEBUG", "TRACE"];
+            const maxIdx = levels.indexOf(level);
+            if (maxIdx >= 0) parsed = parsed.filter((l) => levels.indexOf(l.level) <= maxIdx);
+          }
+          return Response.json({ lines: parsed.slice(-lines) });
+        } catch {
+          return Response.json({ error: "Could not read log file" }, { status: 500 });
+        }
+      },
+    },
+
+    "/api/log-stats": {
+      async GET(req) {
+        const url = new URL(req.url);
+        const peerId = url.searchParams.get("peer_id");
+        if (!peerId) return Response.json({ error: "peer_id required" }, { status: 400 });
+        const svc = selectServiceByPeer.get(peerId) as ServiceInfo | undefined;
+        if (!svc?.log_file) return Response.json({ error: "No log file" }, { status: 404 });
+        try {
+          const file = Bun.file(svc.log_file);
+          const size = file.size;
+          const readFrom = Math.max(0, size - 65536);
+          const text = await (file.slice(readFrom, size)).text();
+          const rawLines = text.split("\n").filter((l) => l.length > 0);
+          const stats = { ERROR: 0, WARN: 0, INFO: 0, DEBUG: 0, TRACE: 0, total: rawLines.length };
+          for (const raw of rawLines) {
+            const parsed = parseLogLine(raw, svc.log_format);
+            stats[parsed.level]++;
+          }
+          return Response.json(stats);
+        } catch {
+          return Response.json({ error: "Could not read log file" }, { status: 500 });
+        }
+      },
+    },
+
     "/api/services": () => {
       const services = selectAllServices.all() as ServiceInfo[];
       return Response.json({ services });
@@ -700,7 +927,7 @@ const server = Bun.serve<WSData>({
       } else if (ws.data.kind === "dashboard") {
         try {
           const data = JSON.parse(String(message)) as DashboardClientMessage;
-          handleDashboardMessage(data);
+          handleDashboardMessage(data, ws as import("bun").ServerWebSocket<WSData>);
         } catch (e) {
           log(`Invalid dashboard message: ${e}`);
         }
@@ -708,6 +935,10 @@ const server = Bun.serve<WSData>({
     },
 
     close(ws) {
+      if (ws.data.kind === "dashboard") {
+        unsubscribeAllLogs(ws as import("bun").ServerWebSocket<WSData>);
+      }
+
       if (ws.data.kind === "peer" && ws.data.peerId) {
         const peerId = ws.data.peerId;
         const namespace = ws.data.namespace;

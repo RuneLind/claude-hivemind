@@ -100,12 +100,15 @@ export type DashboardMessage =
       pair_stats: PairMessageStats[];
     }
   | { type: "messages_cleared" }
-  | { type: "service_update"; service: ServiceInfo };
+  | { type: "service_update"; service: ServiceInfo }
+  | { type: "log_lines"; peer_id: PeerId; lines: LogLine[] };
 
 // --- WebSocket protocol: Dashboard → Broker ---
 
 export type DashboardClientMessage =
-  | { type: "send_to_peer"; peer_id: PeerId; message: string };
+  | { type: "send_to_peer"; peer_id: PeerId; message: string }
+  | { type: "subscribe_logs"; peer_id: PeerId }
+  | { type: "unsubscribe_logs"; peer_id: PeerId };
 
 export interface NamespaceInfo {
   name: Namespace;
@@ -132,6 +135,17 @@ export interface StoredMessage {
   to_id: PeerId;
   text: string;
   sent_at: string;
+}
+
+// --- Log types ---
+
+export type LogLevel = "ERROR" | "WARN" | "INFO" | "DEBUG" | "TRACE";
+
+export interface LogLine {
+  timestamp: string;
+  level: LogLevel;
+  message: string;
+  raw: string;
 }
 
 // --- Namespace configuration ---
