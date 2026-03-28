@@ -1246,6 +1246,27 @@ function handleDashboardMessage(msg: DashboardClientMessage, ws: import("bun").S
       });
       break;
     }
+
+    case "stop_service": {
+      const svc = selectServiceByPeer.get(msg.peer_id) as ServiceInfo | undefined;
+      if (!svc) break;
+      log(`Stopping service on port ${svc.port} (peer: ${msg.peer_id})`);
+      (async () => {
+        try {
+          // Kill all processes listening on the port
+          const killProc = Bun.spawn(["sh", "-c", `lsof -i :${svc.port} -t | xargs kill -9 2>/dev/null`], {
+            stdout: "pipe", stderr: "pipe",
+          });
+          await killProc.exited;
+          log(`Killed processes on port ${svc.port}`);
+          // Re-poll health so dashboard updates immediately
+          setTimeout(pollServiceHealth, 500);
+        } catch (e) {
+          log(`Error stopping service on port ${svc.port}: ${e}`);
+        }
+      })();
+      break;
+    }
   }
 }
 

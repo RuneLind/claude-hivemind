@@ -81,6 +81,16 @@ export function peerCardStyles(): string {
     }
     .service-play-btn.up { color: #3fb950; cursor: default; }
     .service-play-btn:disabled { opacity: 1; }
+    .service-stop-btn {
+      background: none; border: 1px solid transparent; color: #484f58;
+      font-size: 11px; cursor: pointer; padding: 3px 6px;
+      margin: -4px 0; line-height: 1; border-radius: 4px;
+      transition: all 0.15s;
+    }
+    .service-stop-btn:hover {
+      color: #f85149; background: #1f2a37;
+      border-color: #f85149;
+    }
   `;
 }
 
@@ -100,10 +110,15 @@ export function peerCardScript(): string {
 
       if (connected) {
         var isUp = svc && svc.status === 'up';
-        html += '<button class="service-play-btn' + (isUp ? ' up' : '') + '"'
-          + ' onclick="startService(\\'' + escapeJs(peer.id) + '\\')"'
-          + ' title="' + (isUp ? 'Running on :' + svc.port : 'Start service') + '"'
-          + (isUp ? ' disabled' : '') + '>&#9654;</button>';
+        if (isUp) {
+          html += '<button class="service-stop-btn"'
+            + ' onclick="stopService(\\'' + escapeJs(peer.id) + '\\', ' + svc.port + ')"'
+            + ' title="Stop service on :' + svc.port + '">Stop</button>';
+        } else {
+          html += '<button class="service-play-btn"'
+            + ' onclick="startService(\\'' + escapeJs(peer.id) + '\\')"'
+            + ' title="Start service">&#9654;</button>';
+        }
       }
 
       if (svc) {
@@ -154,6 +169,12 @@ export function peerCardScript(): string {
     function startService(peerId) {
       wsSend({ type: 'send_to_peer', peer_id: peerId, message: START_SERVICE_MESSAGE });
       addActivity('Sent start-service to ' + peerId);
+    }
+
+    function stopService(peerId, port) {
+      if (!confirm('Stop service on port ' + port + '?')) return;
+      wsSend({ type: 'stop_service', peer_id: peerId });
+      addActivity('Stopping service on :' + port);
     }
   `;
 }

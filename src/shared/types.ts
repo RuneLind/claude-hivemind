@@ -125,7 +125,8 @@ export type DashboardClientMessage =
   | { type: "clear_baseline"; namespace: Namespace }
   | { type: "subscribe_docker_logs"; containerId: string }
   | { type: "unsubscribe_docker_logs"; containerId: string }
-  | { type: "stop_docker_container"; containerId: string };
+  | { type: "stop_docker_container"; containerId: string }
+  | { type: "stop_service"; peer_id: PeerId };
 
 export interface NamespaceInfo {
   name: Namespace;
