@@ -5,7 +5,6 @@ export function rendererScript(): string {
     function renderAll() {
       renderHeader();
       renderNamespaces();
-      renderUnifiedServices();
       renderDockerSection();
       renderActivityLog();
       fetchLogStatsIfNeeded();
@@ -147,9 +146,7 @@ export function rendererScript(): string {
 
     document.addEventListener('keydown', function(e) {
       if (e.key === 'Escape') {
-        if ($('mappingModal').style.display !== 'none') {
-          closeMappingModal();
-        } else if ($('logViewerModal').style.display !== 'none') {
+        if ($('logViewerModal').style.display !== 'none') {
           closeLogViewer();
         } else if ($('conversationModal').style.display !== 'none') {
           closeConversation();

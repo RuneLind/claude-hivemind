@@ -166,6 +166,13 @@ export function containerCardScript(): string {
       html += '<div class="container-actions">';
       if (isRunning) {
         html += '<button class="container-btn stop" onclick="stopDockerContainer(\\'' + escapeJs(c.id) + '\\', \\'' + escapeJs(c.service || c.name) + '\\')" title="Stop container">Stop</button>';
+        // Show "Agent" button if an agent has registered on the same port
+        var containerPort = extractHostPort(c.ports);
+        var agentSvc = containerPort ? findAgentServiceByPort(containerPort) : null;
+        if (agentSvc) {
+          html += '<button class="container-btn logs" onclick="switchToAgent(\\'' + escapeJs(c.id) + '\\', \\'' + escapeJs(c.service || c.name) + '\\', \\'' + escapeJs(agentSvc.peer_id) + '\\')"'
+            + ' title="Stop Docker, tell agent to start" style="color:#58a6ff;border-color:#58a6ff">Agent</button>';
+        }
       }
       html += '<button class="container-btn logs" onclick="openDockerLogViewer(\\'' + escapeJs(c.id) + '\\', \\'' + escapeJs(c.service || c.name) + '\\')" title="View logs">Logs</button>';
       html += '</div>';
@@ -236,6 +243,12 @@ export function containerCardScript(): string {
       renderLogLines();
 
       wsSend({ type: 'subscribe_docker_logs', containerId: containerId });
+    }
+
+    function switchToAgent(containerId, serviceName, agentPeerId) {
+      wsSend({ type: 'stop_docker_container', containerId: containerId });
+      wsSend({ type: 'send_to_peer', peer_id: agentPeerId, message: START_SERVICE_MESSAGE });
+      addActivity('Switching ' + serviceName + ' to Agent (' + agentPeerId + ')');
     }
   `;
 }

@@ -38,6 +38,27 @@ export function helpersScript(): string {
 
     function $(id) { return document.getElementById(id); }
 
+    function extractHostPort(portsStr) {
+      if (!portsStr) return null;
+      var m = portsStr.match(/(?:0\\.0\\.0\\.0|127\\.0\\.0\\.1|::):(\\d+)->/);
+      return m ? parseInt(m[1], 10) : null;
+    }
+
+    function findDockerContainerByPort(port) {
+      for (var i = 0; i < STATE.dockerContainers.length; i++) {
+        var c = STATE.dockerContainers[i];
+        if (extractHostPort(c.ports) === port) return c;
+      }
+      return null;
+    }
+
+    function findAgentServiceByPort(port) {
+      for (var i = 0; i < STATE.services.length; i++) {
+        if (STATE.services[i].port === port) return STATE.services[i];
+      }
+      return null;
+    }
+
     function toggleSection(key) {
       STATE.collapsed[key] = !STATE.collapsed[key];
       renderAll();

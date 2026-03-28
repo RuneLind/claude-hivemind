@@ -9,8 +9,6 @@ import { conversationModalStyles, conversationModalScript, conversationModalHtml
 import { logViewerStyles, logViewerScript, logViewerHtml } from "./components/log-viewer.ts";
 import { activityLogStyles, activityLogScript, activityLogHtml } from "./components/activity-log.ts";
 import { containerCardStyles, containerCardScript } from "./components/container-card.ts";
-import { unifiedServiceCardStyles, unifiedServiceCardScript } from "./components/unified-service-card.ts";
-import { serviceMappingModalStyles, serviceMappingModalScript, serviceMappingModalHtml } from "./components/service-mapping-modal.ts";
 import { rendererScript } from "./components/renderer.ts";
 
 function baseStyles(): string {
@@ -113,8 +111,6 @@ export function renderDashboardPage(): string {
     ${conversationModalStyles()}
     ${logViewerStyles()}
     ${containerCardStyles()}
-    ${unifiedServiceCardStyles()}
-    ${serviceMappingModalStyles()}
     ${activityLogStyles()}
   </style>
 </head>
@@ -131,8 +127,6 @@ export function renderDashboardPage(): string {
       <div class="empty">No peers connected. Start a Claude Code session to see it here.</div>
     </div>
 
-    <div id="unifiedServicesContainer" style="display:none"></div>
-
     <div id="dockerContainer" style="display:none"></div>
 
     ${activityLogHtml()}
@@ -140,7 +134,6 @@ export function renderDashboardPage(): string {
 
   ${conversationModalHtml()}
   ${logViewerHtml()}
-  ${serviceMappingModalHtml()}
 
   <script>
       ${helpersScript()}
@@ -151,8 +144,6 @@ export function renderDashboardPage(): string {
       ${conversationModalScript()}
       ${logViewerScript()}
       ${containerCardScript()}
-      ${unifiedServiceCardScript()}
-      ${serviceMappingModalScript()}
       ${activityLogScript()}
       ${rendererScript()}
   </script>

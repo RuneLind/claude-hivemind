@@ -114,6 +114,13 @@ export function peerCardScript(): string {
           html += '<button class="service-stop-btn"'
             + ' onclick="stopService(\\'' + escapeJs(peer.id) + '\\', ' + svc.port + ')"'
             + ' title="Stop service on :' + svc.port + '">Stop</button>';
+          // Show "Use Docker" if a Docker container exists on the same port
+          var dockerAlt = findDockerContainerByPort(svc.port);
+          if (dockerAlt && dockerAlt.state !== 'running') {
+            html += '<button class="service-stop-btn"'
+              + ' onclick="switchToDocker(\\'' + escapeJs(peer.id) + '\\', \\'' + escapeJs(dockerAlt.name) + '\\', ' + svc.port + ')"'
+              + ' title="Stop agent, start Docker container" style="color:#56d4dd">Docker</button>';
+          }
         } else {
           html += '<button class="service-play-btn"'
             + ' onclick="startService(\\'' + escapeJs(peer.id) + '\\')"'
@@ -175,6 +182,12 @@ export function peerCardScript(): string {
       if (!confirm('Stop service on port ' + port + '?')) return;
       wsSend({ type: 'stop_service', peer_id: peerId });
       addActivity('Stopping service on :' + port);
+    }
+
+    function switchToDocker(peerId, dockerName, port) {
+      wsSend({ type: 'stop_service', peer_id: peerId });
+      fetch('/api/docker/start?name=' + encodeURIComponent(dockerName), { method: 'POST' });
+      addActivity('Switching :' + port + ' to Docker');
     }
   `;
 }

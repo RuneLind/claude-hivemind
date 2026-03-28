@@ -31,7 +31,6 @@ import type {
   StoredMessage,
   DockerContainer,
   DockerContainerLogStats,
-  ServiceMapping,
 } from "./shared/types.ts";
 import { renderDashboardPage } from "./dashboard/views/page.ts";
 
@@ -112,19 +111,6 @@ db.run(`
     PRIMARY KEY (namespace, peer_id)
   )
 `);
-
-db.run(`
-  CREATE TABLE IF NOT EXISTS service_mappings (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    display_name TEXT NOT NULL UNIQUE,
-    docker_service TEXT,
-    docker_project TEXT,
-    agent_port INTEGER,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  )
-`);
-
 
 const insertPeer = db.prepare(`
   INSERT INTO peers (id, pid, cwd, git_root, git_branch, tty, summary, namespace, registered_at, last_seen, connected)
@@ -244,18 +230,6 @@ const upsertBaselineOffset = db.prepare(`
 const deleteBaselineOffsets = db.prepare(`DELETE FROM log_baseline_offsets WHERE namespace = ?`);
 
 const selectBaselineOffset = db.prepare(`SELECT file_offset FROM log_baseline_offsets WHERE namespace = ? AND peer_id = ?`);
-
-const selectAllServiceMappings = db.prepare(`SELECT * FROM service_mappings ORDER BY display_name`);
-const insertServiceMapping = db.prepare(`
-  INSERT INTO service_mappings (display_name, docker_service, docker_project, agent_port, created_at, updated_at)
-  VALUES (?, ?, ?, ?, ?, ?)
-`);
-const updateServiceMapping = db.prepare(`
-  UPDATE service_mappings SET display_name = ?, docker_service = ?, docker_project = ?, agent_port = ?, updated_at = ?
-  WHERE id = ?
-`);
-const deleteServiceMappingById = db.prepare(`DELETE FROM service_mappings WHERE id = ?`);
-
 
 function generateId(cwd: string): string {
   const base = cwd.split("/").pop() ?? "peer";
@@ -1292,34 +1266,6 @@ function handleDashboardMessage(msg: DashboardClientMessage, ws: import("bun").S
       break;
     }
 
-    case "save_service_mapping": {
-      const m = msg.mapping;
-      const now = new Date().toISOString();
-      if (m.id) {
-        updateServiceMapping.run(m.display_name, m.docker_service, m.docker_project, m.agent_port, now, m.id);
-        log(`Updated service mapping: ${m.display_name}`);
-      } else {
-        insertServiceMapping.run(m.display_name, m.docker_service, m.docker_project, m.agent_port, now, now);
-        log(`Created service mapping: ${m.display_name}`);
-      }
-      const mappings = selectAllServiceMappings.all() as ServiceMapping[];
-      server.publish("dashboard", JSON.stringify({
-        type: "service_mappings",
-        mappings,
-      } satisfies DashboardMessage));
-      break;
-    }
-
-    case "delete_service_mapping": {
-      deleteServiceMappingById.run(msg.id);
-      log(`Deleted service mapping id=${msg.id}`);
-      const mappings = selectAllServiceMappings.all() as ServiceMapping[];
-      server.publish("dashboard", JSON.stringify({
-        type: "service_mappings",
-        mappings,
-      } satisfies DashboardMessage));
-      break;
-    }
   }
 }
 
@@ -1564,16 +1510,6 @@ const server = Bun.serve<WSData>({
               type: "docker_snapshot",
               containers: Array.from(dockerContainers.values()),
               logStats: Array.from(dockerLogStats.values()),
-            } satisfies DashboardMessage)
-          );
-        }
-        // Send service mappings
-        const mappings = selectAllServiceMappings.all() as ServiceMapping[];
-        if (mappings.length > 0) {
-          ws.send(
-            JSON.stringify({
-              type: "service_mappings",
-              mappings,
             } satisfies DashboardMessage)
           );
         }

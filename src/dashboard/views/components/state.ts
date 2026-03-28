@@ -16,7 +16,6 @@ export function stateScript(): string {
       dockerContainers: [],
       dockerLogStats: {},
       dockerLogViewerContainer: null,
-      serviceMappings: [],
       collapsed: {},
     };
 
@@ -154,10 +153,6 @@ export function stateScript(): string {
           break;
         }
 
-        case 'service_mappings':
-          STATE.serviceMappings = msg.mappings || [];
-          renderAll();
-          break;
       }
     }
 
