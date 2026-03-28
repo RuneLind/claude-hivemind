@@ -113,7 +113,9 @@ export type DashboardMessage =
   | { type: "docker_update"; containers: DockerContainer[] }
   | { type: "docker_event"; containerId: string; container: DockerContainer | null; event: string }
   | { type: "docker_log_lines"; containerId: string; lines: LogLine[] }
-  | { type: "docker_log_stats"; logStats: DockerContainerLogStats[] };
+  | { type: "docker_log_stats"; logStats: DockerContainerLogStats[] }
+  | { type: "cmux_status"; available: boolean; workspaces: CmuxWorkspace[] }
+  | { type: "cmux_launch_result"; ok: boolean; workspaceId?: string; error?: string };
 
 // --- WebSocket protocol: Dashboard → Broker ---
 
@@ -126,7 +128,20 @@ export type DashboardClientMessage =
   | { type: "subscribe_docker_logs"; containerId: string }
   | { type: "unsubscribe_docker_logs"; containerId: string }
   | { type: "stop_docker_container"; containerId: string }
-  | { type: "stop_service"; peer_id: PeerId };
+  | { type: "stop_service"; peer_id: PeerId }
+  | { type: "launch_claude_instance"; directory: string; name?: string; prompt?: string };
+
+// --- cmux integration ---
+
+export interface CmuxStatus {
+  available: boolean;
+  workspaces: CmuxWorkspace[];
+}
+
+export interface CmuxWorkspace {
+  id: string;
+  name: string;
+}
 
 export interface NamespaceInfo {
   name: Namespace;

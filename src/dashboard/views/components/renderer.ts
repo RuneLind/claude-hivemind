@@ -27,6 +27,11 @@ export function rendererScript(): string {
           clearBtn.style.display = 'none';
         }
       }
+
+      var launchSlot = $('launchBtnSlot');
+      if (launchSlot) {
+        launchSlot.innerHTML = renderLaunchButton();
+      }
     }
 
     function renderNamespaces() {
@@ -146,7 +151,9 @@ export function rendererScript(): string {
 
     document.addEventListener('keydown', function(e) {
       if (e.key === 'Escape') {
-        if ($('logViewerModal').style.display !== 'none') {
+        if ($('launchOverlay').classList.contains('open')) {
+          closeLaunchModal();
+        } else if ($('logViewerModal').style.display !== 'none') {
           closeLogViewer();
         } else if ($('conversationModal').style.display !== 'none') {
           closeConversation();

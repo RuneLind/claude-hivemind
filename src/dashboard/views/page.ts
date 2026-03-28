@@ -9,6 +9,7 @@ import { conversationModalStyles, conversationModalScript, conversationModalHtml
 import { logViewerStyles, logViewerScript, logViewerHtml } from "./components/log-viewer.ts";
 import { activityLogStyles, activityLogScript, activityLogHtml } from "./components/activity-log.ts";
 import { containerCardStyles, containerCardScript } from "./components/container-card.ts";
+import { launchModalStyles, launchModalHtml, launchModalScript } from "./components/launch-modal.ts";
 import { rendererScript } from "./components/renderer.ts";
 
 function baseStyles(): string {
@@ -111,6 +112,7 @@ export function renderDashboardPage(): string {
     ${conversationModalStyles()}
     ${logViewerStyles()}
     ${containerCardStyles()}
+    ${launchModalStyles()}
     ${activityLogStyles()}
   </style>
 </head>
@@ -120,6 +122,7 @@ export function renderDashboardPage(): string {
       <h1>claude-hivemind</h1>
       <span id="connectionStatus" class="status disconnected">Disconnected</span>
       <span id="peerCount" class="count">0 peers</span>
+      <span id="launchBtnSlot"></span>
       <button id="clearBtn" class="clear-btn" style="display:none" onclick="clearMessages()">Clear history</button>
     </header>
 
@@ -134,6 +137,7 @@ export function renderDashboardPage(): string {
 
   ${conversationModalHtml()}
   ${logViewerHtml()}
+  ${launchModalHtml()}
 
   <script>
       ${helpersScript()}
@@ -144,6 +148,7 @@ export function renderDashboardPage(): string {
       ${conversationModalScript()}
       ${logViewerScript()}
       ${containerCardScript()}
+      ${launchModalScript()}
       ${activityLogScript()}
       ${rendererScript()}
   </script>
