@@ -154,6 +154,19 @@ sequenceDiagram
 | `list_peers` | Find peers — scoped to `namespace` (default) or `machine` |
 | `send_message` | Send a message to a peer by ID (same namespace only) |
 | `set_summary` | Describe what you're working on (visible to other peers) |
+| `register_service` | Register a service (port, health URL, log file) for dashboard monitoring |
+
+## Docker container monitoring
+
+The dashboard auto-discovers running Docker Compose projects and displays their containers alongside Claude Code peers. This supports the debugging workflow of spinning up Docker Compose, then replacing specific containers with Claude Code agents.
+
+For each container, the dashboard shows:
+- State (running/exited/paused), ports, CPU/memory usage
+- Error and warning counts from container logs
+- Live log streaming with level filtering (click "Logs" on any container)
+- A "Stop" button to shut down a container before replacing it with an agent
+
+Docker monitoring is enabled automatically when Docker is installed. If Docker is unavailable, the section is hidden.
 
 ## CLI
 

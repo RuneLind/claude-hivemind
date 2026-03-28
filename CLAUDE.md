@@ -4,10 +4,10 @@ Peer discovery and messaging for Claude Code instances, with namespace isolation
 
 ## Architecture
 
-- `src/broker.ts` — Singleton HTTP + WebSocket server on localhost:7899, backed by SQLite. Serves dashboard, routes messages, enforces namespace isolation.
+- `src/broker.ts` — Singleton HTTP + WebSocket server on localhost:7899, backed by SQLite. Serves dashboard, routes messages, enforces namespace isolation. Also monitors Docker Compose containers and registered services.
 - `src/server.ts` — MCP stdio server, one per Claude Code instance. Connects to broker via WebSocket, pushes inbound messages via channel notifications.
 - `src/cli.ts` — CLI utility for inspecting broker state and managing peers.
-- `src/dashboard/` — Read-only web dashboard (React) showing peers grouped by namespace.
+- `src/dashboard/` — Web dashboard (vanilla TypeScript, server-rendered HTML) showing peers grouped by namespace, Docker containers grouped by Compose project, service health, and log streaming.
 - `src/shared/types.ts` — WebSocket protocol types (client/broker/dashboard message unions).
 - `src/shared/namespace.ts` — Namespace resolution from CWD (auto-derives from ~/source/<group>/).
 
@@ -56,4 +56,4 @@ Default to using Bun instead of Node.js.
 
 ## Frontend
 
-Uses Bun HTML imports. src/dashboard/index.html imports dashboard.tsx directly, bundled automatically by Bun.
+Dashboard is server-rendered: TypeScript component modules in `src/dashboard/views/components/` export functions that return HTML/CSS/JS strings. These are composed into a single HTML page by `src/dashboard/views/page.ts` and served by the broker. Data flows via WebSocket from broker to dashboard.
