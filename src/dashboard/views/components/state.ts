@@ -16,6 +16,7 @@ export function stateScript(): string {
       dockerContainers: [],
       dockerLogStats: {},
       dockerLogViewerContainer: null,
+      serviceMappings: [],
     };
 
     var MAX_LOG_LINES = 1000;
@@ -151,6 +152,11 @@ export function stateScript(): string {
           if (statsChanged) renderAll();
           break;
         }
+
+        case 'service_mappings':
+          STATE.serviceMappings = msg.mappings || [];
+          renderAll();
+          break;
       }
     }
 

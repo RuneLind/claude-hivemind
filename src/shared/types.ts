@@ -113,7 +113,8 @@ export type DashboardMessage =
   | { type: "docker_update"; containers: DockerContainer[] }
   | { type: "docker_event"; containerId: string; container: DockerContainer | null; event: string }
   | { type: "docker_log_lines"; containerId: string; lines: LogLine[] }
-  | { type: "docker_log_stats"; logStats: DockerContainerLogStats[] };
+  | { type: "docker_log_stats"; logStats: DockerContainerLogStats[] }
+  | { type: "service_mappings"; mappings: ServiceMapping[] };
 
 // --- WebSocket protocol: Dashboard → Broker ---
 
@@ -126,7 +127,9 @@ export type DashboardClientMessage =
   | { type: "subscribe_docker_logs"; containerId: string }
   | { type: "unsubscribe_docker_logs"; containerId: string }
   | { type: "stop_docker_container"; containerId: string }
-  | { type: "stop_service"; peer_id: PeerId };
+  | { type: "stop_service"; peer_id: PeerId }
+  | { type: "save_service_mapping"; mapping: { id?: number; display_name: string; docker_service: string | null; docker_project: string | null; agent_port: number | null } }
+  | { type: "delete_service_mapping"; id: number };
 
 export interface NamespaceInfo {
   name: Namespace;
@@ -188,6 +191,18 @@ export interface DockerContainerLogStats {
   errorCount: number;
   warnCount: number;
   totalLines: number;
+}
+
+// --- Service mapping types ---
+
+export interface ServiceMapping {
+  id: number;
+  display_name: string;
+  docker_service: string | null;
+  docker_project: string | null;
+  agent_port: number | null;
+  created_at: string;
+  updated_at: string;
 }
 
 // --- Namespace configuration ---
