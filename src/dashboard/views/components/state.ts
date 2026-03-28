@@ -17,6 +17,7 @@ export function stateScript(): string {
       dockerLogStats: {},
       dockerLogViewerContainer: null,
       serviceMappings: [],
+      collapsed: {},
     };
 
     var MAX_LOG_LINES = 1000;

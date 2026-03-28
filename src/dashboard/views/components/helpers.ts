@@ -37,5 +37,17 @@ export function helpersScript(): string {
     }
 
     function $(id) { return document.getElementById(id); }
+
+    function toggleSection(key) {
+      STATE.collapsed[key] = !STATE.collapsed[key];
+      renderAll();
+    }
+
+    function collapseToggleHtml(key) {
+      var collapsed = STATE.collapsed[key];
+      return '<button class="collapse-toggle' + (collapsed ? ' collapsed' : '') + '"'
+        + ' onclick="event.stopPropagation(); toggleSection(\\'' + escapeJs(key) + '\\')"'
+        + '>&#9660;</button>';
+    }
   `;
 }

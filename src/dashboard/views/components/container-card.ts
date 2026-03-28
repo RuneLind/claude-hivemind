@@ -128,8 +128,11 @@ export function containerCardScript(): string {
           }
         });
 
+        var dKey = 'docker:' + project;
+        var dCollapsed = STATE.collapsed[dKey];
         html += '<section class="docker-section">';
         html += '<h2>';
+        html += collapseToggleHtml(dKey) + ' ';
         html += '<span class="docker-project-name">' + escapeHtml(project) + '</span>';
         html += '<span class="docker-count">' + running + '/' + containers.length + ' running</span>';
         if (totalErrors > 0) {
@@ -138,7 +141,7 @@ export function containerCardScript(): string {
           html += '<span class="docker-error-summary" style="color:#d29922">' + totalWarns + ' warn</span>';
         }
         html += '</h2>';
-        html += '<div class="container-grid">';
+        html += '<div class="container-grid section-body' + (dCollapsed ? ' collapsed' : '') + '">';
         containers.forEach(function(c) {
           html += renderContainerCard(c);
         });

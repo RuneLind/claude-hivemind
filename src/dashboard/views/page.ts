@@ -79,6 +79,14 @@ function baseStyles(): string {
     }
     .baseline-btn.active:hover { border-color: #f85149; color: #f85149; }
     .ns-badge { margin-left: auto; font-size: 11px; color: #8b949e; font-weight: 400; }
+    .collapse-toggle {
+      background: none; border: none; color: #484f58;
+      font-size: 12px; cursor: pointer; padding: 0 4px;
+      transition: transform 0.2s, color 0.15s; line-height: 1;
+    }
+    .collapse-toggle:hover { color: #8b949e; }
+    .collapse-toggle.collapsed { transform: rotate(-90deg); }
+    .section-body.collapsed { display: none; }
     .empty { text-align: center; padding: 60px 20px; color: #484f58; font-size: 14px; }
     .modal-loading, .modal-empty {
       color: #484f58; text-align: center; padding: 24px; font-size: 13px;

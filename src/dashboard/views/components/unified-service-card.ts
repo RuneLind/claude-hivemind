@@ -178,15 +178,16 @@ export function unifiedServiceCardScript(): string {
       var resolved = STATE.serviceMappings.map(resolveUnifiedService);
       var running = resolved.filter(function(r) { return r.activeSource !== 'none'; }).length;
 
+      var svcCollapsed = STATE.collapsed['services'];
       var html = '<section class="unified-section">';
-      html += '<h2>Services';
+      html += '<h2>' + collapseToggleHtml('services') + ' Services';
       if (resolved.length > 0) {
         html += '<span class="unified-count">' + running + '/' + resolved.length + ' running</span>';
       }
       html += '<button class="unified-add-btn" onclick="openMappingModal()">+ Add</button>';
       html += '</h2>';
       if (resolved.length > 0) {
-        html += '<div class="unified-grid">';
+        html += '<div class="unified-grid section-body' + (svcCollapsed ? ' collapsed' : '') + '">';
         resolved.forEach(function(r) {
           html += renderUnifiedCard(r);
         });
