@@ -68,6 +68,8 @@ export function containerCardStyles(): string {
     }
     .container-btn.stop:hover { border-color: #f85149; color: #f85149; }
     .container-btn.logs:hover { border-color: #56d4dd; color: #56d4dd; }
+    .container-btn.agent { color: #58a6ff; border-color: #58a6ff; }
+    .container-btn.agent:hover { color: #79c0ff; border-color: #79c0ff; background: #1f2a37; }
     .container-log-stats {
       display: flex; gap: 8px; margin-top: 8px; font-size: 11px;
       padding: 4px 8px; margin-left: -8px; margin-right: -8px;
@@ -169,8 +171,8 @@ export function containerCardScript(): string {
         // Show "Agent" button if a connected agent peer exists for this service
         var agentPeer = c.service ? findAgentForContainer(c.service) : null;
         if (agentPeer) {
-          html += '<button class="container-btn logs" onclick="switchToAgent(\\'' + escapeJs(c.id) + '\\', \\'' + escapeJs(c.service || c.name) + '\\', \\'' + escapeJs(agentPeer.id) + '\\')"'
-            + ' title="Stop Docker, tell ' + escapeHtml(agentPeer.id) + ' to start" style="color:#58a6ff;border-color:#58a6ff">Agent</button>';
+          html += '<button class="container-btn agent" onclick="switchToAgent(\\'' + escapeJs(c.id) + '\\', \\'' + escapeJs(c.service || c.name) + '\\', \\'' + escapeJs(agentPeer.id) + '\\')"'
+            + ' title="Stop Docker, tell ' + escapeHtml(agentPeer.id) + ' to start">Agent</button>';
         }
       }
       html += '<button class="container-btn logs" onclick="openDockerLogViewer(\\'' + escapeJs(c.id) + '\\', \\'' + escapeJs(c.service || c.name) + '\\')" title="View logs">Logs</button>';

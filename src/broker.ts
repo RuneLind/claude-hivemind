@@ -1449,7 +1449,7 @@ const server = Bun.serve<WSData>({
         log(`Starting Docker container ${name}`);
         const out = await runDockerCommand(["start", name]);
         if (out !== null) {
-          setTimeout(() => pollDockerContainers(), 1000);
+          // Docker events stream will trigger pollDockerContainers automatically
           return Response.json({ ok: true });
         }
         return Response.json({ error: "Failed to start" }, { status: 500 });

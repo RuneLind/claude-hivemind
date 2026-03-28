@@ -59,13 +59,6 @@ export function helpersScript(): string {
     }
 
     function findAgentForContainer(dockerService) {
-      // First try port match
-      for (var i = 0; i < STATE.services.length; i++) {
-        var s = STATE.services[i];
-        // Find a peer whose port matches this container's port
-        // (handled in container-card directly since we have the port there)
-      }
-      // Name match: find a connected peer whose ID starts with the Docker service name
       for (var i = 0; i < STATE.peers.length; i++) {
         var p = STATE.peers[i];
         if (p.connected && p.id.indexOf(dockerService) === 0) return p;
