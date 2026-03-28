@@ -133,8 +133,19 @@ export function unifiedServiceCardScript(): string {
       var dockerRunning = dockerMatch && dockerMatch.state === 'running';
       var agentRunning = agentMatch && agentMatch.status === 'up';
 
+      // When Docker is running on the same port, the agent health check
+      // hits Docker's port and falsely reports "up". Detect this: if Docker
+      // exposes the agent_port, the agent isn't really running its own process.
+      var dockerOwnsPort = false;
+      if (dockerRunning && agentRunning && mapping.agent_port && dockerMatch) {
+        var dockerPort = extractHostPort(dockerMatch.ports);
+        if (dockerPort === mapping.agent_port) {
+          dockerOwnsPort = true;
+        }
+      }
+
       var activeSource;
-      if (dockerRunning && agentRunning) activeSource = 'both';
+      if (dockerRunning && agentRunning && !dockerOwnsPort) activeSource = 'both';
       else if (dockerRunning) activeSource = 'docker';
       else if (agentRunning) activeSource = 'agent';
       else activeSource = 'none';
