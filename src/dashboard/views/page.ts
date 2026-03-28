@@ -19,7 +19,7 @@ function baseStyles(): string {
       font-family: "SF Mono", "Fira Code", "JetBrains Mono", monospace;
       font-size: 14px; line-height: 1.5;
     }
-    .dashboard { max-width: 1200px; margin: 0 auto; padding: 24px; }
+    .dashboard { max-width: 1400px; margin: 0 auto; padding: 24px; }
     header {
       display: flex; align-items: center; gap: 16px;
       margin-bottom: 32px; padding-bottom: 16px;
