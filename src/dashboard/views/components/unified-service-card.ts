@@ -25,14 +25,14 @@ export function unifiedServiceCardStyles(): string {
     .unified-add-btn:hover { border-color: #da70d6; color: #da70d6; }
     .unified-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
       gap: 12px;
     }
     .unified-card {
       background: #161b22;
       border: 1px solid #21262d;
       border-radius: 8px;
-      padding: 14px 16px;
+      padding: 12px 14px;
       border-left: 3px solid #484f58;
       transition: border-color 0.2s;
     }
@@ -42,12 +42,13 @@ export function unifiedServiceCardStyles(): string {
     .unified-card.source-both { border-left-color: #d29922; }
     .unified-card.source-none { opacity: 0.5; }
     .unified-header {
-      display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+      display: flex; align-items: center; gap: 6px; margin-bottom: 6px;
+      flex-wrap: wrap;
     }
-    .unified-name { font-weight: 600; color: #e6edf3; font-size: 14px; }
-    .unified-port { color: #8b949e; font-size: 12px; }
+    .unified-name { font-weight: 600; color: #e6edf3; font-size: 13px; }
+    .unified-port { color: #8b949e; font-size: 11px; }
     .unified-source-badge {
-      font-size: 10px; padding: 2px 8px;
+      font-size: 10px; padding: 1px 6px;
       border-radius: 10px; border: 1px solid; font-weight: 500;
     }
     .unified-source-badge.docker { color: #56d4dd; border-color: #56d4dd; }
@@ -55,12 +56,12 @@ export function unifiedServiceCardStyles(): string {
     .unified-source-badge.both { color: #d29922; border-color: #d29922; }
     .unified-source-badge.none { color: #484f58; border-color: #484f58; }
     .unified-actions {
-      display: flex; gap: 6px; margin-left: auto;
+      display: flex; gap: 4px; margin-top: 6px;
     }
     .unified-btn {
       background: none; border: 1px solid #30363d; color: #8b949e;
-      font-family: inherit; font-size: 11px;
-      padding: 2px 10px; border-radius: 4px;
+      font-family: inherit; font-size: 10px;
+      padding: 2px 8px; border-radius: 4px;
       cursor: pointer; transition: all 0.15s;
     }
     .unified-btn.logs:hover { border-color: #da70d6; color: #da70d6; }
@@ -68,29 +69,28 @@ export function unifiedServiceCardStyles(): string {
     .unified-btn.switch:hover { border-color: #3fb950; color: #3fb950; }
     .unified-btn.edit:hover { border-color: #8b949e; color: #e6edf3; }
     .unified-sources {
-      display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px;
+      display: flex; flex-direction: column; gap: 2px; margin-bottom: 4px;
     }
     .unified-source {
       display: flex; align-items: center; gap: 6px;
-      font-size: 11px; color: #8b949e;
-      padding: 3px 8px; border-radius: 4px;
+      font-size: 11px; color: #484f58;
+      padding: 2px 6px; border-radius: 4px;
     }
     .unified-source.active { color: #c9d1d9; background: #1f2a37; }
     .unified-source .source-dot {
-      width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+      width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0;
     }
     .unified-source.active .source-dot { background: #3fb950; }
     .unified-source:not(.active) .source-dot { background: #484f58; }
-    .unified-source.missing { display: none; }
     .unified-conflict {
-      color: #d29922; font-size: 11px;
-      padding: 4px 8px; margin-bottom: 6px;
+      color: #d29922; font-size: 10px;
+      padding: 3px 6px; margin-bottom: 4px;
       background: rgba(210, 153, 34, 0.1);
       border-radius: 4px;
     }
     .unified-log-stats {
       display: flex; gap: 8px; font-size: 11px;
-      padding: 4px 8px; margin-left: -8px; margin-right: -8px;
+      padding: 3px 6px; margin-left: -6px; margin-right: -6px;
       border-radius: 4px; cursor: pointer; transition: all 0.15s;
     }
     .unified-log-stats:hover {
@@ -157,7 +157,8 @@ export function unifiedServiceCardScript(): string {
         agentService: agentMatch,
         agentPeerId: agentPeerId,
         agentLogStats: agentPeerId ? STATE.logStatsMap[agentPeerId] : null,
-        activeSource: activeSource
+        activeSource: activeSource,
+        dockerOwnsPort: dockerOwnsPort
       };
     }
 
@@ -202,32 +203,16 @@ export function unifiedServiceCardScript(): string {
 
       var html = '<div class="unified-card source-' + r.activeSource + '">';
 
-      // Header
+      // Header: name + port + badge
       html += '<div class="unified-header">';
       html += '<span class="unified-name">' + escapeHtml(m.display_name) + '</span>';
       if (port) html += '<span class="unified-port">:' + port + '</span>';
 
-      // Source badge
       var badgeLabel = r.activeSource === 'docker' ? 'Docker'
         : r.activeSource === 'agent' ? 'Agent'
         : r.activeSource === 'both' ? 'Conflict'
         : 'Stopped';
       html += '<span class="unified-source-badge ' + r.activeSource + '">' + badgeLabel + '</span>';
-
-      // Actions
-      html += '<div class="unified-actions">';
-      if (r.activeSource !== 'none') {
-        html += '<button class="unified-btn logs" onclick="openUnifiedLogs(' + m.id + ')" title="View logs">Logs</button>';
-        html += '<button class="unified-btn stop" onclick="stopUnified(' + m.id + ')" title="Stop active source">Stop</button>';
-      }
-      if (m.docker_service && m.agent_port) {
-        var switchLabel = r.activeSource === 'docker' ? 'Use Agent' : 'Use Docker';
-        if (r.activeSource === 'docker' || r.activeSource === 'agent') {
-          html += '<button class="unified-btn switch" onclick="switchUnifiedSource(' + m.id + ')" title="' + switchLabel + '">' + switchLabel + '</button>';
-        }
-      }
-      html += '<button class="unified-btn edit" onclick="editMapping(' + m.id + ')" title="Edit mapping">&#9881;</button>';
-      html += '</div>';
       html += '</div>';
 
       // Source rows
@@ -239,7 +224,6 @@ export function unifiedServiceCardScript(): string {
         html += 'Docker: ';
         if (r.dockerContainer) {
           html += escapeHtml(r.dockerContainer.status);
-          if (r.dockerContainer.health) html += ' (' + escapeHtml(r.dockerContainer.health) + ')';
           if (dActive && r.dockerContainer.cpuPerc) html += ' &middot; CPU ' + escapeHtml(r.dockerContainer.cpuPerc);
         } else {
           html += 'not found';
@@ -247,13 +231,14 @@ export function unifiedServiceCardScript(): string {
         html += '</div>';
       }
       if (m.agent_port) {
-        var aActive = r.agentService && r.agentService.status === 'up';
-        html += '<div class="unified-source' + (aActive ? ' active' : '') + '">';
+        // When Docker owns the port, the agent health check is a false positive
+        var agentReallyUp = r.agentService && r.agentService.status === 'up' && !r.dockerOwnsPort;
+        html += '<div class="unified-source' + (agentReallyUp ? ' active' : '') + '">';
         html += '<span class="source-dot"></span>';
-        html += 'Agent';
-        if (r.agentPeerId) html += ' (' + escapeHtml(r.agentPeerId) + ')';
-        html += ': ';
-        if (r.agentService) {
+        html += 'Agent: ';
+        if (r.dockerOwnsPort) {
+          html += 'idle';
+        } else if (r.agentService) {
           html += r.agentService.status;
           if (r.agentService.last_check) html += ' &middot; ' + timeAgo(r.agentService.last_check);
         } else {
@@ -265,7 +250,7 @@ export function unifiedServiceCardScript(): string {
 
       // Conflict warning
       if (r.activeSource === 'both') {
-        html += '<div class="unified-conflict">&#9888; Both Docker and Agent are running' + (port ? ' on port ' + port : '') + '</div>';
+        html += '<div class="unified-conflict">&#9888; Both running on port ' + (port || '?') + '</div>';
       }
 
       // Log stats from active source
@@ -285,6 +270,22 @@ export function unifiedServiceCardScript(): string {
           html += '</div>';
         }
       }
+
+      // Actions row at bottom
+      html += '<div class="unified-actions">';
+      if (r.activeSource !== 'none') {
+        html += '<button class="unified-btn logs" onclick="openUnifiedLogs(' + m.id + ')">Logs</button>';
+        html += '<button class="unified-btn stop" onclick="stopUnified(' + m.id + ')">Stop</button>';
+      }
+      if (m.docker_service && m.agent_port) {
+        if (r.activeSource === 'docker') {
+          html += '<button class="unified-btn switch" onclick="switchUnifiedSource(' + m.id + ')">Use Agent</button>';
+        } else if (r.activeSource === 'agent') {
+          html += '<button class="unified-btn switch" onclick="switchUnifiedSource(' + m.id + ')">Use Docker</button>';
+        }
+      }
+      html += '<button class="unified-btn edit" onclick="editMapping(' + m.id + ')">&#9881;</button>';
+      html += '</div>';
 
       html += '</div>';
       return html;
