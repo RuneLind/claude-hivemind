@@ -62,8 +62,10 @@ export function rendererScript(): string {
         var baseline = STATE.baselines[ns];
 
         var nsColor = namespaceColor(ns);
+        var nsKey = 'ns:' + ns;
+        var nsCollapsed = STATE.collapsed[nsKey];
         html += '<section class="namespace-group" style="--ns-color:' + nsColor + '">';
-        html += '<h2>' + escapeHtml(ns);
+        html += '<h2>' + collapseToggleHtml(nsKey) + ' ' + escapeHtml(ns);
         html += '<span class="ns-count">' + peers.length + '</span>';
 
         if (hasMessages) {
@@ -84,6 +86,7 @@ export function rendererScript(): string {
         html += '<span class="ns-badge">Can message each other</span>';
         html += '</h2>';
 
+        html += '<div class="section-body' + (nsCollapsed ? ' collapsed' : '') + '">';
         if (STATE.graphView[ns]) {
           html += renderNamespaceGraph(peers, STATE.pairStats);
         } else {
@@ -93,6 +96,7 @@ export function rendererScript(): string {
           });
           html += '</div>';
         }
+        html += '</div>';
 
         html += '</section>';
       });

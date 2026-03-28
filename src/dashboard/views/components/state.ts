@@ -16,6 +16,7 @@ export function stateScript(): string {
       dockerContainers: [],
       dockerLogStats: {},
       dockerLogViewerContainer: null,
+      collapsed: {},
     };
 
     var MAX_LOG_LINES = 1000;
@@ -151,6 +152,7 @@ export function stateScript(): string {
           if (statsChanged) renderAll();
           break;
         }
+
       }
     }
 

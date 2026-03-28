@@ -4,29 +4,60 @@ export function peerCardStyles(): string {
   return `
     .peer-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
       gap: 12px;
     }
     .peer-card {
       background: #161b22;
       border: 1px solid #21262d;
       border-radius: 8px;
-      padding: 14px 16px;
+      padding: 0;
       transition: border-color 0.2s;
+      overflow: hidden;
     }
     .peer-card:hover { border-color: #30363d; }
     .peer-card.disconnected { opacity: 0.5; }
+    .peer-toolbar {
+      display: flex; align-items: center; gap: 6px;
+      padding: 6px 12px;
+      background: #0d1117;
+      border-bottom: 1px solid #21262d;
+      font-size: 11px;
+    }
+    .peer-toolbar .connection-dot {
+      width: 6px; height: 6px; border-radius: 50%; background: #3fb950; flex-shrink: 0;
+    }
+    .peer-card.disconnected .peer-toolbar .connection-dot { background: #484f58; }
+    .peer-toolbar .status-text { color: #8b949e; }
+    .peer-toolbar .service-badge {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 1px 8px; border-radius: 10px; border: 1px solid;
+      font-size: 11px; cursor: default;
+    }
+    .peer-toolbar .service-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+    .peer-toolbar .service-check { color: #484f58; font-size: 10px; }
+    .peer-toolbar .toolbar-actions {
+      display: flex; gap: 4px; margin-left: auto;
+    }
+    .toolbar-btn {
+      background: none; border: 1px solid #30363d; color: #8b949e;
+      font-family: inherit; font-size: 10px;
+      padding: 2px 8px; border-radius: 4px;
+      cursor: pointer; transition: all 0.15s;
+    }
+    .toolbar-btn:hover { border-color: #8b949e; color: #e6edf3; }
+    .toolbar-btn.start { color: #484f58; border-color: transparent; font-size: 12px; padding: 0 4px; }
+    .toolbar-btn.start:hover { color: #58a6ff; background: #1f2a37; border-color: #58a6ff; }
+    .toolbar-btn.stop:hover { border-color: #f85149; color: #f85149; }
+    .toolbar-btn.docker { color: #56d4dd; }
+    .toolbar-btn.docker:hover { border-color: #56d4dd; }
+    .peer-body {
+      padding: 10px 12px;
+    }
     .peer-header {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-bottom: 8px;
+      display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
     }
     .peer-id { font-weight: 600; color: #58a6ff; font-size: 13px; }
-    .connection-dot {
-      width: 6px; height: 6px; border-radius: 50%; background: #3fb950;
-    }
-    .peer-card.disconnected .connection-dot { background: #484f58; }
     .message-count-badge {
       margin-left: auto;
       background: #1f2a37;
@@ -62,35 +93,6 @@ export function peerCardStyles(): string {
       background: #1f2a37;
       box-shadow: 0 0 8px rgba(88, 166, 255, 0.15);
     }
-    .service-badge {
-      display: inline-flex; align-items: center; gap: 5px;
-      font-size: 11px; color: #c9d1d9; padding: 2px 8px;
-      border-radius: 10px; border: 1px solid;
-    }
-    .service-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
-    .service-check { color: #484f58; font-size: 10px; }
-    .service-play-btn {
-      background: none; border: 1px solid transparent; color: #484f58;
-      font-size: 12px; cursor: pointer; padding: 3px 6px;
-      margin: -4px 0; line-height: 1; border-radius: 4px;
-      transition: all 0.15s;
-    }
-    .service-play-btn:hover:not(:disabled) {
-      color: #58a6ff; background: #1f2a37;
-      border-color: #58a6ff;
-    }
-    .service-play-btn.up { color: #3fb950; cursor: default; }
-    .service-play-btn:disabled { opacity: 1; }
-    .service-stop-btn {
-      background: none; border: 1px solid transparent; color: #484f58;
-      font-size: 11px; cursor: pointer; padding: 3px 6px;
-      margin: -4px 0; line-height: 1; border-radius: 4px;
-      transition: all 0.15s;
-    }
-    .service-stop-btn:hover {
-      color: #f85149; background: #1f2a37;
-      border-color: #f85149;
-    }
   `;
 }
 
@@ -104,23 +106,13 @@ export function peerCardScript(): string {
       var connected = peer.connected;
 
       var html = '<div class="peer-card' + (connected ? '' : ' disconnected') + '" data-peer-id="' + escapeHtml(peer.id) + '">';
-      html += '<div class="peer-header">';
+
+      // Toolbar row: status + port + actions
+      html += '<div class="peer-toolbar">';
       html += '<span class="connection-dot"></span>';
-      html += '<span class="peer-id">' + escapeHtml(peer.id) + '</span>';
+      html += '<span class="status-text">' + (connected ? 'Connected' : 'Last seen ' + timeAgo(peer.last_seen)) + '</span>';
 
-      if (connected) {
-        var isUp = svc && svc.status === 'up';
-        if (isUp) {
-          html += '<button class="service-stop-btn"'
-            + ' onclick="stopService(\\'' + escapeJs(peer.id) + '\\', ' + svc.port + ')"'
-            + ' title="Stop service on :' + svc.port + '">Stop</button>';
-        } else {
-          html += '<button class="service-play-btn"'
-            + ' onclick="startService(\\'' + escapeJs(peer.id) + '\\')"'
-            + ' title="Start service">&#9654;</button>';
-        }
-      }
-
+      // Service port badge
       if (svc) {
         var color = svc.status === 'up' ? '#3fb950' : svc.status === 'down' ? '#f85149' : '#848d97';
         html += '<span class="service-badge" style="border-color:' + color + '">';
@@ -132,12 +124,43 @@ export function peerCardScript(): string {
         html += '</span>';
       }
 
+      // Action buttons
+      html += '<div class="toolbar-actions">';
+      if (connected) {
+        var isUp = svc && svc.status === 'up';
+        if (isUp) {
+          html += '<button class="toolbar-btn stop"'
+            + ' onclick="stopService(\\'' + escapeJs(peer.id) + '\\', ' + svc.port + ')"'
+            + ' title="Stop service on :' + svc.port + '">Stop</button>';
+          var dockerAlt = findDockerContainerForPeer(peer.id, svc.port);
+          if (dockerAlt) {
+            var dockerTitle = dockerAlt.state === 'running'
+              ? 'Stop agent (Docker already running)'
+              : 'Stop agent, start Docker container';
+            html += '<button class="toolbar-btn docker"'
+              + ' onclick="switchToDocker(\\'' + escapeJs(peer.id) + '\\', \\'' + escapeJs(dockerAlt.name) + '\\', ' + svc.port + ')"'
+              + ' title="' + dockerTitle + '">Docker</button>';
+          }
+        } else {
+          html += '<button class="toolbar-btn start"'
+            + ' onclick="startService(\\'' + escapeJs(peer.id) + '\\')"'
+            + ' title="Start service">&#9654;</button>';
+        }
+      }
+      html += '</div>';
+      html += '</div>';
+
+      // Body: name + messages + info
+      html += '<div class="peer-body">';
+
+      html += '<div class="peer-header">';
+      html += '<span class="peer-id">' + escapeHtml(peer.id) + '</span>';
       if (total > 0) {
         html += '<button class="message-count-badge" onclick="openConversation(\\'' + escapeJs(peer.id) + '\\', null)" title="View messages">';
         html += total + ' msg' + (total !== 1 ? 's' : '');
         html += '</button>';
       }
-      html += '</div>'; // peer-header
+      html += '</div>';
 
       html += '<div class="peer-cwd">' + escapeHtml(shortPath(peer.cwd)) + '</div>';
       if (peer.git_branch) {
@@ -148,7 +171,6 @@ export function peerCardScript(): string {
       }
       html += '<div class="peer-meta">';
       html += '<span>PID ' + peer.pid + '</span>';
-      html += '<span>' + (connected ? 'Connected' : 'Last seen ' + timeAgo(peer.last_seen)) + '</span>';
       html += '</div>';
 
       if (logStats) {
@@ -162,7 +184,8 @@ export function peerCardScript(): string {
         html += '</div>';
       }
 
-      html += '</div>';
+      html += '</div>'; // peer-body
+      html += '</div>'; // peer-card
       return html;
     }
 
@@ -175,6 +198,12 @@ export function peerCardScript(): string {
       if (!confirm('Stop service on port ' + port + '?')) return;
       wsSend({ type: 'stop_service', peer_id: peerId });
       addActivity('Stopping service on :' + port);
+    }
+
+    function switchToDocker(peerId, dockerName, port) {
+      wsSend({ type: 'stop_service', peer_id: peerId });
+      fetch('/api/docker/start?name=' + encodeURIComponent(dockerName), { method: 'POST' });
+      addActivity('Switching :' + port + ' to Docker');
     }
   `;
 }

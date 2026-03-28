@@ -68,6 +68,8 @@ export function containerCardStyles(): string {
     }
     .container-btn.stop:hover { border-color: #f85149; color: #f85149; }
     .container-btn.logs:hover { border-color: #56d4dd; color: #56d4dd; }
+    .container-btn.agent { color: #58a6ff; border-color: #58a6ff; }
+    .container-btn.agent:hover { color: #79c0ff; border-color: #79c0ff; background: #1f2a37; }
     .container-log-stats {
       display: flex; gap: 8px; margin-top: 8px; font-size: 11px;
       padding: 4px 8px; margin-left: -8px; margin-right: -8px;
@@ -128,8 +130,11 @@ export function containerCardScript(): string {
           }
         });
 
+        var dKey = 'docker:' + project;
+        var dCollapsed = STATE.collapsed[dKey];
         html += '<section class="docker-section">';
         html += '<h2>';
+        html += collapseToggleHtml(dKey) + ' ';
         html += '<span class="docker-project-name">' + escapeHtml(project) + '</span>';
         html += '<span class="docker-count">' + running + '/' + containers.length + ' running</span>';
         if (totalErrors > 0) {
@@ -138,7 +143,7 @@ export function containerCardScript(): string {
           html += '<span class="docker-error-summary" style="color:#d29922">' + totalWarns + ' warn</span>';
         }
         html += '</h2>';
-        html += '<div class="container-grid">';
+        html += '<div class="container-grid section-body' + (dCollapsed ? ' collapsed' : '') + '">';
         containers.forEach(function(c) {
           html += renderContainerCard(c);
         });
@@ -163,6 +168,12 @@ export function containerCardScript(): string {
       html += '<div class="container-actions">';
       if (isRunning) {
         html += '<button class="container-btn stop" onclick="stopDockerContainer(\\'' + escapeJs(c.id) + '\\', \\'' + escapeJs(c.service || c.name) + '\\')" title="Stop container">Stop</button>';
+        // Show "Agent" button if a connected agent peer exists for this service
+        var agentPeer = c.service ? findAgentForContainer(c.service) : null;
+        if (agentPeer) {
+          html += '<button class="container-btn agent" onclick="switchToAgent(\\'' + escapeJs(c.id) + '\\', \\'' + escapeJs(c.service || c.name) + '\\', \\'' + escapeJs(agentPeer.id) + '\\')"'
+            + ' title="Stop Docker, tell ' + escapeHtml(agentPeer.id) + ' to start">Agent</button>';
+        }
       }
       html += '<button class="container-btn logs" onclick="openDockerLogViewer(\\'' + escapeJs(c.id) + '\\', \\'' + escapeJs(c.service || c.name) + '\\')" title="View logs">Logs</button>';
       html += '</div>';
@@ -233,6 +244,12 @@ export function containerCardScript(): string {
       renderLogLines();
 
       wsSend({ type: 'subscribe_docker_logs', containerId: containerId });
+    }
+
+    function switchToAgent(containerId, serviceName, agentPeerId) {
+      wsSend({ type: 'stop_docker_container', containerId: containerId });
+      wsSend({ type: 'send_to_peer', peer_id: agentPeerId, message: START_SERVICE_MESSAGE });
+      addActivity('Switching ' + serviceName + ' to Agent (' + agentPeerId + ')');
     }
   `;
 }

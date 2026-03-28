@@ -37,5 +37,45 @@ export function helpersScript(): string {
     }
 
     function $(id) { return document.getElementById(id); }
+
+    function extractHostPort(portsStr) {
+      if (!portsStr) return null;
+      var m = portsStr.match(/(?:0\\.0\\.0\\.0|127\\.0\\.0\\.1|::):(\\d+)->/);
+      return m ? parseInt(m[1], 10) : null;
+    }
+
+    function findDockerContainerForPeer(peerId, port) {
+      // First try port match (works for running containers)
+      for (var i = 0; i < STATE.dockerContainers.length; i++) {
+        var c = STATE.dockerContainers[i];
+        if (port && extractHostPort(c.ports) === port) return c;
+      }
+      // Fallback: name match (peer "melosys-api-claude" -> Docker service "melosys-api")
+      for (var i = 0; i < STATE.dockerContainers.length; i++) {
+        var c = STATE.dockerContainers[i];
+        if (c.service && peerId.indexOf(c.service) === 0) return c;
+      }
+      return null;
+    }
+
+    function findAgentForContainer(dockerService) {
+      for (var i = 0; i < STATE.peers.length; i++) {
+        var p = STATE.peers[i];
+        if (p.connected && p.id.indexOf(dockerService) === 0) return p;
+      }
+      return null;
+    }
+
+    function toggleSection(key) {
+      STATE.collapsed[key] = !STATE.collapsed[key];
+      renderAll();
+    }
+
+    function collapseToggleHtml(key) {
+      var collapsed = STATE.collapsed[key];
+      return '<button class="collapse-toggle' + (collapsed ? ' collapsed' : '') + '"'
+        + ' onclick="event.stopPropagation(); toggleSection(\\'' + escapeJs(key) + '\\')"'
+        + '>&#9660;</button>';
+    }
   `;
 }

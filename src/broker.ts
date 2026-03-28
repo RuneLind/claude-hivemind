@@ -112,7 +112,6 @@ db.run(`
   )
 `);
 
-
 const insertPeer = db.prepare(`
   INSERT INTO peers (id, pid, cwd, git_root, git_branch, tty, summary, namespace, registered_at, last_seen, connected)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -231,7 +230,6 @@ const upsertBaselineOffset = db.prepare(`
 const deleteBaselineOffsets = db.prepare(`DELETE FROM log_baseline_offsets WHERE namespace = ?`);
 
 const selectBaselineOffset = db.prepare(`SELECT file_offset FROM log_baseline_offsets WHERE namespace = ? AND peer_id = ?`);
-
 
 function generateId(cwd: string): string {
   const base = cwd.split("/").pop() ?? "peer";
@@ -1267,6 +1265,7 @@ function handleDashboardMessage(msg: DashboardClientMessage, ws: import("bun").S
       })();
       break;
     }
+
   }
 }
 
@@ -1439,6 +1438,21 @@ const server = Bun.serve<WSData>({
         return Response.json({
           logStats: Array.from(dockerLogStats.values()),
         });
+      },
+    },
+
+    "/api/docker/start": {
+      async POST(req) {
+        const url = new URL(req.url);
+        const name = url.searchParams.get("name");
+        if (!name) return Response.json({ error: "name required" }, { status: 400 });
+        log(`Starting Docker container ${name}`);
+        const out = await runDockerCommand(["start", name]);
+        if (out !== null) {
+          // Docker events stream will trigger pollDockerContainers automatically
+          return Response.json({ ok: true });
+        }
+        return Response.json({ error: "Failed to start" }, { status: 500 });
       },
     },
   },
