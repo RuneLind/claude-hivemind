@@ -114,12 +114,16 @@ export function peerCardScript(): string {
           html += '<button class="service-stop-btn"'
             + ' onclick="stopService(\\'' + escapeJs(peer.id) + '\\', ' + svc.port + ')"'
             + ' title="Stop service on :' + svc.port + '">Stop</button>';
-          // Show "Use Docker" if a Docker container exists on the same port
-          var dockerAlt = findDockerContainerByPort(svc.port);
-          if (dockerAlt && dockerAlt.state !== 'running') {
+          // Show "Docker" button if a Docker container exists for this service
+          var dockerAlt = findDockerContainerForPeer(peer.id, svc.port);
+          if (dockerAlt) {
+            var dockerLabel = dockerAlt.state === 'running' ? 'Docker' : 'Docker';
+            var dockerTitle = dockerAlt.state === 'running'
+              ? 'Stop agent (Docker already running on :' + (extractHostPort(dockerAlt.ports) || '?') + ')'
+              : 'Stop agent, start Docker container';
             html += '<button class="service-stop-btn"'
               + ' onclick="switchToDocker(\\'' + escapeJs(peer.id) + '\\', \\'' + escapeJs(dockerAlt.name) + '\\', ' + svc.port + ')"'
-              + ' title="Stop agent, start Docker container" style="color:#56d4dd">Docker</button>';
+              + ' title="' + dockerTitle + '" style="color:#56d4dd">Docker</button>';
           }
         } else {
           html += '<button class="service-play-btn"'

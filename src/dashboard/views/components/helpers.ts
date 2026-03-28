@@ -44,17 +44,31 @@ export function helpersScript(): string {
       return m ? parseInt(m[1], 10) : null;
     }
 
-    function findDockerContainerByPort(port) {
+    function findDockerContainerForPeer(peerId, port) {
+      // First try port match (works for running containers)
       for (var i = 0; i < STATE.dockerContainers.length; i++) {
         var c = STATE.dockerContainers[i];
-        if (extractHostPort(c.ports) === port) return c;
+        if (port && extractHostPort(c.ports) === port) return c;
+      }
+      // Fallback: name match (peer "melosys-api-claude" -> Docker service "melosys-api")
+      for (var i = 0; i < STATE.dockerContainers.length; i++) {
+        var c = STATE.dockerContainers[i];
+        if (c.service && peerId.indexOf(c.service) === 0) return c;
       }
       return null;
     }
 
-    function findAgentServiceByPort(port) {
+    function findAgentForContainer(dockerService) {
+      // First try port match
       for (var i = 0; i < STATE.services.length; i++) {
-        if (STATE.services[i].port === port) return STATE.services[i];
+        var s = STATE.services[i];
+        // Find a peer whose port matches this container's port
+        // (handled in container-card directly since we have the port there)
+      }
+      // Name match: find a connected peer whose ID starts with the Docker service name
+      for (var i = 0; i < STATE.peers.length; i++) {
+        var p = STATE.peers[i];
+        if (p.connected && p.id.indexOf(dockerService) === 0) return p;
       }
       return null;
     }
