@@ -368,6 +368,8 @@ const dockerLogStats = new Map<string, DockerContainerLogStats>();
 let dockerAvailable = false;
 let dockerPolling = false;
 let dockerEventProc: ReturnType<typeof Bun.spawn> | null = null;
+let lastDockerJson = "";
+let lastDockerLogStatsJson = "";
 
 async function runDockerCommand(args: string[], timeoutMs = 10_000, mergeStderr = false): Promise<string | null> {
   try {
@@ -483,7 +485,7 @@ async function pollDockerContainers(): Promise<void> {
       const stats = statsMap.get(shortId) || statsMap.get(c.Name);
       const container: DockerContainer = {
         id: shortId,
-        name: c.Name ?? c.Names,
+        name: c.Name,
         service: c.Service ?? "",
         project: c.Project ?? "",
         state: (c.State?.toLowerCase() ?? "unknown") as DockerContainer["state"],
@@ -507,11 +509,16 @@ async function pollDockerContainers(): Promise<void> {
       }
     }
 
-    // Publish update
-    server.publish("dashboard", JSON.stringify({
-      type: "docker_update",
-      containers: Array.from(dockerContainers.values()),
-    } satisfies DashboardMessage));
+    // Publish update only if data changed
+    const containers = Array.from(dockerContainers.values());
+    const json = JSON.stringify(containers);
+    if (json !== lastDockerJson) {
+      lastDockerJson = json;
+      server.publish("dashboard", JSON.stringify({
+        type: "docker_update",
+        containers,
+      } satisfies DashboardMessage));
+    }
   } catch (e) {
     log(`Docker poll error: ${e}`);
   } finally {
@@ -534,11 +541,9 @@ async function pollDockerLogStats(): Promise<void> {
       let errorCount = 0;
       let warnCount = 0;
       for (const line of lines) {
-        if (PLAIN_LEVEL_RE.test(line)) {
-          const m = line.match(PLAIN_LEVEL_RE);
-          if (m?.[1] === "ERROR") errorCount++;
-          else if (m?.[1] === "WARN") warnCount++;
-        }
+        const m = line.match(PLAIN_LEVEL_RE);
+        if (m?.[1] === "ERROR") errorCount++;
+        else if (m?.[1] === "WARN") warnCount++;
       }
       const stat: DockerContainerLogStats = {
         containerId: c.id,
@@ -552,10 +557,14 @@ async function pollDockerLogStats(): Promise<void> {
   );
 
   if (results.length > 0) {
-    server.publish("dashboard", JSON.stringify({
-      type: "docker_log_stats",
-      logStats: results,
-    } satisfies DashboardMessage));
+    const json = JSON.stringify(results);
+    if (json !== lastDockerLogStatsJson) {
+      lastDockerLogStatsJson = json;
+      server.publish("dashboard", JSON.stringify({
+        type: "docker_log_stats",
+        logStats: results,
+      } satisfies DashboardMessage));
+    }
   }
 }
 
@@ -598,11 +607,11 @@ function startDockerEventStream(): void {
                 // Quick re-poll to update state
                 setTimeout(() => pollDockerContainers(), 500);
 
-                // Publish immediate event
+                // Publish event notification (container state will be updated by the re-poll)
                 server.publish("dashboard", JSON.stringify({
                   type: "docker_event",
                   containerId: containerId ?? "",
-                  container: dockerContainers.get(containerId ?? "") ?? null,
+                  container: null,
                   event: action,
                 } satisfies DashboardMessage));
               }
@@ -679,38 +688,14 @@ class DockerLogTailer {
 
   private parseDockerLine(raw: string): LogLine {
     const clean = raw.replace(ANSI_RE, "");
-    // Docker --timestamps format: "2024-01-15T10:30:00.123456789Z <message>"
-    const tsMatch = clean.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z?)\s+(.*)/);
+    // Strip Docker --timestamps prefix: "2024-01-15T10:30:00.123456789Z <message>"
+    const DOCKER_TS_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z?)\s+(.*)/;
+    const tsMatch = clean.match(DOCKER_TS_RE);
     const message = tsMatch ? tsMatch[2] : clean;
-    const timestamp = tsMatch ? tsMatch[1] : new Date().toISOString();
-
-    // Try spring format on the message part
-    const springMatch = message.match(SPRING_LOG_RE);
-    if (springMatch) {
-      return { timestamp: springMatch[1] || timestamp, level: springMatch[2] as LogLevel, message: springMatch[3], raw: message };
-    }
-
-    // Try JSON format
-    try {
-      const obj = JSON.parse(message);
-      if (obj && typeof obj === "object" && (obj.message || obj.msg)) {
-        return {
-          timestamp: obj.timestamp ?? obj["@timestamp"] ?? timestamp,
-          level: ((obj.level ?? obj.severity ?? "INFO") as string).toUpperCase() as LogLevel,
-          message: obj.message ?? obj.msg ?? message,
-          raw: message,
-        };
-      }
-    } catch { /* not JSON */ }
-
-    // Plain: best-effort level detection
-    const levelMatch = message.match(PLAIN_LEVEL_RE);
-    return {
-      timestamp,
-      level: (levelMatch?.[1] ?? "INFO") as LogLevel,
-      message,
-      raw: message,
-    };
+    const result = parseLogLine(message, "auto");
+    // Use Docker timestamp if parseLogLine fell through to the plain fallback
+    if (tsMatch) result.timestamp = tsMatch[1];
+    return result;
   }
 
   stop() {
@@ -988,21 +973,24 @@ const ANSI_RE = /\x1b\[[0-9;]*m/g;
 const SPRING_LOG_RE = /^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[.\d]*|[\d]{2}:\d{2}:\d{2}[,.\d]*)\s+(ERROR|WARN|INFO|DEBUG|TRACE)\s+(.*)$/;
 const PLAIN_LEVEL_RE = /\b(ERROR|WARN|INFO|DEBUG|TRACE)\b/;
 
-function parseLogLine(raw: string, format: ServiceInfo["log_format"]): LogLine {
+function parseLogLine(raw: string, format: ServiceInfo["log_format"] | "auto"): LogLine {
   const clean = raw.replace(ANSI_RE, "");
-  if (format === "json") {
+
+  if (format === "json" || format === "auto") {
     try {
       const obj = JSON.parse(clean);
-      return {
-        timestamp: obj.timestamp ?? obj["@timestamp"] ?? new Date().toISOString(),
-        level: (obj.level ?? obj.severity ?? "INFO").toUpperCase() as LogLevel,
-        message: obj.message ?? obj.msg ?? clean,
-        raw: clean,
-      };
-    } catch { /* fall through to plain */ }
+      if (obj && typeof obj === "object" && (obj.message || obj.msg || format === "json")) {
+        return {
+          timestamp: obj.timestamp ?? obj["@timestamp"] ?? new Date().toISOString(),
+          level: ((obj.level ?? obj.severity ?? "INFO") as string).toUpperCase() as LogLevel,
+          message: obj.message ?? obj.msg ?? clean,
+          raw: clean,
+        };
+      }
+    } catch { /* fall through */ }
   }
 
-  if (format === "spring") {
+  if (format === "spring" || format === "auto") {
     const m = clean.match(SPRING_LOG_RE);
     if (m) {
       return { timestamp: m[1], level: m[2] as LogLevel, message: m[3], raw: clean };

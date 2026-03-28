@@ -123,11 +123,9 @@ export function stateScript(): string {
           break;
 
         case 'docker_event':
+          STATE.dockerContainers = STATE.dockerContainers.filter(function(c) { return c.id !== msg.containerId; });
           if (msg.container) {
-            STATE.dockerContainers = STATE.dockerContainers.filter(function(c) { return c.id !== msg.containerId; });
             STATE.dockerContainers.push(msg.container);
-          } else {
-            STATE.dockerContainers = STATE.dockerContainers.filter(function(c) { return c.id !== msg.containerId; });
           }
           addActivity('Container ' + (msg.container ? msg.container.service || msg.container.name : msg.containerId) + ': ' + msg.event);
           renderAll();
@@ -141,10 +139,18 @@ export function stateScript(): string {
           renderLogLines();
           break;
 
-        case 'docker_log_stats':
-          (msg.logStats || []).forEach(function(s) { STATE.dockerLogStats[s.containerId] = s; });
-          renderAll();
+        case 'docker_log_stats': {
+          var statsChanged = false;
+          (msg.logStats || []).forEach(function(s) {
+            var prev = STATE.dockerLogStats[s.containerId];
+            if (!prev || prev.errorCount !== s.errorCount || prev.warnCount !== s.warnCount || prev.totalLines !== s.totalLines) {
+              STATE.dockerLogStats[s.containerId] = s;
+              statsChanged = true;
+            }
+          });
+          if (statsChanged) renderAll();
           break;
+        }
       }
     }
 
