@@ -29,6 +29,8 @@ import type {
   PeerMessageStats,
   PairMessageStats,
   StoredMessage,
+  DockerContainer,
+  DockerContainerLogStats,
 } from "./shared/types.ts";
 import { renderDashboardPage } from "./dashboard/views/page.ts";
 
@@ -359,6 +361,420 @@ async function pollServiceHealth() {
 setInterval(pollServiceHealth, 15_000);
 
 
+// --- Docker container monitoring ---
+
+const dockerContainers = new Map<string, DockerContainer>();
+const dockerLogStats = new Map<string, DockerContainerLogStats>();
+let dockerAvailable = false;
+let dockerPolling = false;
+let dockerEventProc: ReturnType<typeof Bun.spawn> | null = null;
+let lastDockerJson = "";
+let lastDockerLogStatsJson = "";
+
+async function runDockerCommand(args: string[], timeoutMs = 10_000, mergeStderr = false): Promise<string | null> {
+  try {
+    const proc = Bun.spawn(["docker", ...args], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const timer = setTimeout(() => proc.kill(), timeoutMs);
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    clearTimeout(timer);
+    await proc.exited;
+    if (proc.exitCode !== 0 && !mergeStderr) return null;
+    const combined = mergeStderr ? (stdout + "\n" + stderr).trim() : stdout.trim();
+    return combined;
+  } catch {
+    return null;
+  }
+}
+
+function parseDockerJsonLines<T>(text: string): T[] {
+  if (!text) return [];
+  // docker outputs one JSON object per line (not a JSON array)
+  return text
+    .split("\n")
+    .filter((l) => l.trim().length > 0)
+    .map((l) => {
+      try { return JSON.parse(l) as T; }
+      catch { return null; }
+    })
+    .filter((x): x is T => x !== null);
+}
+
+interface DockerComposeProject {
+  Name: string;
+  Status: string;
+  ConfigFiles: string;
+}
+
+interface DockerComposePsEntry {
+  ID: string;
+  Name: string;
+  Service: string;
+  State: string;
+  Status: string;
+  Health: string;
+  Ports: string;
+  Image: string;
+  Project: string;
+  ExitCode: number;
+}
+
+interface DockerStatsEntry {
+  ID: string;
+  Name: string;
+  CPUPerc: string;
+  MemPerc: string;
+  MemUsage: string;
+}
+
+async function pollDockerContainers(): Promise<void> {
+  if (!dockerAvailable || dockerPolling) return;
+  dockerPolling = true;
+  try {
+    // Discover compose projects
+    const lsOut = await runDockerCommand(["compose", "ls", "--format", "json"]);
+    if (!lsOut) { dockerPolling = false; return; }
+
+    let projects: DockerComposeProject[];
+    try { projects = JSON.parse(lsOut); } catch { projects = []; }
+    if (projects.length === 0) {
+      if (dockerContainers.size > 0) {
+        dockerContainers.clear();
+        dockerLogStats.clear();
+        server.publish("dashboard", JSON.stringify({
+          type: "docker_update",
+          containers: [],
+        } satisfies DashboardMessage));
+      }
+      return;
+    }
+
+    // Get containers from all projects
+    const allContainers: DockerComposePsEntry[] = [];
+    await Promise.all(
+      projects.map(async (proj) => {
+        const psOut = await runDockerCommand([
+          "compose", "-p", proj.Name, "ps", "-a", "--format", "json",
+        ]);
+        if (psOut) {
+          const entries = parseDockerJsonLines<DockerComposePsEntry>(psOut);
+          allContainers.push(...entries);
+        }
+      })
+    );
+
+    // Get resource stats for running containers
+    const statsMap = new Map<string, DockerStatsEntry>();
+    const statsOut = await runDockerCommand(["stats", "--no-stream", "--format", "json"]);
+    if (statsOut) {
+      for (const s of parseDockerJsonLines<DockerStatsEntry>(statsOut)) {
+        statsMap.set(s.ID?.slice(0, 12), s);
+        statsMap.set(s.Name, s);
+      }
+    }
+
+    // Build container map
+    const newIds = new Set<string>();
+    for (const c of allContainers) {
+      const shortId = c.ID?.slice(0, 12) ?? c.ID;
+      const stats = statsMap.get(shortId) || statsMap.get(c.Name);
+      const container: DockerContainer = {
+        id: shortId,
+        name: c.Name,
+        service: c.Service ?? "",
+        project: c.Project ?? "",
+        state: (c.State?.toLowerCase() ?? "unknown") as DockerContainer["state"],
+        status: c.Status ?? "",
+        health: c.Health ?? "",
+        ports: c.Ports ?? "",
+        image: c.Image ?? "",
+        cpuPerc: stats?.CPUPerc ?? "",
+        memPerc: stats?.MemPerc ?? "",
+        memUsage: stats?.MemUsage ?? "",
+      };
+      dockerContainers.set(shortId, container);
+      newIds.add(shortId);
+    }
+
+    // Remove containers that no longer exist
+    for (const id of dockerContainers.keys()) {
+      if (!newIds.has(id)) {
+        dockerContainers.delete(id);
+        dockerLogStats.delete(id);
+      }
+    }
+
+    // Publish update only if data changed
+    const containers = Array.from(dockerContainers.values());
+    const json = JSON.stringify(containers);
+    if (json !== lastDockerJson) {
+      lastDockerJson = json;
+      server.publish("dashboard", JSON.stringify({
+        type: "docker_update",
+        containers,
+      } satisfies DashboardMessage));
+    }
+  } catch (e) {
+    log(`Docker poll error: ${e}`);
+  } finally {
+    dockerPolling = false;
+  }
+}
+
+async function pollDockerLogStats(): Promise<void> {
+  if (!dockerAvailable) return;
+  const running = Array.from(dockerContainers.values()).filter((c) => c.state === "running");
+  if (running.length === 0) return;
+
+  const results: DockerContainerLogStats[] = [];
+
+  await Promise.all(
+    running.map(async (c) => {
+      const out = await runDockerCommand(["logs", "--tail", "500", c.name], 15_000, true);
+      if (out === null) return;
+      const lines = out.split("\n").filter((l) => l.length > 0);
+      let errorCount = 0;
+      let warnCount = 0;
+      for (const line of lines) {
+        const m = line.match(PLAIN_LEVEL_RE);
+        if (m?.[1] === "ERROR") errorCount++;
+        else if (m?.[1] === "WARN") warnCount++;
+      }
+      const stat: DockerContainerLogStats = {
+        containerId: c.id,
+        errorCount,
+        warnCount,
+        totalLines: lines.length,
+      };
+      dockerLogStats.set(c.id, stat);
+      results.push(stat);
+    })
+  );
+
+  if (results.length > 0) {
+    const json = JSON.stringify(results);
+    if (json !== lastDockerLogStatsJson) {
+      lastDockerLogStatsJson = json;
+      server.publish("dashboard", JSON.stringify({
+        type: "docker_log_stats",
+        logStats: results,
+      } satisfies DashboardMessage));
+    }
+  }
+}
+
+function startDockerEventStream(): void {
+  if (!dockerAvailable || dockerEventProc) return;
+
+  try {
+    dockerEventProc = Bun.spawn(
+      ["docker", "events", "--format", "json", "--filter", "type=container"],
+      { stdout: "pipe", stderr: "pipe" }
+    );
+
+    const reader = dockerEventProc.stdout.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    (async () => {
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop()!;
+
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            try {
+              const event = JSON.parse(line) as {
+                Action: string;
+                Actor: { ID: string; Attributes: Record<string, string> };
+              };
+              const action = event.Action;
+              const name = event.Actor?.Attributes?.name;
+              const containerId = event.Actor?.ID?.slice(0, 12);
+
+              // Re-poll on significant events
+              if (["start", "stop", "die", "pause", "unpause", "kill", "destroy"].includes(action)) {
+                log(`Docker event: ${name ?? containerId} ${action}`);
+                // Quick re-poll to update state
+                setTimeout(() => pollDockerContainers(), 500);
+
+                // Publish event notification (container state will be updated by the re-poll)
+                server.publish("dashboard", JSON.stringify({
+                  type: "docker_event",
+                  containerId: containerId ?? "",
+                  container: null,
+                  event: action,
+                } satisfies DashboardMessage));
+              }
+            } catch { /* skip unparseable event lines */ }
+          }
+        }
+      } catch (e) {
+        log(`Docker event stream error: ${e}`);
+      } finally {
+        dockerEventProc = null;
+        // Restart after backoff
+        if (dockerAvailable) {
+          setTimeout(startDockerEventStream, 5000);
+        }
+      }
+    })();
+  } catch {
+    dockerEventProc = null;
+  }
+}
+
+// Docker log tailing for dashboard subscriptions
+class DockerLogTailer {
+  private proc: ReturnType<typeof Bun.spawn> | null = null;
+  private containerId: string;
+  private containerName: string;
+  private onLines: (lines: LogLine[]) => void;
+  private stopped = false;
+
+  constructor(containerId: string, containerName: string, onLines: (lines: LogLine[]) => void) {
+    this.containerId = containerId;
+    this.containerName = containerName;
+    this.onLines = onLines;
+    this.start();
+  }
+
+  private async start() {
+    try {
+      this.proc = Bun.spawn(
+        ["docker", "logs", "--follow", "--tail", "200", "--timestamps", this.containerName],
+        { stdout: "pipe", stderr: "pipe" }
+      );
+      // Read both stdout and stderr (docker sends app stderr separately)
+      this.readStream(this.proc.stdout);
+      this.readStream(this.proc.stderr);
+    } catch (e) {
+      log(`DockerLogTailer start error for ${this.containerName}: ${e}`);
+    }
+  }
+
+  private async readStream(stream: ReadableStream<Uint8Array>) {
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    try {
+      while (!this.stopped) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split("\n");
+        buffer = parts.pop()!;
+
+        const rawLines = parts.filter((l) => l.length > 0);
+        if (rawLines.length > 0) {
+          const parsed = rawLines.map((l) => this.parseDockerLine(l));
+          this.onLines(parsed);
+        }
+      }
+    } catch {
+      // stream closed
+    }
+  }
+
+  private parseDockerLine(raw: string): LogLine {
+    const clean = raw.replace(ANSI_RE, "");
+    // Strip Docker --timestamps prefix: "2024-01-15T10:30:00.123456789Z <message>"
+    const DOCKER_TS_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z?)\s+(.*)/;
+    const tsMatch = clean.match(DOCKER_TS_RE);
+    const message = tsMatch ? tsMatch[2] : clean;
+    const result = parseLogLine(message, "auto");
+    // Use Docker timestamp if parseLogLine fell through to the plain fallback
+    if (tsMatch) result.timestamp = tsMatch[1];
+    return result;
+  }
+
+  stop() {
+    this.stopped = true;
+    this.proc?.kill();
+    this.proc = null;
+  }
+}
+
+const dockerLogSubscriptions = new Map<string, {
+  tailer: DockerLogTailer;
+  subscribers: Set<import("bun").ServerWebSocket<WSData>>;
+}>();
+
+function subscribeDockerLogs(containerId: string, ws: import("bun").ServerWebSocket<WSData>) {
+  const container = dockerContainers.get(containerId);
+  if (!container) return;
+
+  const existing = dockerLogSubscriptions.get(containerId);
+  if (existing) {
+    existing.subscribers.add(ws);
+    return;
+  }
+
+  const subscribers = new Set<import("bun").ServerWebSocket<WSData>>([ws]);
+  const tailer = new DockerLogTailer(containerId, container.name, (lines) => {
+    const msg = JSON.stringify({
+      type: "docker_log_lines",
+      containerId,
+      lines,
+    } satisfies DashboardMessage);
+    for (const sub of subscribers) {
+      if (sub.readyState === WS_OPEN) sub.send(msg);
+    }
+  });
+
+  dockerLogSubscriptions.set(containerId, { tailer, subscribers });
+}
+
+function unsubscribeDockerLogs(containerId: string, ws: import("bun").ServerWebSocket<WSData>) {
+  const sub = dockerLogSubscriptions.get(containerId);
+  if (!sub) return;
+  sub.subscribers.delete(ws);
+  if (sub.subscribers.size === 0) {
+    sub.tailer.stop();
+    dockerLogSubscriptions.delete(containerId);
+  }
+}
+
+function unsubscribeAllDockerLogs(ws: import("bun").ServerWebSocket<WSData>) {
+  for (const [containerId, sub] of dockerLogSubscriptions) {
+    sub.subscribers.delete(ws);
+    if (sub.subscribers.size === 0) {
+      sub.tailer.stop();
+      dockerLogSubscriptions.delete(containerId);
+    }
+  }
+}
+
+async function initDockerMonitoring() {
+  const versionOut = await runDockerCommand(["version", "--format", "json"]);
+  if (!versionOut) {
+    log("Docker not available — container monitoring disabled");
+    return;
+  }
+  dockerAvailable = true;
+  log("Docker detected — container monitoring enabled");
+
+  await pollDockerContainers();
+  await pollDockerLogStats();
+  startDockerEventStream();
+
+  setInterval(pollDockerContainers, 10_000);
+  setInterval(pollDockerLogStats, 30_000);
+}
+
+initDockerMonitoring();
+
+
 type PeerWSData = { kind: "peer"; peerId: string | null; namespace: string };
 type DashboardWSData = { kind: "dashboard" };
 type WSData = PeerWSData | DashboardWSData;
@@ -557,21 +973,24 @@ const ANSI_RE = /\x1b\[[0-9;]*m/g;
 const SPRING_LOG_RE = /^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[.\d]*|[\d]{2}:\d{2}:\d{2}[,.\d]*)\s+(ERROR|WARN|INFO|DEBUG|TRACE)\s+(.*)$/;
 const PLAIN_LEVEL_RE = /\b(ERROR|WARN|INFO|DEBUG|TRACE)\b/;
 
-function parseLogLine(raw: string, format: ServiceInfo["log_format"]): LogLine {
+function parseLogLine(raw: string, format: ServiceInfo["log_format"] | "auto"): LogLine {
   const clean = raw.replace(ANSI_RE, "");
-  if (format === "json") {
+
+  if (format === "json" || format === "auto") {
     try {
       const obj = JSON.parse(clean);
-      return {
-        timestamp: obj.timestamp ?? obj["@timestamp"] ?? new Date().toISOString(),
-        level: (obj.level ?? obj.severity ?? "INFO").toUpperCase() as LogLevel,
-        message: obj.message ?? obj.msg ?? clean,
-        raw: clean,
-      };
-    } catch { /* fall through to plain */ }
+      if (obj && typeof obj === "object" && (obj.message || obj.msg || format === "json")) {
+        return {
+          timestamp: obj.timestamp ?? obj["@timestamp"] ?? new Date().toISOString(),
+          level: ((obj.level ?? obj.severity ?? "INFO") as string).toUpperCase() as LogLevel,
+          message: obj.message ?? obj.msg ?? clean,
+          raw: clean,
+        };
+      }
+    } catch { /* fall through */ }
   }
 
-  if (format === "spring") {
+  if (format === "spring" || format === "auto") {
     const m = clean.match(SPRING_LOG_RE);
     if (m) {
       return { timestamp: m[1], level: m[2] as LogLevel, message: m[3], raw: clean };
@@ -804,6 +1223,29 @@ function handleDashboardMessage(msg: DashboardClientMessage, ws: import("bun").S
       log(`Baseline cleared for namespace ${msg.namespace}`);
       break;
     }
+
+    case "subscribe_docker_logs": {
+      subscribeDockerLogs(msg.containerId, ws);
+      log(`Dashboard subscribed to Docker logs for ${msg.containerId}`);
+      break;
+    }
+
+    case "unsubscribe_docker_logs": {
+      unsubscribeDockerLogs(msg.containerId, ws);
+      log(`Dashboard unsubscribed from Docker logs for ${msg.containerId}`);
+      break;
+    }
+
+    case "stop_docker_container": {
+      const container = dockerContainers.get(msg.containerId);
+      const name = container?.name ?? msg.containerId;
+      log(`Stopping Docker container ${name}`);
+      runDockerCommand(["stop", name]).then(() => {
+        log(`Docker container ${name} stopped`);
+        // Event stream will pick up the state change
+      });
+      break;
+    }
   }
 }
 
@@ -956,6 +1398,28 @@ const server = Bun.serve<WSData>({
         return Response.json({ ok: true });
       },
     },
+
+    "/api/docker/containers": () => {
+      return Response.json({
+        containers: Array.from(dockerContainers.values()),
+      });
+    },
+
+    "/api/docker/log-stats": {
+      GET(req) {
+        const url = new URL(req.url);
+        const containerId = url.searchParams.get("container_id");
+        if (containerId) {
+          const stats = dockerLogStats.get(containerId);
+          return stats
+            ? Response.json(stats)
+            : Response.json({ error: "Not found" }, { status: 404 });
+        }
+        return Response.json({
+          logStats: Array.from(dockerLogStats.values()),
+        });
+      },
+    },
   },
 
   fetch(req, server) {
@@ -1004,6 +1468,16 @@ const server = Bun.serve<WSData>({
             baselines,
           } satisfies DashboardMessage)
         );
+        // Send Docker snapshot if available
+        if (dockerAvailable && dockerContainers.size > 0) {
+          ws.send(
+            JSON.stringify({
+              type: "docker_snapshot",
+              containers: Array.from(dockerContainers.values()),
+              logStats: Array.from(dockerLogStats.values()),
+            } satisfies DashboardMessage)
+          );
+        }
       }
     },
 
@@ -1032,6 +1506,7 @@ const server = Bun.serve<WSData>({
     close(ws) {
       if (ws.data.kind === "dashboard") {
         unsubscribeAllLogs(ws as import("bun").ServerWebSocket<WSData>);
+        unsubscribeAllDockerLogs(ws as import("bun").ServerWebSocket<WSData>);
       }
 
       if (ws.data.kind === "peer" && ws.data.peerId) {

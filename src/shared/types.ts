@@ -108,7 +108,12 @@ export type DashboardMessage =
   | { type: "service_update"; service: ServiceInfo }
   | { type: "log_lines"; peer_id: PeerId; lines: LogLine[] }
   | { type: "baseline_set"; namespace: Namespace; baseline_at: string }
-  | { type: "baseline_cleared"; namespace: Namespace };
+  | { type: "baseline_cleared"; namespace: Namespace }
+  | { type: "docker_snapshot"; containers: DockerContainer[]; logStats: DockerContainerLogStats[] }
+  | { type: "docker_update"; containers: DockerContainer[] }
+  | { type: "docker_event"; containerId: string; container: DockerContainer | null; event: string }
+  | { type: "docker_log_lines"; containerId: string; lines: LogLine[] }
+  | { type: "docker_log_stats"; logStats: DockerContainerLogStats[] };
 
 // --- WebSocket protocol: Dashboard → Broker ---
 
@@ -117,7 +122,10 @@ export type DashboardClientMessage =
   | { type: "subscribe_logs"; peer_id: PeerId }
   | { type: "unsubscribe_logs"; peer_id: PeerId }
   | { type: "set_baseline"; namespace: Namespace }
-  | { type: "clear_baseline"; namespace: Namespace };
+  | { type: "clear_baseline"; namespace: Namespace }
+  | { type: "subscribe_docker_logs"; containerId: string }
+  | { type: "unsubscribe_docker_logs"; containerId: string }
+  | { type: "stop_docker_container"; containerId: string };
 
 export interface NamespaceInfo {
   name: Namespace;
@@ -155,6 +163,30 @@ export interface LogLine {
   level: LogLevel;
   message: string;
   raw: string;
+}
+
+// --- Docker container types ---
+
+export interface DockerContainer {
+  id: string;        // short container ID
+  name: string;      // container name
+  service: string;   // docker compose service name
+  project: string;   // compose project name
+  state: "running" | "exited" | "paused" | "restarting" | "dead" | "created";
+  status: string;    // human-readable: "Up 2 hours"
+  health: string;    // "healthy" | "unhealthy" | "starting" | ""
+  ports: string;     // formatted port mappings
+  image: string;     // image name
+  cpuPerc: string;   // "0.25%"
+  memPerc: string;   // "1.23%"
+  memUsage: string;  // "45MiB / 8GiB"
+}
+
+export interface DockerContainerLogStats {
+  containerId: string;
+  errorCount: number;
+  warnCount: number;
+  totalLines: number;
 }
 
 // --- Namespace configuration ---

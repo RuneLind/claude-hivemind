@@ -73,6 +73,12 @@ export function logViewerScript(): string {
     var logAutoScroll = true;
 
     function openLogViewer(peerId) {
+      // Close any existing Docker log subscription
+      if (STATE.dockerLogViewerContainer) {
+        wsSend({ type: 'unsubscribe_docker_logs', containerId: STATE.dockerLogViewerContainer });
+        STATE.dockerLogViewerContainer = null;
+      }
+
       STATE.logLines = [];
       STATE.logViewerPeer = peerId;
 
@@ -98,8 +104,12 @@ export function logViewerScript(): string {
 
       if (STATE.logViewerPeer) {
         wsSend({ type: 'unsubscribe_logs', peer_id: STATE.logViewerPeer });
+        STATE.logViewerPeer = null;
       }
-      STATE.logViewerPeer = null;
+      if (STATE.dockerLogViewerContainer) {
+        wsSend({ type: 'unsubscribe_docker_logs', containerId: STATE.dockerLogViewerContainer });
+        STATE.dockerLogViewerContainer = null;
+      }
       STATE.logLines = [];
     }
 
