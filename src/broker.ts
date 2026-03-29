@@ -31,8 +31,10 @@ import type {
   StoredMessage,
   DockerContainer,
   DockerContainerLogStats,
+  CmuxWorkspace,
 } from "./shared/types.ts";
 import { renderDashboardPage } from "./dashboard/views/page.ts";
+import { isCmuxAvailable, listWorkspaces, launchClaudeInstance } from "./cmux.ts";
 
 const dashboardHtml = renderDashboardPage();
 const PORT = parseInt(process.env.CLAUDE_HIVEMIND_PORT ?? "7899", 10);
@@ -368,6 +370,42 @@ let dockerPolling = false;
 let dockerEventProc: ReturnType<typeof Bun.spawn> | null = null;
 let lastDockerJson = "";
 let lastDockerLogStatsJson = "";
+
+// --- cmux state ---
+let cmuxAvailable = false;
+let cmuxWorkspaces: CmuxWorkspace[] = [];
+
+function publishCmuxStatus(): void {
+  server.publish(
+    "dashboard",
+    JSON.stringify({
+      type: "cmux_status",
+      available: cmuxAvailable,
+      workspaces: cmuxWorkspaces,
+    } satisfies DashboardMessage)
+  );
+}
+
+async function pollCmuxStatus(): Promise<void> {
+  try {
+    const [available, workspaces] = await Promise.all([
+      isCmuxAvailable(),
+      listWorkspaces().catch(() => [] as { id: string; name: string }[]),
+    ]);
+    const effectiveWorkspaces = available ? workspaces : [];
+    const changed = available !== cmuxAvailable ||
+      JSON.stringify(effectiveWorkspaces) !== JSON.stringify(cmuxWorkspaces);
+    cmuxAvailable = available;
+    cmuxWorkspaces = effectiveWorkspaces;
+    if (changed) publishCmuxStatus();
+  } catch {
+    if (cmuxAvailable) {
+      cmuxAvailable = false;
+      cmuxWorkspaces = [];
+      publishCmuxStatus();
+    }
+  }
+}
 
 async function runDockerCommand(args: string[], timeoutMs = 10_000, mergeStderr = false): Promise<string | null> {
   try {
@@ -771,6 +809,13 @@ async function initDockerMonitoring() {
 }
 
 initDockerMonitoring();
+
+// --- cmux monitoring ---
+pollCmuxStatus().then(() => {
+  if (cmuxAvailable) log("cmux detected — terminal orchestration enabled");
+  else log("cmux not available — launch buttons disabled");
+});
+setInterval(pollCmuxStatus, 15_000);
 
 
 type PeerWSData = { kind: "peer"; peerId: string | null; namespace: string };
@@ -1266,6 +1311,42 @@ function handleDashboardMessage(msg: DashboardClientMessage, ws: import("bun").S
       break;
     }
 
+    case "launch_claude_instance": {
+      if (!cmuxAvailable) {
+        ws.send(JSON.stringify({
+          type: "cmux_launch_result",
+          ok: false,
+          error: "cmux is not running",
+        } satisfies DashboardMessage));
+        break;
+      }
+      log(`Launching Claude Code instance in ${msg.directory} via cmux`);
+      (async () => {
+        try {
+          const { workspaceId } = await launchClaudeInstance({
+            directory: msg.directory,
+            name: msg.name,
+            prompt: msg.prompt,
+          });
+          log(`Launched cmux workspace ${workspaceId} for ${msg.directory}`);
+          ws.send(JSON.stringify({
+            type: "cmux_launch_result",
+            ok: true,
+            workspaceId,
+          } satisfies DashboardMessage));
+        } catch (e) {
+          const error = e instanceof Error ? e.message : String(e);
+          log(`Failed to launch Claude instance: ${error}`);
+          ws.send(JSON.stringify({
+            type: "cmux_launch_result",
+            ok: false,
+            error,
+          } satisfies DashboardMessage));
+        }
+      })();
+      break;
+    }
+
   }
 }
 
@@ -1455,6 +1536,13 @@ const server = Bun.serve<WSData>({
         return Response.json({ error: "Failed to start" }, { status: 500 });
       },
     },
+
+    "/api/cmux/status": () => {
+      return Response.json({
+        available: cmuxAvailable,
+        workspaces: cmuxWorkspaces,
+      });
+    },
   },
 
   fetch(req, server) {
@@ -1510,6 +1598,16 @@ const server = Bun.serve<WSData>({
               type: "docker_snapshot",
               containers: Array.from(dockerContainers.values()),
               logStats: Array.from(dockerLogStats.values()),
+            } satisfies DashboardMessage)
+          );
+        }
+        // Send cmux status if available
+        if (cmuxAvailable) {
+          ws.send(
+            JSON.stringify({
+              type: "cmux_status",
+              available: cmuxAvailable,
+              workspaces: cmuxWorkspaces,
             } satisfies DashboardMessage)
           );
         }

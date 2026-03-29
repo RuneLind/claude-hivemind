@@ -17,6 +17,8 @@ export function stateScript(): string {
       dockerLogStats: {},
       dockerLogViewerContainer: null,
       collapsed: {},
+      cmuxAvailable: false,
+      cmuxWorkspaces: [],
     };
 
     var MAX_LOG_LINES = 1000;
@@ -152,6 +154,33 @@ export function stateScript(): string {
           if (statsChanged) renderAll();
           break;
         }
+
+        case 'cmux_status': {
+          var ws = msg.workspaces || [];
+          var changed = STATE.cmuxAvailable !== msg.available || STATE.cmuxWorkspaces.length !== ws.length;
+          if (!changed) {
+            for (var i = 0; i < ws.length; i++) {
+              if (!STATE.cmuxWorkspaces[i] || STATE.cmuxWorkspaces[i].id !== ws[i].id) { changed = true; break; }
+            }
+          }
+          if (changed) {
+            STATE.cmuxAvailable = msg.available;
+            STATE.cmuxWorkspaces = ws;
+            renderAll();
+          }
+          break;
+        }
+
+        case 'cmux_launch_result':
+          if (msg.ok) {
+            addActivity('Launched Claude instance (workspace: ' + (msg.workspaceId || '?') + ')');
+            closeLaunchModal();
+          } else {
+            addActivity('Failed to launch: ' + (msg.error || 'unknown'));
+            var errEl = document.getElementById('launchError');
+            if (errEl) { errEl.textContent = msg.error || 'Launch failed'; errEl.style.display = ''; }
+          }
+          break;
 
       }
     }

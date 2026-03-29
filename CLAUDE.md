@@ -8,6 +8,7 @@ Peer discovery and messaging for Claude Code instances, with namespace isolation
 - `src/server.ts` — MCP stdio server, one per Claude Code instance. Connects to broker via WebSocket, pushes inbound messages via channel notifications.
 - `src/cli.ts` — CLI utility for inspecting broker state and managing peers.
 - `src/dashboard/` — Web dashboard (vanilla TypeScript, server-rendered HTML) showing peers grouped by namespace, Docker containers grouped by Compose project, service health, and log streaming.
+- `src/cmux.ts` — JSON-RPC client for cmux terminal multiplexer. Connects to `/tmp/cmux.sock` to create workspaces and launch Claude Code instances from the dashboard.
 - `src/shared/types.ts` — WebSocket protocol types (client/broker/dashboard message unions).
 - `src/shared/namespace.ts` — Namespace resolution from CWD (auto-derives from ~/source/<group>/).
 
@@ -38,6 +39,7 @@ bun kill
 | `CLAUDE_HIVEMIND` | (unset) | Set to `1` to activate broker connection. Without it, MCP server stays dormant. |
 | `CLAUDE_HIVEMIND_PORT` | `7899` | Broker port |
 | `CLAUDE_HIVEMIND_DB` | `~/.claude-hivemind.db` | SQLite database path |
+| `CMUX_SOCKET_PATH` | `/tmp/cmux.sock` | cmux Unix socket path |
 
 ## Bun
 
