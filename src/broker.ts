@@ -375,36 +375,34 @@ let lastDockerLogStatsJson = "";
 let cmuxAvailable = false;
 let cmuxWorkspaces: CmuxWorkspace[] = [];
 
+function publishCmuxStatus(): void {
+  server.publish(
+    "dashboard",
+    JSON.stringify({
+      type: "cmux_status",
+      available: cmuxAvailable,
+      workspaces: cmuxWorkspaces,
+    } satisfies DashboardMessage)
+  );
+}
+
 async function pollCmuxStatus(): Promise<void> {
   try {
-    const available = await isCmuxAvailable();
-    const workspaces = available ? await listWorkspaces() : [];
+    const [available, workspaces] = await Promise.all([
+      isCmuxAvailable(),
+      listWorkspaces().catch(() => [] as { id: string; name: string }[]),
+    ]);
+    const effectiveWorkspaces = available ? workspaces : [];
     const changed = available !== cmuxAvailable ||
-      JSON.stringify(workspaces) !== JSON.stringify(cmuxWorkspaces);
+      JSON.stringify(effectiveWorkspaces) !== JSON.stringify(cmuxWorkspaces);
     cmuxAvailable = available;
-    cmuxWorkspaces = workspaces;
-    if (changed) {
-      server.publish(
-        "dashboard",
-        JSON.stringify({
-          type: "cmux_status",
-          available: cmuxAvailable,
-          workspaces: cmuxWorkspaces,
-        } satisfies DashboardMessage)
-      );
-    }
+    cmuxWorkspaces = effectiveWorkspaces;
+    if (changed) publishCmuxStatus();
   } catch {
     if (cmuxAvailable) {
       cmuxAvailable = false;
       cmuxWorkspaces = [];
-      server.publish(
-        "dashboard",
-        JSON.stringify({
-          type: "cmux_status",
-          available: false,
-          workspaces: [],
-        } satisfies DashboardMessage)
-      );
+      publishCmuxStatus();
     }
   }
 }
@@ -813,12 +811,11 @@ async function initDockerMonitoring() {
 initDockerMonitoring();
 
 // --- cmux monitoring ---
-(async () => {
-  await pollCmuxStatus();
+pollCmuxStatus().then(() => {
   if (cmuxAvailable) log("cmux detected — terminal orchestration enabled");
   else log("cmux not available — launch buttons disabled");
-  setInterval(pollCmuxStatus, 15_000);
-})();
+});
+setInterval(pollCmuxStatus, 15_000);
 
 
 type PeerWSData = { kind: "peer"; peerId: string | null; namespace: string };
@@ -1323,21 +1320,20 @@ function handleDashboardMessage(msg: DashboardClientMessage, ws: import("bun").S
         } satisfies DashboardMessage));
         break;
       }
-      const dir = msg.directory;
-      const name = msg.name;
-      const prompt = msg.prompt;
-      log(`Launching Claude Code instance in ${dir} via cmux`);
+      log(`Launching Claude Code instance in ${msg.directory} via cmux`);
       (async () => {
         try {
-          const result = await launchClaudeInstance({ directory: dir, name, prompt });
-          log(`Launched cmux workspace ${result.workspaceId} for ${dir}`);
+          const { workspaceId } = await launchClaudeInstance({
+            directory: msg.directory,
+            name: msg.name,
+            prompt: msg.prompt,
+          });
+          log(`Launched cmux workspace ${workspaceId} for ${msg.directory}`);
           ws.send(JSON.stringify({
             type: "cmux_launch_result",
             ok: true,
-            workspaceId: result.workspaceId,
+            workspaceId,
           } satisfies DashboardMessage));
-          // Refresh workspace list
-          await pollCmuxStatus();
         } catch (e) {
           const error = e instanceof Error ? e.message : String(e);
           log(`Failed to launch Claude instance: ${error}`);

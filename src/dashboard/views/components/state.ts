@@ -156,9 +156,11 @@ export function stateScript(): string {
         }
 
         case 'cmux_status':
-          STATE.cmuxAvailable = msg.available;
-          STATE.cmuxWorkspaces = msg.workspaces || [];
-          renderAll();
+          if (STATE.cmuxAvailable !== msg.available || STATE.cmuxWorkspaces.length !== (msg.workspaces || []).length) {
+            STATE.cmuxAvailable = msg.available;
+            STATE.cmuxWorkspaces = msg.workspaces || [];
+            renderAll();
+          }
           break;
 
         case 'cmux_launch_result':
