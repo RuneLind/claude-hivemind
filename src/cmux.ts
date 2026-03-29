@@ -137,8 +137,15 @@ export async function launchClaudeInstance(opts: LaunchOptions): Promise<{ works
   await sendText(claudeCmd);
   await sendKey("enter");
 
+  // Auto-confirm the "Loading development channels" prompt
+  setTimeout(async () => {
+    try {
+      await sendKey("enter");
+    } catch { /* ignore */ }
+  }, 2000);
+
   if (opts.prompt) {
-    // Delay so Claude Code has time to initialize before receiving the prompt
+    // Delay so Claude Code has time to fully initialize
     setTimeout(async () => {
       try {
         await sendText(opts.prompt!);
@@ -146,7 +153,7 @@ export async function launchClaudeInstance(opts: LaunchOptions): Promise<{ works
       } catch {
         // Not ready yet — user can type manually
       }
-    }, 3000);
+    }, 5000);
   }
 
   return { workspaceId };
