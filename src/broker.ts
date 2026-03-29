@@ -1601,14 +1601,16 @@ const server = Bun.serve<WSData>({
             } satisfies DashboardMessage)
           );
         }
-        // Send cmux status
-        ws.send(
-          JSON.stringify({
-            type: "cmux_status",
-            available: cmuxAvailable,
-            workspaces: cmuxWorkspaces,
-          } satisfies DashboardMessage)
-        );
+        // Send cmux status if available
+        if (cmuxAvailable) {
+          ws.send(
+            JSON.stringify({
+              type: "cmux_status",
+              available: cmuxAvailable,
+              workspaces: cmuxWorkspaces,
+            } satisfies DashboardMessage)
+          );
+        }
       }
     },
 

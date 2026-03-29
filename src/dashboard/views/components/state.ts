@@ -155,13 +155,21 @@ export function stateScript(): string {
           break;
         }
 
-        case 'cmux_status':
-          if (STATE.cmuxAvailable !== msg.available || STATE.cmuxWorkspaces.length !== (msg.workspaces || []).length) {
+        case 'cmux_status': {
+          var ws = msg.workspaces || [];
+          var changed = STATE.cmuxAvailable !== msg.available || STATE.cmuxWorkspaces.length !== ws.length;
+          if (!changed) {
+            for (var i = 0; i < ws.length; i++) {
+              if (!STATE.cmuxWorkspaces[i] || STATE.cmuxWorkspaces[i].id !== ws[i].id) { changed = true; break; }
+            }
+          }
+          if (changed) {
             STATE.cmuxAvailable = msg.available;
-            STATE.cmuxWorkspaces = msg.workspaces || [];
+            STATE.cmuxWorkspaces = ws;
             renderAll();
           }
           break;
+        }
 
         case 'cmux_launch_result':
           if (msg.ok) {

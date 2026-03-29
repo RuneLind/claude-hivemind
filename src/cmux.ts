@@ -28,10 +28,12 @@ interface CmuxResponse {
   error?: unknown;
 }
 
-function errorMessage(res: CmuxResponse, fallback: string): string {
-  if (!res.error) return fallback;
-  if (typeof res.error === "string") return res.error;
-  return JSON.stringify(res.error);
+function assertOk(res: CmuxResponse, action: string): void {
+  if (res.ok) return;
+  const msg = !res.error ? `Failed to ${action}`
+    : typeof res.error === "string" ? res.error
+    : JSON.stringify(res.error);
+  throw new Error(msg);
 }
 
 function rpc(method: string, params: Record<string, unknown> = {}): Promise<CmuxResponse> {
@@ -81,14 +83,14 @@ export async function isCmuxAvailable(): Promise<boolean> {
 
 export async function listWorkspaces(): Promise<{ id: string; name: string }[]> {
   const res = await rpc("workspace.list");
-  if (!res.ok) throw new Error(errorMessage(res, "Failed to list workspaces"));
+  assertOk(res, "list workspaces");
   const result = res.result as { workspaces: { id: string; name: string }[] };
   return result.workspaces ?? [];
 }
 
 export async function createWorkspace(name: string): Promise<string> {
   const res = await rpc("workspace.create", { name });
-  if (!res.ok) throw new Error(errorMessage(res, "Failed to create workspace"));
+  assertOk(res, "create workspace");
   // cmux API returns workspace_id or id depending on version
   const result = res.result as { workspace_id?: string; id?: string };
   return result.workspace_id ?? result.id ?? "";
@@ -98,19 +100,19 @@ export async function sendText(text: string, surfaceId?: string): Promise<void> 
   const params: Record<string, unknown> = { text };
   if (surfaceId) params.surface = surfaceId;
   const res = await rpc("surface.send_text", params);
-  if (!res.ok) throw new Error(errorMessage(res, "Failed to send text"));
+  assertOk(res, "send text");
 }
 
 export async function sendKey(key: string, surfaceId?: string): Promise<void> {
   const params: Record<string, unknown> = { key };
   if (surfaceId) params.surface = surfaceId;
   const res = await rpc("surface.send_key", params);
-  if (!res.ok) throw new Error(errorMessage(res, "Failed to send key"));
+  assertOk(res, "send key");
 }
 
 export async function selectWorkspace(workspaceId: string): Promise<void> {
   const res = await rpc("workspace.select", { workspace_id: workspaceId });
-  if (!res.ok) throw new Error(errorMessage(res, "Failed to select workspace"));
+  assertOk(res, "select workspace");
 }
 
 export interface LaunchOptions {

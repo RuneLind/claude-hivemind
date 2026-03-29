@@ -133,11 +133,6 @@ export type DashboardClientMessage =
 
 // --- cmux integration ---
 
-export interface CmuxStatus {
-  available: boolean;
-  workspaces: CmuxWorkspace[];
-}
-
 export interface CmuxWorkspace {
   id: string;
   name: string;
