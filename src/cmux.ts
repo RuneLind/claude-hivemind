@@ -131,6 +131,7 @@ export async function launchClaudeInstance(opts: LaunchOptions): Promise<{ works
   const claudeCmd = [
     `cd ${JSON.stringify(opts.directory)}`,
     "&&",
+    "CLAUDE_HIVEMIND=1",
     "claude",
     "--dangerously-load-development-channels server:claude-hivemind",
     ...flags,
