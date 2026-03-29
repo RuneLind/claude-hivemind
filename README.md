@@ -168,6 +168,29 @@ For each container, the dashboard shows:
 
 Docker monitoring is enabled automatically when Docker is installed. If Docker is unavailable, the section is hidden.
 
+## cmux integration (optional)
+
+If you have [cmux](https://cmux.com) installed, the dashboard shows a **+ Agent** button that lets you launch new Claude Code instances directly from the browser. Each instance opens in a new cmux workspace with the hivemind channel pre-loaded.
+
+cmux is a macOS terminal multiplexer designed for managing multiple AI agent sessions. The hivemind broker connects to cmux via its Unix socket API (`/tmp/cmux.sock`) and polls for availability every 15 seconds. When cmux is detected, the launch button appears; when it's not, the button is hidden.
+
+To enable:
+
+1. Install cmux from https://cmux.com
+2. Launch cmux with socket access enabled:
+   ```bash
+   CMUX_SOCKET_MODE=allowAll cmux
+   ```
+3. Start the hivemind broker (`bun dev`)
+4. Open the dashboard — the "+ Agent" button appears in the header
+
+The launch modal lets you specify a working directory, workspace name, and an optional initial prompt. The broker creates a cmux workspace, sends the `claude` command, and the new instance auto-connects back to hivemind as a peer.
+
+You can also check cmux status via the API:
+```bash
+curl http://127.0.0.1:7899/api/cmux/status
+```
+
 ## CLI
 
 ```bash
@@ -182,3 +205,4 @@ bun kill            # stop the broker (MCP servers stay alive)
 - [Bun](https://bun.sh)
 - Claude Code v2.1.80+
 - claude.ai login (channels require it)
+- [cmux](https://cmux.com) (optional, for launching instances from dashboard)

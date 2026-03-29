@@ -1,13 +1,23 @@
 /**
  * cmux client — JSON-RPC over Unix socket to control cmux terminal multiplexer.
  *
- * Connects to /tmp/cmux.sock (or CMUX_SOCKET_PATH) and exposes workspace/surface
- * management for launching Claude Code instances from the dashboard.
+ * Socket path resolution: CMUX_SOCKET_PATH env > /tmp/cmux-last-socket-path file > default.
+ * cmux writes its actual socket path to /tmp/cmux-last-socket-path on startup.
  */
 
 import { Socket } from "node:net";
+import { readFileSync } from "node:fs";
 
-const CMUX_SOCKET = process.env.CMUX_SOCKET_PATH ?? "/tmp/cmux.sock";
+function resolveCmuxSocket(): string {
+  if (process.env.CMUX_SOCKET_PATH) return process.env.CMUX_SOCKET_PATH;
+  try {
+    return readFileSync("/tmp/cmux-last-socket-path", "utf-8").trim();
+  } catch {
+    return "/tmp/cmux.sock";
+  }
+}
+
+const CMUX_SOCKET = resolveCmuxSocket();
 
 let requestId = 0;
 
@@ -15,7 +25,13 @@ interface CmuxResponse {
   id: string;
   ok: boolean;
   result?: unknown;
-  error?: string;
+  error?: unknown;
+}
+
+function errorMessage(res: CmuxResponse, fallback: string): string {
+  if (!res.error) return fallback;
+  if (typeof res.error === "string") return res.error;
+  return JSON.stringify(res.error);
 }
 
 function rpc(method: string, params: Record<string, unknown> = {}): Promise<CmuxResponse> {
@@ -65,14 +81,14 @@ export async function isCmuxAvailable(): Promise<boolean> {
 
 export async function listWorkspaces(): Promise<{ id: string; name: string }[]> {
   const res = await rpc("workspace.list");
-  if (!res.ok) throw new Error(res.error ?? "Failed to list workspaces");
+  if (!res.ok) throw new Error(errorMessage(res, "Failed to list workspaces"));
   const result = res.result as { workspaces: { id: string; name: string }[] };
   return result.workspaces ?? [];
 }
 
 export async function createWorkspace(name: string): Promise<string> {
   const res = await rpc("workspace.create", { name });
-  if (!res.ok) throw new Error(res.error ?? "Failed to create workspace");
+  if (!res.ok) throw new Error(errorMessage(res, "Failed to create workspace"));
   // cmux API returns workspace_id or id depending on version
   const result = res.result as { workspace_id?: string; id?: string };
   return result.workspace_id ?? result.id ?? "";
@@ -82,19 +98,19 @@ export async function sendText(text: string, surfaceId?: string): Promise<void> 
   const params: Record<string, unknown> = { text };
   if (surfaceId) params.surface = surfaceId;
   const res = await rpc("surface.send_text", params);
-  if (!res.ok) throw new Error(res.error ?? "Failed to send text");
+  if (!res.ok) throw new Error(errorMessage(res, "Failed to send text"));
 }
 
 export async function sendKey(key: string, surfaceId?: string): Promise<void> {
   const params: Record<string, unknown> = { key };
   if (surfaceId) params.surface = surfaceId;
   const res = await rpc("surface.send_key", params);
-  if (!res.ok) throw new Error(res.error ?? "Failed to send key");
+  if (!res.ok) throw new Error(errorMessage(res, "Failed to send key"));
 }
 
 export async function selectWorkspace(workspaceId: string): Promise<void> {
-  const res = await rpc("workspace.select", { workspace: workspaceId });
-  if (!res.ok) throw new Error(res.error ?? "Failed to select workspace");
+  const res = await rpc("workspace.select", { workspace_id: workspaceId });
+  if (!res.ok) throw new Error(errorMessage(res, "Failed to select workspace"));
 }
 
 export interface LaunchOptions {
