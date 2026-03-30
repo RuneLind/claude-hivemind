@@ -19,13 +19,12 @@ Modules don't reference `server` or `peerSockets` via closure. Instead, a `Broke
 
 ```typescript
 interface BrokerContext {
-  db: Database;
   server: import("bun").Server;
   peerSockets: Map<string, ServerWebSocket<WSData>>;
-  publish(channel: string, data: string): void;
-  log(msg: string): void;
 }
 ```
+
+Use `ctx.server.publish()` to broadcast. Use the standalone `log()` function from `peers.ts` for logging. The `handleDashboardMessage` function takes a `DashboardDeps` object bundling all statement and state dependencies.
 
 ## Statement objects
 

@@ -71,10 +71,11 @@ export async function pollServiceHealth(
         } catch {
           newStatus = "down";
         }
+        if (newStatus === svc.status) return;
         const now = new Date().toISOString();
         svcStmts.updateServiceStatus.run(newStatus, now, svc.peer_id);
         const updated: ServiceInfo = { ...svc, status: newStatus, last_check: now };
-        ctx.publish(
+        ctx.server.publish(
           "dashboard",
           JSON.stringify({ type: "service_update", service: updated } satisfies DashboardMessage)
         );

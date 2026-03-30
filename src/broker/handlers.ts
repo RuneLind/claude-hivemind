@@ -20,13 +20,12 @@ import {
 } from "../shared/types.ts";
 import { isCmuxAvailable, listWorkspaces, launchClaudeInstance } from "../cmux/client.ts";
 import { readdirSync, statSync, readFileSync } from "node:fs";
-import type { BrokerContext, PeerWSData, WSData } from "./db.ts";
+import { WS_OPEN, type BrokerContext, type PeerWSData, type WSData } from "./db.ts";
 import {
   generateId,
   getPeer,
   getAllPeers,
   isProcessAlive,
-  namespacesFromPeers,
   getMessageStats,
   deliverOrQueue,
   log,
@@ -39,8 +38,6 @@ import type { DockerState, DockerLogSubscriptionState } from "./docker.ts";
 import { runDockerCommand, subscribeDockerLogs, unsubscribeDockerLogs } from "./docker.ts";
 import type { LogSubscriptionState } from "./logs.ts";
 import { subscribeLogs, unsubscribeLogs } from "./logs.ts";
-
-const WS_OPEN = 1;
 const SOURCE_DIR = `${process.env.HOME}/source`;
 
 // --- cmux state ---
@@ -76,7 +73,7 @@ export async function pollCmuxStatus(ctx: BrokerContext, state: CmuxState): Prom
 }
 
 function publishCmuxStatus(ctx: BrokerContext, state: CmuxState): void {
-  ctx.publish(
+  ctx.server.publish(
     "dashboard",
     JSON.stringify({
       type: "cmux_status",
@@ -183,8 +180,8 @@ export function handlePeerMessage(
 
       const peer = getPeer(peerStmts, id)!;
       const joinMsg = JSON.stringify({ type: "peer_joined", peer });
-      ctx.publish(`ns:${msg.namespace}`, joinMsg);
-      ctx.publish(
+      ctx.server.publish(`ns:${msg.namespace}`, joinMsg);
+      ctx.server.publish(
         "dashboard",
         JSON.stringify({
           type: "peer_joined",
@@ -192,7 +189,7 @@ export function handlePeerMessage(
         } satisfies DashboardMessage)
       );
 
-      ctx.log(`Peer ${id} registered (ns: ${msg.namespace}, cwd: ${msg.cwd})`);
+      log(`Peer ${id} registered (ns: ${msg.namespace}, cwd: ${msg.cwd})`);
       break;
     }
 
@@ -203,8 +200,8 @@ export function handlePeerMessage(
       if (peer) {
         peerStmts.upsertSummary.run(peer.cwd, msg.summary, new Date().toISOString());
         const updateMsg = JSON.stringify({ type: "peer_updated", peer });
-        ctx.publish(`ns:${ws.data.namespace}`, updateMsg);
-        ctx.publish("dashboard", updateMsg);
+        ctx.server.publish(`ns:${ws.data.namespace}`, updateMsg);
+        ctx.server.publish("dashboard", updateMsg);
       }
       break;
     }
@@ -238,7 +235,7 @@ export function handlePeerMessage(
       deliverOrQueue(ctx, peerStmts, msgStmts, fromId, msg.to, msg.text, now);
 
       const stats = getMessageStats(msgStmts);
-      ctx.publish(
+      ctx.server.publish(
         "dashboard",
         JSON.stringify({
           type: "message_sent",
@@ -297,11 +294,11 @@ export function handlePeerMessage(
         status: "unknown",
         last_check: null,
       };
-      ctx.publish(
+      ctx.server.publish(
         "dashboard",
         JSON.stringify({ type: "service_update", service } satisfies DashboardMessage)
       );
-      ctx.log(`Service registered for ${ws.data.peerId} on port ${msg.port}`);
+      log(`Service registered for ${ws.data.peerId} on port ${msg.port}`);
       break;
     }
   }
@@ -309,18 +306,23 @@ export function handlePeerMessage(
 
 // --- Dashboard message handler ---
 
+export interface DashboardDeps {
+  ctx: BrokerContext;
+  peerStmts: PeerStatements;
+  msgStmts: MessageStatements;
+  svcStmts: ServiceStatements;
+  dockerState: DockerState;
+  dockerLogSubs: DockerLogSubscriptionState;
+  logSubState: LogSubscriptionState;
+  cmuxState: CmuxState;
+}
+
 export function handleDashboardMessage(
   msg: DashboardClientMessage,
   ws: import("bun").ServerWebSocket<WSData>,
-  ctx: BrokerContext,
-  peerStmts: PeerStatements,
-  msgStmts: MessageStatements,
-  svcStmts: ServiceStatements,
-  dockerState: DockerState,
-  dockerLogSubs: DockerLogSubscriptionState,
-  logSubState: LogSubscriptionState,
-  cmuxState: CmuxState,
+  deps: DashboardDeps,
 ): void {
+  const { ctx, peerStmts, msgStmts, svcStmts, dockerState, dockerLogSubs, logSubState, cmuxState } = deps;
   switch (msg.type) {
     case "send_to_peer": {
       const peer = getPeer(peerStmts, msg.peer_id);
@@ -337,20 +339,20 @@ export function handleDashboardMessage(
             sent_at: new Date().toISOString(),
           } satisfies BrokerMessage)
         );
-        ctx.log(`Dashboard sent message to ${msg.peer_id}`);
+        log(`Dashboard sent message to ${msg.peer_id}`);
       }
       break;
     }
 
     case "subscribe_logs": {
-      subscribeLogs(logSubState, peerStmts, svcStmts, msg.peer_id, ws).catch((e) => ctx.log(`Log subscribe error: ${e}`));
-      ctx.log(`Dashboard subscribed to logs for ${msg.peer_id}`);
+      subscribeLogs(logSubState, peerStmts, svcStmts, msg.peer_id, ws).catch((e) => log(`Log subscribe error: ${e}`));
+      log(`Dashboard subscribed to logs for ${msg.peer_id}`);
       break;
     }
 
     case "unsubscribe_logs": {
       unsubscribeLogs(logSubState, msg.peer_id, ws);
-      ctx.log(`Dashboard unsubscribed from logs for ${msg.peer_id}`);
+      log(`Dashboard unsubscribed from logs for ${msg.peer_id}`);
       break;
     }
 
@@ -368,43 +370,43 @@ export function handleDashboardMessage(
           } catch { /* file may not exist yet */ }
         }
       }
-      ctx.publish(
+      ctx.server.publish(
         "dashboard",
         JSON.stringify({ type: "baseline_set", namespace: msg.namespace, baseline_at: now } satisfies DashboardMessage)
       );
-      ctx.log(`Baseline set for namespace ${msg.namespace}`);
+      log(`Baseline set for namespace ${msg.namespace}`);
       break;
     }
 
     case "clear_baseline": {
       svcStmts.deleteBaseline.run(msg.namespace);
       svcStmts.deleteBaselineOffsets.run(msg.namespace);
-      ctx.publish(
+      ctx.server.publish(
         "dashboard",
         JSON.stringify({ type: "baseline_cleared", namespace: msg.namespace } satisfies DashboardMessage)
       );
-      ctx.log(`Baseline cleared for namespace ${msg.namespace}`);
+      log(`Baseline cleared for namespace ${msg.namespace}`);
       break;
     }
 
     case "subscribe_docker_logs": {
       subscribeDockerLogs(dockerState, dockerLogSubs, msg.containerId, ws);
-      ctx.log(`Dashboard subscribed to Docker logs for ${msg.containerId}`);
+      log(`Dashboard subscribed to Docker logs for ${msg.containerId}`);
       break;
     }
 
     case "unsubscribe_docker_logs": {
       unsubscribeDockerLogs(dockerLogSubs, msg.containerId, ws);
-      ctx.log(`Dashboard unsubscribed from Docker logs for ${msg.containerId}`);
+      log(`Dashboard unsubscribed from Docker logs for ${msg.containerId}`);
       break;
     }
 
     case "stop_docker_container": {
       const container = dockerState.containers.get(msg.containerId);
       const name = container?.name ?? msg.containerId;
-      ctx.log(`Stopping Docker container ${name}`);
+      log(`Stopping Docker container ${name}`);
       runDockerCommand(["stop", name]).then(() => {
-        ctx.log(`Docker container ${name} stopped`);
+        log(`Docker container ${name} stopped`);
       });
       break;
     }
@@ -412,58 +414,23 @@ export function handleDashboardMessage(
     case "stop_service": {
       const svc = svcStmts.selectServiceByPeer.get(msg.peer_id) as ServiceInfo | undefined;
       if (!svc) break;
-      ctx.log(`Stopping service on port ${svc.port} (peer: ${msg.peer_id})`);
+      log(`Stopping service on port ${svc.port} (peer: ${msg.peer_id})`);
       (async () => {
         try {
           const killProc = Bun.spawn(["sh", "-c", `lsof -i :${svc.port} -t | xargs kill -9 2>/dev/null`], {
             stdout: "pipe", stderr: "pipe",
           });
           await killProc.exited;
-          ctx.log(`Killed processes on port ${svc.port}`);
+          log(`Killed processes on port ${svc.port}`);
           setTimeout(() => pollServiceHealth(ctx, peerStmts, svcStmts), 500);
         } catch (e) {
-          ctx.log(`Error stopping service on port ${svc.port}: ${e}`);
+          log(`Error stopping service on port ${svc.port}: ${e}`);
         }
       })();
       break;
     }
 
-    case "launch_claude_instance": {
-      if (!cmuxState.available) {
-        ws.send(JSON.stringify({
-          type: "cmux_launch_result",
-          ok: false,
-          error: "cmux is not running",
-        } satisfies DashboardMessage));
-        break;
-      }
-      ctx.log(`Launching Claude Code instance in ${msg.directory} via cmux`);
-      (async () => {
-        try {
-          const { workspaceId } = await launchClaudeInstance({
-            directory: msg.directory,
-            name: msg.name,
-            prompt: msg.prompt,
-          });
-          ctx.log(`Launched cmux workspace ${workspaceId} for ${msg.directory}`);
-          ws.send(JSON.stringify({
-            type: "cmux_launch_result",
-            ok: true,
-            workspaceId,
-          } satisfies DashboardMessage));
-        } catch (e) {
-          const error = e instanceof Error ? e.message : String(e);
-          ctx.log(`Failed to launch Claude instance: ${error}`);
-          ws.send(JSON.stringify({
-            type: "cmux_launch_result",
-            ok: false,
-            error,
-          } satisfies DashboardMessage));
-        }
-      })();
-      break;
-    }
-
+    case "launch_claude_instance":
     case "launch_claude_instances": {
       if (!cmuxState.available) {
         ws.send(JSON.stringify({
@@ -473,14 +440,16 @@ export function handleDashboardMessage(
         } satisfies DashboardMessage));
         break;
       }
-      const dirs = msg.directories;
+      const dirs = msg.type === "launch_claude_instances"
+        ? msg.directories
+        : [{ directory: msg.directory, name: msg.name }];
       const sharedPrompt = msg.prompt;
-      ctx.log(`Launching ${dirs.length} Claude Code instances via cmux`);
+      log(`Launching ${dirs.length} Claude Code instance(s) via cmux`);
       (async () => {
         for (const { directory, name } of dirs) {
           try {
             const { workspaceId } = await launchClaudeInstance({ directory, name, prompt: sharedPrompt });
-            ctx.log(`Launched cmux workspace ${workspaceId} for ${directory}`);
+            log(`Launched cmux workspace ${workspaceId} for ${directory}`);
             ws.send(JSON.stringify({
               type: "cmux_launch_result",
               ok: true,
@@ -488,7 +457,7 @@ export function handleDashboardMessage(
             } satisfies DashboardMessage));
           } catch (e) {
             const error = e instanceof Error ? e.message : String(e);
-            ctx.log(`Failed to launch instance in ${directory}: ${error}`);
+            log(`Failed to launch instance in ${directory}: ${error}`);
             ws.send(JSON.stringify({
               type: "cmux_launch_result",
               ok: false,

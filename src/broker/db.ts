@@ -4,16 +4,15 @@
 
 import { Database } from "bun:sqlite";
 
+export const WS_OPEN = 1;
+
 export type PeerWSData = { kind: "peer"; peerId: string | null; namespace: string };
 export type DashboardWSData = { kind: "dashboard" };
 export type WSData = PeerWSData | DashboardWSData;
 
 export interface BrokerContext {
-  db: Database;
   server: import("bun").Server;
   peerSockets: Map<string, import("bun").ServerWebSocket<WSData>>;
-  publish(channel: string, data: string): void;
-  log(msg: string): void;
 }
 
 export function initDatabase(dbPath: string): Database {

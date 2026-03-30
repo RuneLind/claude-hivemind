@@ -3,12 +3,9 @@
  */
 
 import type { ServiceInfo, LogLine, LogLevel, DashboardMessage } from "../shared/types.ts";
-import type { BrokerContext, WSData } from "./db.ts";
+import { WS_OPEN, type WSData } from "./db.ts";
 import type { ServiceStatements } from "./services.ts";
-import { getPeer, type PeerStatements } from "./peers.ts";
-import { log } from "./peers.ts";
-
-const WS_OPEN = 1;
+import { getPeer, log, type PeerStatements } from "./peers.ts";
 
 export const ANSI_RE = /\x1b\[[0-9;]*m/g;
 const SPRING_LOG_RE = /^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[.\d]*|[\d]{2}:\d{2}:\d{2}[,.\d]*)\s+(ERROR|WARN|INFO|DEBUG|TRACE)\s+(.*)$/;

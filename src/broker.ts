@@ -54,6 +54,7 @@ import {
   createCmuxState,
   pollCmuxStatus,
   scanReposInDirectory,
+  type DashboardDeps,
 } from "./broker/handlers.ts";
 
 // --- Configuration ---
@@ -223,7 +224,7 @@ const server = Bun.serve<WSData>({
     "/api/messages/clear": {
       POST() {
         msgStmts.deleteAllMessages.run();
-        ctx.publish(
+        server.publish(
           "dashboard",
           JSON.stringify({ type: "messages_cleared" } satisfies DashboardMessage)
         );
@@ -373,14 +374,7 @@ const server = Bun.serve<WSData>({
           handleDashboardMessage(
             data,
             ws as import("bun").ServerWebSocket<WSData>,
-            ctx,
-            peerStmts,
-            msgStmts,
-            svcStmts,
-            dockerState,
-            dockerLogSubs,
-            logSubState,
-            cmuxState,
+            dashboardDeps,
           );
         } catch (e) {
           log(`Invalid dashboard message: ${e}`);
@@ -400,11 +394,11 @@ const server = Bun.serve<WSData>({
         peerSockets.delete(peerId);
         peerStmts.markConnected.run(0, peerId);
 
-        ctx.publish(
+        server.publish(
           `ns:${namespace}`,
           JSON.stringify({ type: "peer_left", peer_id: peerId })
         );
-        ctx.publish(
+        server.publish(
           "dashboard",
           JSON.stringify({
             type: "peer_left",
@@ -430,12 +424,11 @@ const server = Bun.serve<WSData>({
 
 // --- Assemble context (after Bun.serve creates server) ---
 
-const ctx: BrokerContext = {
-  db,
-  server,
-  peerSockets,
-  publish: (channel, data) => server.publish(channel, data),
-  log,
+const ctx: BrokerContext = { server, peerSockets };
+
+const dashboardDeps: DashboardDeps = {
+  ctx, peerStmts, msgStmts, svcStmts,
+  dockerState, dockerLogSubs, logSubState, cmuxState,
 };
 
 // --- Start background tasks ---

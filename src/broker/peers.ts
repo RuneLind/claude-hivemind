@@ -10,9 +10,7 @@ import type {
   PeerMessageStats,
   PairMessageStats,
 } from "../shared/types.ts";
-import type { BrokerContext, WSData } from "./db.ts";
-
-const WS_OPEN = 1;
+import { WS_OPEN, type BrokerContext } from "./db.ts";
 
 export function log(msg: string) {
   console.error(`[claude-hivemind broker] ${msg}`);

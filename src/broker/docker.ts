@@ -3,11 +3,11 @@
  */
 
 import type { DockerContainer, DockerContainerLogStats, LogLine, DashboardMessage } from "../shared/types.ts";
-import type { BrokerContext, WSData } from "./db.ts";
+import { WS_OPEN, type BrokerContext, type WSData } from "./db.ts";
 import { log } from "./peers.ts";
 import { ANSI_RE, PLAIN_LEVEL_RE, parseLogLine } from "./logs.ts";
 
-const WS_OPEN = 1;
+const DOCKER_TS_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z?)\s+(.*)/;
 
 export interface DockerState {
   containers: Map<string, DockerContainer>;
@@ -15,9 +15,11 @@ export interface DockerState {
   available: boolean;
   polling: boolean;
   eventProc: ReturnType<typeof Bun.spawn> | null;
-  lastDockerJson: string;
-  lastDockerLogStatsJson: string;
 }
+
+// Internal change-detection state (not part of public DockerState)
+let lastDockerJson = "";
+let lastDockerLogStatsJson = "";
 
 export function createDockerState(): DockerState {
   return {
@@ -26,8 +28,6 @@ export function createDockerState(): DockerState {
     available: false,
     polling: false,
     eventProc: null,
-    lastDockerJson: "",
-    lastDockerLogStatsJson: "",
   };
 }
 
@@ -104,7 +104,7 @@ async function pollDockerContainers(ctx: BrokerContext, state: DockerState): Pro
       if (state.containers.size > 0) {
         state.containers.clear();
         state.logStats.clear();
-        ctx.publish("dashboard", JSON.stringify({
+        ctx.server.publish("dashboard", JSON.stringify({
           type: "docker_update",
           containers: [],
         } satisfies DashboardMessage));
@@ -165,9 +165,9 @@ async function pollDockerContainers(ctx: BrokerContext, state: DockerState): Pro
 
     const containers = Array.from(state.containers.values());
     const json = JSON.stringify(containers);
-    if (json !== state.lastDockerJson) {
-      state.lastDockerJson = json;
-      ctx.publish("dashboard", JSON.stringify({
+    if (json !== lastDockerJson) {
+      lastDockerJson = json;
+      ctx.server.publish("dashboard", JSON.stringify({
         type: "docker_update",
         containers,
       } satisfies DashboardMessage));
@@ -211,9 +211,9 @@ async function pollDockerLogStats(ctx: BrokerContext, state: DockerState): Promi
 
   if (results.length > 0) {
     const json = JSON.stringify(results);
-    if (json !== state.lastDockerLogStatsJson) {
-      state.lastDockerLogStatsJson = json;
-      ctx.publish("dashboard", JSON.stringify({
+    if (json !== lastDockerLogStatsJson) {
+      lastDockerLogStatsJson = json;
+      ctx.server.publish("dashboard", JSON.stringify({
         type: "docker_log_stats",
         logStats: results,
       } satisfies DashboardMessage));
@@ -258,7 +258,7 @@ function startDockerEventStream(ctx: BrokerContext, state: DockerState): void {
                 log(`Docker event: ${name ?? containerId} ${action}`);
                 setTimeout(() => pollDockerContainers(ctx, state), 500);
 
-                ctx.publish("dashboard", JSON.stringify({
+                ctx.server.publish("dashboard", JSON.stringify({
                   type: "docker_event",
                   containerId: containerId ?? "",
                   container: null,
@@ -286,13 +286,11 @@ function startDockerEventStream(ctx: BrokerContext, state: DockerState): void {
 
 class DockerLogTailer {
   private proc: ReturnType<typeof Bun.spawn> | null = null;
-  private containerId: string;
   private containerName: string;
   private onLines: (lines: LogLine[]) => void;
   private stopped = false;
 
-  constructor(containerId: string, containerName: string, onLines: (lines: LogLine[]) => void) {
-    this.containerId = containerId;
+  constructor(containerName: string, onLines: (lines: LogLine[]) => void) {
     this.containerName = containerName;
     this.onLines = onLines;
     this.start();
@@ -337,7 +335,6 @@ class DockerLogTailer {
 
   private parseDockerLine(raw: string): LogLine {
     const clean = raw.replace(ANSI_RE, "");
-    const DOCKER_TS_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z?)\s+(.*)/;
     const tsMatch = clean.match(DOCKER_TS_RE);
     const message = tsMatch ? tsMatch[2] : clean;
     const result = parseLogLine(message, "auto");
@@ -379,7 +376,7 @@ export function subscribeDockerLogs(
   }
 
   const subscribers = new Set<import("bun").ServerWebSocket<WSData>>([ws]);
-  const tailer = new DockerLogTailer(containerId, container.name, (lines) => {
+  const tailer = new DockerLogTailer(container.name, (lines) => {
     const msg = JSON.stringify({
       type: "docker_log_lines",
       containerId,
