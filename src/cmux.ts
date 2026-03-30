@@ -141,6 +141,7 @@ export async function launchClaudeInstance(opts: LaunchOptions): Promise<{ works
     "&&",
     "CLAUDE_HIVEMIND=1",
     "claude",
+    `--name ${JSON.stringify(name)}`,
     "--dangerously-load-development-channels server:claude-hivemind",
     ...flags,
   ].join(" ");
