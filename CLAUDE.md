@@ -4,7 +4,8 @@ Peer discovery and messaging for Claude Code instances, with namespace isolation
 
 ## Architecture
 
-- `src/broker.ts` — Singleton HTTP + WebSocket server on localhost:7899, backed by SQLite. Serves dashboard, routes messages, enforces namespace isolation. Also monitors Docker Compose containers and registered services.
+- `src/broker.ts` — Entry point for the broker daemon (HTTP + WebSocket on localhost:7899). Wires together modules from `src/broker/`.
+- `src/broker/` — Broker internals: database schema (`db.ts`), peer lifecycle (`peers.ts`), service health (`services.ts`), Docker monitoring (`docker.ts`), log tailing (`logs.ts`), WS message handlers (`handlers.ts`). See `src/broker/CLAUDE.md`.
 - `src/server.ts` — MCP stdio server, one per Claude Code instance. Connects to broker via WebSocket, pushes inbound messages via channel notifications.
 - `src/cli.ts` — CLI utility for inspecting broker state and managing peers.
 - `src/dashboard/` — Web dashboard (vanilla TypeScript, server-rendered HTML) showing peers grouped by namespace, Docker containers grouped by Compose project, service health, and log streaming.
