@@ -174,12 +174,15 @@ export function stateScript(): string {
         case 'cmux_launch_result':
           if (msg.ok) {
             addActivity('Launched Claude instance (workspace: ' + (msg.workspaceId || '?') + ')');
-            closeLaunchModal();
           } else {
             addActivity('Failed to launch: ' + (msg.error || 'unknown'));
             var errEl = document.getElementById('launchError');
             if (errEl) { errEl.textContent = msg.error || 'Launch failed'; errEl.style.display = ''; }
           }
+          break;
+
+        case 'scan_repos_result':
+          if (typeof handleScanResult === 'function') handleScanResult(msg.repos || []);
           break;
 
       }

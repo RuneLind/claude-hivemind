@@ -32,9 +32,11 @@ import type {
   DockerContainer,
   DockerContainerLogStats,
   CmuxWorkspace,
+  ScannedRepo,
 } from "./shared/types.ts";
 import { renderDashboardPage } from "./dashboard/views/page.ts";
-import { isCmuxAvailable, listWorkspaces, launchClaudeInstance } from "./cmux.ts";
+import { isCmuxAvailable, listWorkspaces, launchClaudeInstance } from "./cmux/client.ts";
+import { readdirSync, statSync, readFileSync } from "node:fs";
 
 const dashboardHtml = renderDashboardPage();
 const PORT = parseInt(process.env.CLAUDE_HIVEMIND_PORT ?? "7899", 10);
@@ -370,6 +372,41 @@ let dockerPolling = false;
 let dockerEventProc: ReturnType<typeof Bun.spawn> | null = null;
 let lastDockerJson = "";
 let lastDockerLogStatsJson = "";
+
+// --- repo scanning ---
+const SOURCE_DIR = `${process.env.HOME}/source`;
+
+function scanReposInDirectory(dir: string): ScannedRepo[] {
+  let fullPath = dir.startsWith("/") ? dir : `${SOURCE_DIR}/${dir}`;
+
+  let entries: string[];
+  try { entries = readdirSync(fullPath); } catch { return []; }
+
+  const repos: ScannedRepo[] = [];
+  for (const entry of entries) {
+    const entryPath = `${fullPath}/${entry}`;
+    try {
+      if (!statSync(entryPath).isDirectory()) continue;
+      // .git must exist (as directory or worktree file)
+      statSync(`${entryPath}/.git`);
+    } catch { continue; }
+
+    let branch: string | null = null;
+    try {
+      // Handle worktrees: .git can be a file pointing to the real gitdir
+      let gitDir = `${entryPath}/.git`;
+      if (!statSync(gitDir).isDirectory()) {
+        const m = readFileSync(gitDir, "utf-8").trim().match(/^gitdir:\s*(.+)$/);
+        if (m) gitDir = m[1];
+      }
+      const head = readFileSync(`${gitDir}/HEAD`, "utf-8").trim();
+      const match = head.match(/^ref: refs\/heads\/(.+)$/);
+      branch = match ? match[1] : head.slice(0, 8);
+    } catch { /* no branch info */ }
+    repos.push({ name: entry, path: entryPath, branch });
+  }
+  return repos.sort((a, b) => a.name.localeCompare(b.name));
+}
 
 // --- cmux state ---
 let cmuxAvailable = false;
@@ -1347,6 +1384,51 @@ function handleDashboardMessage(msg: DashboardClientMessage, ws: import("bun").S
       break;
     }
 
+    case "launch_claude_instances": {
+      if (!cmuxAvailable) {
+        ws.send(JSON.stringify({
+          type: "cmux_launch_result",
+          ok: false,
+          error: "cmux is not running",
+        } satisfies DashboardMessage));
+        break;
+      }
+      const dirs = msg.directories;
+      const sharedPrompt = msg.prompt;
+      log(`Launching ${dirs.length} Claude Code instances via cmux`);
+      (async () => {
+        for (const { directory, name } of dirs) {
+          try {
+            const { workspaceId } = await launchClaudeInstance({ directory, name, prompt: sharedPrompt });
+            log(`Launched cmux workspace ${workspaceId} for ${directory}`);
+            ws.send(JSON.stringify({
+              type: "cmux_launch_result",
+              ok: true,
+              workspaceId,
+            } satisfies DashboardMessage));
+          } catch (e) {
+            const error = e instanceof Error ? e.message : String(e);
+            log(`Failed to launch instance in ${directory}: ${error}`);
+            ws.send(JSON.stringify({
+              type: "cmux_launch_result",
+              ok: false,
+              error: `${name ?? directory}: ${error}`,
+            } satisfies DashboardMessage));
+          }
+        }
+      })();
+      break;
+    }
+
+    case "scan_repos": {
+      const repos = scanReposInDirectory(msg.directory);
+      ws.send(JSON.stringify({
+        type: "scan_repos_result",
+        repos,
+      } satisfies DashboardMessage));
+      break;
+    }
+
   }
 }
 
@@ -1542,6 +1624,16 @@ const server = Bun.serve<WSData>({
         available: cmuxAvailable,
         workspaces: cmuxWorkspaces,
       });
+    },
+
+    "/api/scan-repos": {
+      GET(req) {
+        const url = new URL(req.url);
+        const dir = url.searchParams.get("dir");
+        if (!dir) return Response.json({ error: "dir required" }, { status: 400 });
+        const repos = scanReposInDirectory(dir);
+        return Response.json({ repos });
+      },
     },
   },
 
