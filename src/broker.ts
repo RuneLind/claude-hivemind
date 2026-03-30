@@ -35,7 +35,7 @@ import type {
   ScannedRepo,
 } from "./shared/types.ts";
 import { renderDashboardPage } from "./dashboard/views/page.ts";
-import { isCmuxAvailable, listWorkspaces, launchClaudeInstance } from "./cmux.ts";
+import { isCmuxAvailable, listWorkspaces, launchClaudeInstance } from "./cmux/client.ts";
 import { readdirSync, statSync, existsSync } from "node:fs";
 
 const dashboardHtml = renderDashboardPage();

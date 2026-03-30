@@ -8,7 +8,7 @@ Peer discovery and messaging for Claude Code instances, with namespace isolation
 - `src/server.ts` — MCP stdio server, one per Claude Code instance. Connects to broker via WebSocket, pushes inbound messages via channel notifications.
 - `src/cli.ts` — CLI utility for inspecting broker state and managing peers.
 - `src/dashboard/` — Web dashboard (vanilla TypeScript, server-rendered HTML) showing peers grouped by namespace, Docker containers grouped by Compose project, service health, and log streaming.
-- `src/cmux.ts` — JSON-RPC client for cmux terminal multiplexer. Connects to `/tmp/cmux.sock` to create workspaces and launch Claude Code instances from the dashboard.
+- `src/cmux/` — JSON-RPC client for cmux terminal multiplexer. Creates workspaces and launches Claude Code instances from the dashboard. See `src/cmux/CLAUDE.md`.
 - `src/shared/types.ts` — WebSocket protocol types (client/broker/dashboard message unions).
 - `src/shared/namespace.ts` — Namespace resolution from CWD (auto-derives from ~/source/<group>/).
 
