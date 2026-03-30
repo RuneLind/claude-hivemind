@@ -86,27 +86,20 @@ function publishCmuxStatus(ctx: BrokerContext, state: CmuxState): void {
 
 // --- launch profiles ---
 
-export interface ProfileStatements {
-  insertProfile: import("bun:sqlite").Statement;
-  updateProfile: import("bun:sqlite").Statement;
-  deleteProfile: import("bun:sqlite").Statement;
-  selectAllProfiles: import("bun:sqlite").Statement;
-  selectProfileByName: import("bun:sqlite").Statement;
-}
-
-export function createProfileStatements(db: import("bun:sqlite").Database): ProfileStatements {
+export function createProfileStatements(db: import("bun:sqlite").Database) {
   return {
-    insertProfile: db.prepare(
-      `INSERT INTO launch_profiles (id, name, directory, repos, prompt, created_at) VALUES (?, ?, ?, ?, ?, ?)`
-    ),
-    updateProfile: db.prepare(
-      `UPDATE launch_profiles SET directory = ?, repos = ?, prompt = ?, created_at = ? WHERE name = ?`
+    upsertProfile: db.prepare(
+      `INSERT INTO launch_profiles (id, name, directory, repos, prompt, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(name) DO UPDATE SET directory = excluded.directory, repos = excluded.repos, prompt = excluded.prompt, created_at = excluded.created_at
+       RETURNING id`
     ),
     deleteProfile: db.prepare(`DELETE FROM launch_profiles WHERE id = ?`),
     selectAllProfiles: db.prepare(`SELECT * FROM launch_profiles ORDER BY name`),
-    selectProfileByName: db.prepare(`SELECT * FROM launch_profiles WHERE name = ?`),
   };
 }
+
+export type ProfileStatements = ReturnType<typeof createProfileStatements>;
 
 function rowToProfile(row: any): LaunchProfile {
   return {
@@ -489,7 +482,7 @@ export function handleDashboardMessage(
       (async () => {
         for (let i = 0; i < dirs.length; i++) {
           const { directory, name } = dirs[i];
-          // Stagger launches so auto-confirm timers don't overlap
+          // Stagger launches to reduce CPU/IO contention during startup
           if (i > 0) await new Promise(r => setTimeout(r, 1500));
           try {
             const { workspaceId } = await launchClaudeInstance({ directory, name, prompt: sharedPrompt });
@@ -524,15 +517,17 @@ export function handleDashboardMessage(
 
     case "save_profile": {
       const now = new Date().toISOString();
-      const existing = profileStmts.selectProfileByName.get(msg.name) as any | null;
-      if (existing) {
-        profileStmts.updateProfile.run(msg.directory, JSON.stringify(msg.repos), msg.prompt || "", now, msg.name);
-      } else {
-        const id = crypto.randomUUID().slice(0, 8);
-        profileStmts.insertProfile.run(id, msg.name, msg.directory, JSON.stringify(msg.repos), msg.prompt || "", now);
-      }
-      const row = profileStmts.selectProfileByName.get(msg.name) as any;
-      const profile = rowToProfile(row);
+      const id = crypto.randomUUID().slice(0, 8);
+      const prompt = msg.prompt || "";
+      const row = profileStmts.upsertProfile.get(id, msg.name, msg.directory, JSON.stringify(msg.repos), prompt, now) as { id: string };
+      const profile: LaunchProfile = {
+        id: row.id,
+        name: msg.name,
+        directory: msg.directory,
+        repos: msg.repos,
+        prompt,
+        created_at: now,
+      };
       ctx.server.publish(
         "dashboard",
         JSON.stringify({ type: "profile_saved", profile } satisfies DashboardMessage)

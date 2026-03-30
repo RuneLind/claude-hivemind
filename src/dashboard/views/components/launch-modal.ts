@@ -339,7 +339,7 @@ export function launchModalScript(): string {
     function renderProfileList() {
       var bar = $('profileBar');
       if (!bar) return;
-      var profiles = STATE.profiles || [];
+      var profiles = (STATE.profiles || []).slice().sort(function(a, b) { return a.name.localeCompare(b.name); });
       if (profiles.length === 0) {
         bar.innerHTML = '<span class="profile-bar-label">No saved profiles</span>';
         return;

@@ -189,7 +189,7 @@ export function stateScript(): string {
 
         case 'profiles_list':
           STATE.profiles = msg.profiles || [];
-          if (typeof renderProfileList === 'function') renderProfileList();
+          renderProfileList();
           break;
 
         case 'profile_saved': {
@@ -199,15 +199,14 @@ export function stateScript(): string {
           } else {
             STATE.profiles.push(msg.profile);
           }
-          STATE.profiles.sort(function(a, b) { return a.name.localeCompare(b.name); });
-          if (typeof renderProfileList === 'function') renderProfileList();
+          renderProfileList();
           addActivity('Profile saved: ' + msg.profile.name);
           break;
         }
 
         case 'profile_deleted':
           STATE.profiles = STATE.profiles.filter(function(p) { return p.id !== msg.profileId; });
-          if (typeof renderProfileList === 'function') renderProfileList();
+          renderProfileList();
           addActivity('Profile deleted');
           break;
 
