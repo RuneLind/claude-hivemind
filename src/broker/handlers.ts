@@ -12,6 +12,7 @@ import type {
   ServiceInfo,
   CmuxWorkspace,
   ScannedRepo,
+  LaunchProfile,
 } from "../shared/types.ts";
 import {
   DEFAULT_HEALTH_URL,
@@ -81,6 +82,45 @@ function publishCmuxStatus(ctx: BrokerContext, state: CmuxState): void {
       workspaces: state.workspaces,
     } satisfies DashboardMessage)
   );
+}
+
+// --- launch profiles ---
+
+export interface ProfileStatements {
+  insertProfile: import("bun:sqlite").Statement;
+  updateProfile: import("bun:sqlite").Statement;
+  deleteProfile: import("bun:sqlite").Statement;
+  selectAllProfiles: import("bun:sqlite").Statement;
+  selectProfileByName: import("bun:sqlite").Statement;
+}
+
+export function createProfileStatements(db: import("bun:sqlite").Database): ProfileStatements {
+  return {
+    insertProfile: db.prepare(
+      `INSERT INTO launch_profiles (id, name, directory, repos, prompt, created_at) VALUES (?, ?, ?, ?, ?, ?)`
+    ),
+    updateProfile: db.prepare(
+      `UPDATE launch_profiles SET directory = ?, repos = ?, prompt = ?, created_at = ? WHERE name = ?`
+    ),
+    deleteProfile: db.prepare(`DELETE FROM launch_profiles WHERE id = ?`),
+    selectAllProfiles: db.prepare(`SELECT * FROM launch_profiles ORDER BY name`),
+    selectProfileByName: db.prepare(`SELECT * FROM launch_profiles WHERE name = ?`),
+  };
+}
+
+function rowToProfile(row: any): LaunchProfile {
+  return {
+    id: row.id,
+    name: row.name,
+    directory: row.directory,
+    repos: JSON.parse(row.repos),
+    prompt: row.prompt,
+    created_at: row.created_at,
+  };
+}
+
+export function getAllProfiles(stmts: ProfileStatements): LaunchProfile[] {
+  return (stmts.selectAllProfiles.all() as any[]).map(rowToProfile);
 }
 
 // --- repo scanning ---
@@ -311,6 +351,7 @@ export interface DashboardDeps {
   peerStmts: PeerStatements;
   msgStmts: MessageStatements;
   svcStmts: ServiceStatements;
+  profileStmts: ProfileStatements;
   dockerState: DockerState;
   dockerLogSubs: DockerLogSubscriptionState;
   logSubState: LogSubscriptionState;
@@ -322,7 +363,7 @@ export function handleDashboardMessage(
   ws: import("bun").ServerWebSocket<WSData>,
   deps: DashboardDeps,
 ): void {
-  const { ctx, peerStmts, msgStmts, svcStmts, dockerState, dockerLogSubs, logSubState, cmuxState } = deps;
+  const { ctx, peerStmts, msgStmts, svcStmts, profileStmts, dockerState, dockerLogSubs, logSubState, cmuxState } = deps;
   switch (msg.type) {
     case "send_to_peer": {
       const peer = getPeer(peerStmts, msg.peer_id);
@@ -474,6 +515,44 @@ export function handleDashboardMessage(
       ws.send(JSON.stringify({
         type: "scan_repos_result",
         repos,
+      } satisfies DashboardMessage));
+      break;
+    }
+
+    case "save_profile": {
+      const now = new Date().toISOString();
+      const existing = profileStmts.selectProfileByName.get(msg.name) as any | null;
+      if (existing) {
+        profileStmts.updateProfile.run(msg.directory, JSON.stringify(msg.repos), msg.prompt || "", now, msg.name);
+      } else {
+        const id = crypto.randomUUID().slice(0, 8);
+        profileStmts.insertProfile.run(id, msg.name, msg.directory, JSON.stringify(msg.repos), msg.prompt || "", now);
+      }
+      const row = profileStmts.selectProfileByName.get(msg.name) as any;
+      const profile = rowToProfile(row);
+      ctx.server.publish(
+        "dashboard",
+        JSON.stringify({ type: "profile_saved", profile } satisfies DashboardMessage)
+      );
+      log(`Profile saved: ${msg.name}`);
+      break;
+    }
+
+    case "delete_profile": {
+      profileStmts.deleteProfile.run(msg.profileId);
+      ctx.server.publish(
+        "dashboard",
+        JSON.stringify({ type: "profile_deleted", profileId: msg.profileId } satisfies DashboardMessage)
+      );
+      log(`Profile deleted: ${msg.profileId}`);
+      break;
+    }
+
+    case "list_profiles": {
+      const profiles = getAllProfiles(profileStmts);
+      ws.send(JSON.stringify({
+        type: "profiles_list",
+        profiles,
       } satisfies DashboardMessage));
       break;
     }

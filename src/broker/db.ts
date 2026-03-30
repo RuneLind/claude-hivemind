@@ -87,5 +87,16 @@ export function initDatabase(dbPath: string): Database {
     )
   `);
 
+  db.run(`
+    CREATE TABLE IF NOT EXISTS launch_profiles (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      directory TEXT NOT NULL,
+      repos TEXT NOT NULL,
+      prompt TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL
+    )
+  `);
+
   return db;
 }

@@ -163,6 +163,10 @@ export function rendererScript(): string {
         e.preventDefault();
         scanRepos();
       }
+      if (e.key === 'Enter' && e.target && e.target.id === 'profileNameInput') {
+        e.preventDefault();
+        confirmSaveProfile();
+      }
     });
 
     // Single 30s interval for timestamp refresh + log stats polling

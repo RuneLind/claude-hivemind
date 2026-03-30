@@ -119,6 +119,59 @@ export function launchModalStyles(): string {
       cursor: pointer; transition: all 0.15s;
     }
     .launch-btn:hover { border-color: #3fb950; color: #3fb950; }
+    .profile-bar {
+      display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px;
+      padding-bottom: 12px; border-bottom: 1px solid #21262d;
+      min-height: 28px; align-items: center;
+    }
+    .profile-bar-label {
+      font-size: 11px; color: #484f58; margin-right: 4px;
+      white-space: nowrap;
+    }
+    .profile-pill {
+      display: inline-flex; align-items: center; gap: 4px;
+      background: #21262d; border: 1px solid #30363d;
+      color: #e6edf3; font-family: inherit; font-size: 11px;
+      padding: 3px 10px; border-radius: 12px;
+      cursor: pointer; transition: all 0.15s;
+    }
+    .profile-pill:hover { border-color: #58a6ff; color: #58a6ff; }
+    .profile-pill.active { border-color: #3fb950; color: #3fb950; }
+    .profile-pill .profile-delete {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 14px; height: 14px; border-radius: 50%;
+      font-size: 10px; line-height: 1; color: #484f58;
+      cursor: pointer; transition: all 0.15s;
+    }
+    .profile-pill .profile-delete:hover { color: #f85149; background: rgba(248,81,73,0.1); }
+    .profile-pill .profile-count {
+      font-size: 10px; color: #8b949e; font-weight: 400;
+    }
+    .save-profile-btn {
+      background: none; border: 1px solid #30363d; color: #8b949e;
+      font-family: inherit; font-size: 12px; padding: 4px 12px;
+      border-radius: 6px; cursor: pointer; transition: all 0.15s;
+    }
+    .save-profile-btn:hover { border-color: #58a6ff; color: #58a6ff; }
+    .save-profile-btn:disabled { opacity: 0.5; cursor: default; }
+    .save-profile-row {
+      display: none; align-items: center; gap: 8px; margin-top: 8px;
+    }
+    .save-profile-row.open { display: flex; }
+    .save-profile-row input {
+      flex: 1; background: #0d1117; border: 1px solid #30363d;
+      color: #e6edf3; font-family: inherit; font-size: 12px;
+      padding: 6px 8px; border-radius: 6px; outline: none;
+    }
+    .save-profile-row input:focus { border-color: #58a6ff; }
+    .save-profile-confirm {
+      background: #238636; border: 1px solid #238636; color: #fff;
+      font-family: inherit; font-size: 12px; padding: 6px 14px;
+      border-radius: 6px; cursor: pointer; transition: all 0.15s;
+      white-space: nowrap;
+    }
+    .save-profile-confirm:hover { background: #2ea043; }
+    .save-profile-confirm:disabled { opacity: 0.5; cursor: default; }
   `;
 }
 
@@ -127,6 +180,7 @@ export function launchModalHtml(): string {
     <div id="launchOverlay" class="launch-overlay" onclick="if(event.target===this)closeLaunchModal()">
       <div class="launch-modal">
         <h3>Launch Agents <span class="cmux-badge">via cmux</span></h3>
+        <div id="profileBar" class="profile-bar"></div>
         <label for="launchDir">Folder or directory path</label>
         <div class="launch-dir-row">
           <input id="launchDir" type="text" placeholder="nav, private, or /full/path/to/project" />
@@ -136,10 +190,15 @@ export function launchModalHtml(): string {
         <div id="repoListContainer"></div>
         <label for="launchPrompt">Shared prompt for all agents (optional)</label>
         <textarea id="launchPrompt" placeholder="e.g. Build and start the service, then register it with hivemind"></textarea>
+        <div id="saveProfileRow" class="save-profile-row">
+          <input id="profileNameInput" type="text" placeholder="Profile name" />
+          <button class="save-profile-confirm" id="saveProfileConfirmBtn" onclick="confirmSaveProfile()">Save</button>
+        </div>
         <div id="launchError" class="launch-error"></div>
         <div class="launch-footer">
           <span class="selected-count" id="selectedCount"></span>
           <div class="launch-actions">
+            <button class="save-profile-btn" id="saveProfileBtn" onclick="toggleSaveProfile()" disabled>Save Profile</button>
             <button class="launch-cancel" onclick="closeLaunchModal()">Cancel</button>
             <button class="launch-submit" id="launchSubmitBtn" onclick="submitLaunch()" disabled>Launch</button>
           </div>
@@ -152,6 +211,8 @@ export function launchModalHtml(): string {
 export function launchModalScript(): string {
   return `
     var scannedRepos = [];
+    var activeProfileId = null;
+    var pendingProfileLoad = null;
 
     function openLaunchModal() {
       var overlay = $('launchOverlay');
@@ -162,7 +223,12 @@ export function launchModalScript(): string {
       $('repoListContainer').innerHTML = '';
       $('selectedCount').textContent = '';
       $('launchSubmitBtn').disabled = true;
+      $('saveProfileBtn').disabled = true;
+      $('saveProfileRow').classList.remove('open');
       scannedRepos = [];
+      activeProfileId = null;
+      pendingProfileLoad = null;
+      renderProfileList();
       $('launchDir').focus();
     }
 
@@ -211,7 +277,12 @@ export function launchModalScript(): string {
       }
       html += '</div>';
       $('repoListContainer').innerHTML = html;
-      updateSelectedCount();
+      if (pendingProfileLoad) {
+        applyProfileSelection(pendingProfileLoad);
+        pendingProfileLoad = null;
+      } else {
+        updateSelectedCount();
+      }
     }
 
     function toggleAllRepos() {
@@ -243,6 +314,7 @@ export function launchModalScript(): string {
       $('selectedCount').textContent = count > 0 ? count + ' selected' : '';
       $('launchSubmitBtn').disabled = count === 0;
       $('launchSubmitBtn').textContent = count > 1 ? 'Launch ' + count + ' agents' : 'Launch';
+      $('saveProfileBtn').disabled = count === 0;
     }
 
     function submitLaunch() {
@@ -262,6 +334,90 @@ export function launchModalScript(): string {
     function renderLaunchButton() {
       if (!STATE.cmuxAvailable) return '';
       return '<button class="launch-btn" onclick="openLaunchModal()" title="Launch Claude Code agents in cmux workspaces">+ Agents</button>';
+    }
+
+    function renderProfileList() {
+      var bar = $('profileBar');
+      if (!bar) return;
+      var profiles = STATE.profiles || [];
+      if (profiles.length === 0) {
+        bar.innerHTML = '<span class="profile-bar-label">No saved profiles</span>';
+        return;
+      }
+      var html = '<span class="profile-bar-label">Profiles</span>';
+      for (var i = 0; i < profiles.length; i++) {
+        var p = profiles[i];
+        var isActive = activeProfileId === p.id;
+        html += '<span class="profile-pill' + (isActive ? ' active' : '') + '" onclick="loadProfile(\\'' + escapeJs(p.id) + '\\')">';
+        html += escapeHtml(p.name);
+        html += ' <span class="profile-count">' + p.repos.length + '</span>';
+        html += '<span class="profile-delete" onclick="event.stopPropagation();deleteProfile(\\'' + escapeJs(p.id) + '\\')" title="Delete profile">\\u00d7</span>';
+        html += '</span>';
+      }
+      bar.innerHTML = html;
+    }
+
+    function loadProfile(profileId) {
+      var profile = (STATE.profiles || []).find(function(p) { return p.id === profileId; });
+      if (!profile) return;
+      activeProfileId = profileId;
+      $('launchDir').value = profile.directory;
+      $('launchPrompt').value = profile.prompt || '';
+      pendingProfileLoad = profile;
+      renderProfileList();
+      scanRepos();
+    }
+
+    function applyProfileSelection(profile) {
+      if (!profile || !profile.repos) return;
+      var repoNames = {};
+      profile.repos.forEach(function(name) { repoNames[name] = true; });
+      for (var i = 0; i < scannedRepos.length; i++) {
+        var cb = $('repo-' + i);
+        if (cb) cb.checked = !!repoNames[scannedRepos[i].name];
+      }
+      updateSelectedCount();
+    }
+
+    function toggleSaveProfile() {
+      var row = $('saveProfileRow');
+      if (row.classList.contains('open')) {
+        row.classList.remove('open');
+        return;
+      }
+      row.classList.add('open');
+      var input = $('profileNameInput');
+      if (activeProfileId) {
+        var existing = (STATE.profiles || []).find(function(p) { return p.id === activeProfileId; });
+        if (existing) input.value = existing.name;
+      } else {
+        input.value = '';
+      }
+      input.focus();
+    }
+
+    function confirmSaveProfile() {
+      var name = $('profileNameInput').value.trim();
+      if (!name) return;
+      var selected = getSelectedRepos();
+      if (selected.length === 0) return;
+      var dir = $('launchDir').value.trim();
+      var prompt = $('launchPrompt').value.trim();
+      var repoNames = selected.map(function(r) { return r.name; });
+      wsSend({
+        type: 'save_profile',
+        name: name,
+        directory: dir,
+        repos: repoNames,
+        prompt: prompt
+      });
+      $('saveProfileRow').classList.remove('open');
+      addActivity('Saving profile: ' + name);
+    }
+
+    function deleteProfile(profileId) {
+      wsSend({ type: 'delete_profile', profileId: profileId });
+      if (activeProfileId === profileId) activeProfileId = null;
     }
   `;
 }

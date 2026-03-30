@@ -91,7 +91,7 @@ export interface LogBaseline {
 }
 
 export type DashboardMessage =
-  | { type: "snapshot"; peers: Peer[]; namespaces: NamespaceInfo[]; peer_stats: PeerMessageStats[]; pair_stats: PairMessageStats[]; services: ServiceInfo[]; baselines: LogBaseline[] }
+  | { type: "snapshot"; peers: Peer[]; namespaces: NamespaceInfo[]; peer_stats: PeerMessageStats[]; pair_stats: PairMessageStats[]; services: ServiceInfo[]; baselines: LogBaseline[]; profiles: LaunchProfile[] }
   | { type: "peer_joined"; peer: Peer }
   | { type: "peer_left"; peer_id: PeerId; namespace: Namespace }
   | { type: "peer_updated"; peer: Peer }
@@ -116,7 +116,10 @@ export type DashboardMessage =
   | { type: "docker_log_stats"; logStats: DockerContainerLogStats[] }
   | { type: "cmux_status"; available: boolean; workspaces: CmuxWorkspace[] }
   | { type: "cmux_launch_result"; ok: boolean; workspaceId?: string; error?: string }
-  | { type: "scan_repos_result"; repos: ScannedRepo[] };
+  | { type: "scan_repos_result"; repos: ScannedRepo[] }
+  | { type: "profiles_list"; profiles: LaunchProfile[] }
+  | { type: "profile_saved"; profile: LaunchProfile }
+  | { type: "profile_deleted"; profileId: string };
 
 // --- WebSocket protocol: Dashboard → Broker ---
 
@@ -132,7 +135,10 @@ export type DashboardClientMessage =
   | { type: "stop_service"; peer_id: PeerId }
   | { type: "launch_claude_instance"; directory: string; name?: string; prompt?: string }
   | { type: "launch_claude_instances"; directories: { directory: string; name?: string }[]; prompt?: string }
-  | { type: "scan_repos"; directory: string };
+  | { type: "scan_repos"; directory: string }
+  | { type: "save_profile"; name: string; directory: string; repos: string[]; prompt: string }
+  | { type: "delete_profile"; profileId: string }
+  | { type: "list_profiles" };
 
 // --- cmux integration ---
 
@@ -145,6 +151,15 @@ export interface ScannedRepo {
 export interface CmuxWorkspace {
   id: string;
   name: string;
+}
+
+export interface LaunchProfile {
+  id: string;
+  name: string;
+  directory: string;
+  repos: string[];  // repo names (not full paths)
+  prompt: string;
+  created_at: string; // ISO timestamp
 }
 
 export interface NamespaceInfo {
