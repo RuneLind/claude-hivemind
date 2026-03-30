@@ -98,14 +98,14 @@ export async function createWorkspace(name: string): Promise<string> {
 
 export async function sendText(text: string, surfaceId?: string): Promise<void> {
   const params: Record<string, unknown> = { text };
-  if (surfaceId) params.surface = surfaceId;
+  if (surfaceId) params.surface_id = surfaceId;
   const res = await rpc("surface.send_text", params);
   assertOk(res, "send text");
 }
 
 export async function sendKey(key: string, surfaceId?: string): Promise<void> {
   const params: Record<string, unknown> = { key };
-  if (surfaceId) params.surface = surfaceId;
+  if (surfaceId) params.surface_id = surfaceId;
   const res = await rpc("surface.send_key", params);
   assertOk(res, "send key");
 }
@@ -113,6 +113,14 @@ export async function sendKey(key: string, surfaceId?: string): Promise<void> {
 export async function selectWorkspace(workspaceId: string): Promise<void> {
   const res = await rpc("workspace.select", { workspace_id: workspaceId });
   assertOk(res, "select workspace");
+}
+
+export async function getActiveSurface(): Promise<string | null> {
+  const res = await rpc("surface.list", {});
+  if (!res.ok) return null;
+  const result = res.result as { surfaces?: { id: string; focused: boolean }[] };
+  const focused = result.surfaces?.find(s => s.focused);
+  return focused?.id ?? result.surfaces?.[0]?.id ?? null;
 }
 
 export interface LaunchOptions {
@@ -137,13 +145,15 @@ export async function launchClaudeInstance(opts: LaunchOptions): Promise<{ works
     ...flags,
   ].join(" ");
 
-  await sendText(claudeCmd);
-  await sendKey("enter");
+  // Get the surface ID for this workspace so delayed keystrokes target the right terminal
+  const surfaceId = await getActiveSurface() ?? undefined;
+  await sendText(claudeCmd, surfaceId);
+  await sendKey("enter", surfaceId);
 
   // Auto-confirm the "Loading development channels" prompt
   setTimeout(async () => {
     try {
-      await sendKey("enter");
+      await sendKey("enter", surfaceId ?? undefined);
     } catch { /* ignore */ }
   }, 2000);
 
@@ -151,8 +161,8 @@ export async function launchClaudeInstance(opts: LaunchOptions): Promise<{ works
     // Delay so Claude Code has time to fully initialize
     setTimeout(async () => {
       try {
-        await sendText(opts.prompt!);
-        await sendKey("enter");
+        await sendText(opts.prompt!, surfaceId ?? undefined);
+        await sendKey("enter", surfaceId ?? undefined);
       } catch {
         // Not ready yet — user can type manually
       }

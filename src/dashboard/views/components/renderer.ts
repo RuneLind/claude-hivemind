@@ -159,6 +159,10 @@ export function rendererScript(): string {
           closeConversation();
         }
       }
+      if (e.key === 'Enter' && e.target && e.target.id === 'launchDir') {
+        e.preventDefault();
+        scanRepos();
+      }
     });
 
     // Single 30s interval for timestamp refresh + log stats polling

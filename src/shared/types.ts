@@ -115,7 +115,8 @@ export type DashboardMessage =
   | { type: "docker_log_lines"; containerId: string; lines: LogLine[] }
   | { type: "docker_log_stats"; logStats: DockerContainerLogStats[] }
   | { type: "cmux_status"; available: boolean; workspaces: CmuxWorkspace[] }
-  | { type: "cmux_launch_result"; ok: boolean; workspaceId?: string; error?: string };
+  | { type: "cmux_launch_result"; ok: boolean; workspaceId?: string; error?: string }
+  | { type: "scan_repos_result"; repos: ScannedRepo[] };
 
 // --- WebSocket protocol: Dashboard → Broker ---
 
@@ -129,9 +130,17 @@ export type DashboardClientMessage =
   | { type: "unsubscribe_docker_logs"; containerId: string }
   | { type: "stop_docker_container"; containerId: string }
   | { type: "stop_service"; peer_id: PeerId }
-  | { type: "launch_claude_instance"; directory: string; name?: string; prompt?: string };
+  | { type: "launch_claude_instance"; directory: string; name?: string; prompt?: string }
+  | { type: "launch_claude_instances"; directories: { directory: string; name?: string }[]; prompt?: string }
+  | { type: "scan_repos"; directory: string };
 
 // --- cmux integration ---
+
+export interface ScannedRepo {
+  name: string;
+  path: string;
+  branch: string | null;
+}
 
 export interface CmuxWorkspace {
   id: string;
