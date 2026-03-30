@@ -487,7 +487,10 @@ export function handleDashboardMessage(
       const sharedPrompt = msg.prompt;
       log(`Launching ${dirs.length} Claude Code instance(s) via cmux`);
       (async () => {
-        for (const { directory, name } of dirs) {
+        for (let i = 0; i < dirs.length; i++) {
+          const { directory, name } = dirs[i];
+          // Stagger launches so auto-confirm timers don't overlap
+          if (i > 0) await new Promise(r => setTimeout(r, 1500));
           try {
             const { workspaceId } = await launchClaudeInstance({ directory, name, prompt: sharedPrompt });
             log(`Launched cmux workspace ${workspaceId} for ${directory}`);
