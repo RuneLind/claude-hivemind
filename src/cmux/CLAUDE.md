@@ -5,7 +5,7 @@ JSON-RPC client for [cmux](https://cmux.com) terminal multiplexer. Used by the b
 ## Architecture
 
 - `client.ts` — Low-level RPC client over Unix socket + high-level `launchClaudeInstance()` function.
-- Broker integration in `../broker.ts` — polls cmux status every 15s, handles `launch_claude_instance` / `launch_claude_instances` / `scan_repos` messages from dashboard.
+- Broker integration in `../broker/handlers.ts` — polls cmux status every 15s, handles `launch_claude_instance` / `launch_claude_instances` / `scan_repos` messages from dashboard.
 - Dashboard UI in `../dashboard/views/components/launch-modal.ts` — "+ Agents" button, folder scanning, checkbox selection.
 
 ## Socket Protocol
