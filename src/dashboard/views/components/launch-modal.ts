@@ -247,23 +247,7 @@ export function launchModalScript(): string {
 
     function submitLaunch() {
       var selected = getSelectedRepos();
-      if (selected.length === 0) {
-        // Fallback: try single directory mode
-        var dir = $('launchDir').value.trim();
-        if (!dir) {
-          $('launchError').textContent = 'Select repos or enter a directory';
-          $('launchError').style.display = '';
-          return;
-        }
-        // Single launch (backwards compat)
-        $('launchError').style.display = 'none';
-        var msg = { type: 'launch_claude_instance', directory: dir };
-        var prompt = $('launchPrompt').value.trim();
-        if (prompt) msg.prompt = prompt;
-        wsSend(msg);
-        addActivity('Launching Claude instance in ' + dir + '...');
-        return;
-      }
+      if (selected.length === 0) return;
 
       $('launchError').style.display = 'none';
       var dirs = selected.map(function(r) { return { directory: r.path, name: r.name }; });

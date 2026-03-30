@@ -153,17 +153,15 @@ export async function launchClaudeInstance(opts: LaunchOptions): Promise<{ works
 
   // Auto-confirm the "Loading development channels" prompt
   setTimeout(async () => {
-    try {
-      await sendKey("enter", surfaceId ?? undefined);
-    } catch { /* ignore */ }
+    try { await sendKey("enter", surfaceId); } catch { /* ignore */ }
   }, 2000);
 
   if (opts.prompt) {
     // Delay so Claude Code has time to fully initialize
     setTimeout(async () => {
       try {
-        await sendText(opts.prompt!, surfaceId ?? undefined);
-        await sendKey("enter", surfaceId ?? undefined);
+        await sendText(opts.prompt!, surfaceId);
+        await sendKey("enter", surfaceId);
       } catch {
         // Not ready yet — user can type manually
       }

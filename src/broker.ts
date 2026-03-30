@@ -36,7 +36,7 @@ import type {
 } from "./shared/types.ts";
 import { renderDashboardPage } from "./dashboard/views/page.ts";
 import { isCmuxAvailable, listWorkspaces, launchClaudeInstance } from "./cmux/client.ts";
-import { readdirSync, statSync, existsSync } from "node:fs";
+import { readdirSync, statSync, readFileSync } from "node:fs";
 
 const dashboardHtml = renderDashboardPage();
 const PORT = parseInt(process.env.CLAUDE_HIVEMIND_PORT ?? "7899", 10);
@@ -377,39 +377,34 @@ let lastDockerLogStatsJson = "";
 const SOURCE_DIR = `${process.env.HOME}/source`;
 
 function scanReposInDirectory(dir: string): ScannedRepo[] {
-  // Resolve shorthand: "nav" -> ~/source/nav
-  let fullPath = dir;
-  if (!dir.startsWith("/")) {
-    fullPath = `${SOURCE_DIR}/${dir}`;
-  }
-  if (!existsSync(fullPath)) return [];
+  let fullPath = dir.startsWith("/") ? dir : `${SOURCE_DIR}/${dir}`;
+
+  let entries: string[];
+  try { entries = readdirSync(fullPath); } catch { return []; }
 
   const repos: ScannedRepo[] = [];
-  try {
-    const entries = readdirSync(fullPath);
-    for (const entry of entries) {
-      const entryPath = `${fullPath}/${entry}`;
-      try {
-        if (!statSync(entryPath).isDirectory()) continue;
-        if (!existsSync(`${entryPath}/.git`)) continue;
-        let branch: string | null = null;
-        try {
-          // Handle worktrees: .git can be a file pointing to the real gitdir
-          let gitDir = `${entryPath}/.git`;
-          const gitStat = statSync(gitDir);
-          if (!gitStat.isDirectory()) {
-            const gitfile = readFileSync(gitDir, "utf-8").trim();
-            const m = gitfile.match(/^gitdir:\s*(.+)$/);
-            if (m) gitDir = m[1];
-          }
-          const head = readFileSync(`${gitDir}/HEAD`, "utf-8").trim();
-          const match = head.match(/^ref: refs\/heads\/(.+)$/);
-          branch = match ? match[1] : head.slice(0, 8);
-        } catch { /* no branch info */ }
-        repos.push({ name: entry, path: entryPath, branch });
-      } catch { /* skip unreadable entries */ }
-    }
-  } catch { /* directory unreadable */ }
+  for (const entry of entries) {
+    const entryPath = `${fullPath}/${entry}`;
+    try {
+      if (!statSync(entryPath).isDirectory()) continue;
+      // .git must exist (as directory or worktree file)
+      statSync(`${entryPath}/.git`);
+    } catch { continue; }
+
+    let branch: string | null = null;
+    try {
+      // Handle worktrees: .git can be a file pointing to the real gitdir
+      let gitDir = `${entryPath}/.git`;
+      if (!statSync(gitDir).isDirectory()) {
+        const m = readFileSync(gitDir, "utf-8").trim().match(/^gitdir:\s*(.+)$/);
+        if (m) gitDir = m[1];
+      }
+      const head = readFileSync(`${gitDir}/HEAD`, "utf-8").trim();
+      const match = head.match(/^ref: refs\/heads\/(.+)$/);
+      branch = match ? match[1] : head.slice(0, 8);
+    } catch { /* no branch info */ }
+    repos.push({ name: entry, path: entryPath, branch });
+  }
   return repos.sort((a, b) => a.name.localeCompare(b.name));
 }
 
