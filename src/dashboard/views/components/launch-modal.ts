@@ -255,6 +255,7 @@ export function launchModalScript(): string {
       scannedRepos = repos;
 
       if (repos.length === 0) {
+        pendingProfileLoad = null;
         $('repoListContainer').innerHTML = '<div style="padding:12px;color:#484f58;font-size:12px;text-align:center">No git repos found in this directory</div>';
         updateSelectedCount();
         return;

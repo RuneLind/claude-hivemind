@@ -91,8 +91,8 @@ export function createProfileStatements(db: import("bun:sqlite").Database) {
     upsertProfile: db.prepare(
       `INSERT INTO launch_profiles (id, name, directory, repos, prompt, created_at)
        VALUES (?, ?, ?, ?, ?, ?)
-       ON CONFLICT(name) DO UPDATE SET directory = excluded.directory, repos = excluded.repos, prompt = excluded.prompt, created_at = excluded.created_at
-       RETURNING id`
+       ON CONFLICT(name) DO UPDATE SET directory = excluded.directory, repos = excluded.repos, prompt = excluded.prompt
+       RETURNING id, created_at`
     ),
     deleteProfile: db.prepare(`DELETE FROM launch_profiles WHERE id = ?`),
     selectAllProfiles: db.prepare(`SELECT * FROM launch_profiles ORDER BY name`),
@@ -519,14 +519,14 @@ export function handleDashboardMessage(
       const now = new Date().toISOString();
       const id = crypto.randomUUID().slice(0, 8);
       const prompt = msg.prompt || "";
-      const row = profileStmts.upsertProfile.get(id, msg.name, msg.directory, JSON.stringify(msg.repos), prompt, now) as { id: string };
+      const row = profileStmts.upsertProfile.get(id, msg.name, msg.directory, JSON.stringify(msg.repos), prompt, now) as { id: string; created_at: string };
       const profile: LaunchProfile = {
         id: row.id,
         name: msg.name,
         directory: msg.directory,
         repos: msg.repos,
         prompt,
-        created_at: now,
+        created_at: row.created_at,
       };
       ctx.server.publish(
         "dashboard",

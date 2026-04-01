@@ -147,7 +147,6 @@ export async function launchClaudeInstance(opts: LaunchOptions): Promise<{ works
     ...flags,
   ].join(" ");
 
-  // Get the surface ID for this workspace so delayed keystrokes target the right terminal
   const surfaceId = await getActiveSurface() ?? undefined;
   await sendText(claudeCmd, surfaceId);
   await sendKey("enter", surfaceId);
