@@ -49,6 +49,7 @@ const myOpenCodeUrl: string | null = process.env.OPENCODE_URL ?? null;
 const mySurfaceId: string | null = process.env.CMUX_SURFACE_ID ?? null;
 const myWorkspaceId: string | null = process.env.CMUX_WORKSPACE_ID ?? null;
 
+let orientationSent = false;
 let pendingPeersResolve: ((peers: Peer[]) => void) | null = null;
 let pendingPeersReject: ((err: Error) => void) | null = null;
 
@@ -201,12 +202,12 @@ function handleBrokerMessage(msg: BrokerMessage): void {
       myId = msg.id;
       log(`Registered as peer ${myId} in namespace ${msg.namespace}`);
 
-      // Send orientation prompt to non-Claude agents so they know about hivemind
-      if (myAgentType !== "claude-code" && mySurfaceId) {
-        const orientation = `You are "${myId}" on the claude-hivemind network (namespace: ${msg.namespace}). You have MCP tools: set_summary (describe your work), list_peers (find other agents), send_message (reply to agents by ID). Start by calling set_summary now.`;
+      // Send orientation once to non-Claude agents so they know about hivemind tools
+      if (myAgentType !== "claude-code" && mySurfaceId && !orientationSent) {
+        orientationSent = true;
         setTimeout(() => {
           import("./cmux/client.ts").then(({ sendText, sendKey }) => {
-            sendText(orientation, mySurfaceId!).then(() => sendKey("enter", mySurfaceId!));
+            sendText(`Call set_summary to describe your work`, mySurfaceId!).then(() => sendKey("enter", mySurfaceId!));
           }).catch(() => {});
         }, 3000);
       }
