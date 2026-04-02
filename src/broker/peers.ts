@@ -13,6 +13,10 @@ import type {
 } from "../shared/types.ts";
 import { WS_OPEN, type BrokerContext } from "./db.ts";
 import { sendText, sendKey } from "../cmux/client.ts";
+import { writeFileSync, mkdirSync } from "node:fs";
+
+const HIVEMIND_MSG_DIR = `${process.env.HOME}/.claude-hivemind/messages`;
+try { mkdirSync(HIVEMIND_MSG_DIR, { recursive: true }); } catch {}
 
 export function log(msg: string) {
   console.error(`[claude-hivemind broker] ${msg}`);
@@ -149,7 +153,17 @@ async function deliverViaCmux(
   if (!surfaceId) return false;
 
   const sender = getPeer(stmts, fromId);
-  const prompt = `[hivemind from ${fromId}${sender?.summary ? ` — ${sender.summary}` : ""}] ${text}`;
+  const label = `hivemind message from ${fromId}${sender?.summary ? ` — ${sender.summary}` : ""}`;
+  let prompt: string;
+
+  // Short messages go directly; long ones go to a file to avoid terminal input limits
+  if (text.length <= 300) {
+    prompt = `[${label}] ${text} — Reply with send_message MCP tool, to="${fromId}"`;
+  } else {
+    const msgFile = `${HIVEMIND_MSG_DIR}/${fromId}-${Date.now()}.md`;
+    writeFileSync(msgFile, `# ${label}\n\n${text}\n`);
+    prompt = `[${label}] Read the full message at ${msgFile} and reply with send_message MCP tool, to="${fromId}"`;
+  }
 
   try {
     await sendText(prompt, surfaceId);

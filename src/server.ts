@@ -28,6 +28,7 @@ import {
   resolveNamespace,
   loadNamespaceConfig,
 } from "./shared/namespace.ts";
+import { mkdirSync, writeFileSync } from "node:fs";
 
 const BROKER_PORT = parseInt(process.env.CLAUDE_HIVEMIND_PORT ?? "7899", 10);
 const BROKER_URL = `http://127.0.0.1:${BROKER_PORT}`;
@@ -197,6 +198,16 @@ function handleBrokerMessage(msg: BrokerMessage): void {
     case "registered":
       myId = msg.id;
       log(`Registered as peer ${myId} in namespace ${msg.namespace}`);
+
+      // Send orientation prompt to non-Claude agents so they know about hivemind
+      if (myAgentType !== "claude-code" && mySurfaceId) {
+        const orientation = `You are "${myId}" on the claude-hivemind network (namespace: ${msg.namespace}). You have MCP tools: set_summary (describe your work), list_peers (find other agents), send_message (reply to agents by ID). Start by calling set_summary now.`;
+        setTimeout(() => {
+          import("./cmux/client.ts").then(({ sendText, sendKey }) => {
+            sendText(orientation, mySurfaceId!).then(() => sendKey("enter", mySurfaceId!));
+          }).catch(() => {});
+        }, 3000);
+      }
       break;
 
     case "message":
@@ -219,8 +230,22 @@ function handleBrokerMessage(msg: BrokerMessage): void {
             log(`Failed to push channel notification: ${e}`)
           );
       } else if (mySurfaceId) {
-        // OpenCode/Copilot with cmux: type message into terminal
-        const prompt = `[hivemind from ${msg.from_id}${msg.from_summary ? ` — ${msg.from_summary}` : ""}] ${msg.text}`;
+        // OpenCode/Copilot with cmux: short messages typed directly, long ones via file
+        const label = `hivemind message from ${msg.from_id}${msg.from_summary ? ` — ${msg.from_summary}` : ""}`;
+        let prompt: string;
+        if (msg.text.length <= 300) {
+          prompt = `[${label}] ${msg.text} — Reply with send_message MCP tool, to="${msg.from_id}"`;
+        } else {
+          const msgDir = `${process.env.HOME}/.claude-hivemind/messages`;
+          const msgFile = `${msgDir}/${msg.from_id}-${Date.now()}.md`;
+          try {
+            mkdirSync(msgDir, { recursive: true });
+            writeFileSync(msgFile, `# ${label}\n\n${msg.text}\n`);
+            prompt = `[${label}] Read the full message at ${msgFile} and reply with send_message MCP tool, to="${msg.from_id}"`;
+          } catch {
+            prompt = `[${label}] ${msg.text.slice(0, 250)}... (truncated) — Reply with send_message MCP tool, to="${msg.from_id}"`;
+          }
+        }
         import("./cmux/client.ts").then(({ sendText, sendKey }) => {
           sendText(prompt, mySurfaceId!).then(() => sendKey("enter", mySurfaceId!));
         }).catch((e) => log(`Failed to deliver via cmux: ${e}`));
