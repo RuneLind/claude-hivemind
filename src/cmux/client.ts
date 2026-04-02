@@ -131,7 +131,8 @@ export interface LaunchOptions {
 }
 
 export async function launchOpenCodeInstance(opts: LaunchOptions): Promise<{ workspaceId: string }> {
-  const name = opts.name ?? opts.directory.split("/").pop() ?? "opencode";
+  const baseName = opts.name ?? opts.directory.split("/").pop() ?? "opencode";
+  const name = `${baseName} - OpenCode`;
   const workspaceId = await createWorkspace(name);
   await selectWorkspace(workspaceId);
 
