@@ -15,6 +15,7 @@ export interface Peer {
   namespace: Namespace;
   agent_type: AgentType;
   opencode_url: string | null; // Base URL for OpenCode HTTP API (e.g. http://localhost:3000)
+  surface_id: string | null;   // cmux surface ID for terminal-based push delivery
   registered_at: string; // ISO timestamp
   last_seen: string; // ISO timestamp
   connected: number; // 0 or 1 (SQLite boolean)
@@ -57,6 +58,7 @@ export type ClientMessage =
       namespace: Namespace;
       agent_type?: AgentType;
       opencode_url?: string; // Base URL for OpenCode HTTP push delivery
+      surface_id?: string;   // cmux surface ID for terminal push delivery
     }
   | { type: "set_summary"; summary: string }
   | { type: "send_message"; to: PeerId; text: string }

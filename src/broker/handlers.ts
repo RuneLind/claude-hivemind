@@ -169,6 +169,7 @@ export function handlePeerMessage(
 
       const agentType = msg.agent_type ?? "claude-code";
       const opencodeUrl = msg.opencode_url ?? null;
+      const surfaceId = msg.surface_id ?? null;
 
       peerStmts.insertPeer.run(
         id,
@@ -181,6 +182,7 @@ export function handlePeerMessage(
         msg.namespace,
         agentType,
         opencodeUrl,
+        surfaceId,
         now,
         now,
         1

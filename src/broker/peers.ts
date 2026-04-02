@@ -12,6 +12,7 @@ import type {
   AgentType,
 } from "../shared/types.ts";
 import { WS_OPEN, type BrokerContext } from "./db.ts";
+import { sendText, sendKey } from "../cmux/client.ts";
 
 export function log(msg: string) {
   console.error(`[claude-hivemind broker] ${msg}`);
@@ -20,8 +21,8 @@ export function log(msg: string) {
 export function createPeerStatements(db: Database) {
   return {
     insertPeer: db.prepare(`
-      INSERT INTO peers (id, pid, cwd, git_root, git_branch, tty, summary, namespace, agent_type, opencode_url, registered_at, last_seen, connected)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO peers (id, pid, cwd, git_root, git_branch, tty, summary, namespace, agent_type, opencode_url, surface_id, registered_at, last_seen, connected)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `),
     updateLastSeen: db.prepare(
       `UPDATE peers SET last_seen = ? WHERE id = ?`
@@ -138,6 +139,29 @@ export function getMessageStats(msgStmts: MessageStatements): { peer_stats: Peer
   };
 }
 
+async function deliverViaCmux(
+  target: Peer,
+  fromId: string,
+  text: string,
+  stmts: PeerStatements,
+): Promise<boolean> {
+  const surfaceId = target.surface_id;
+  if (!surfaceId) return false;
+
+  const sender = getPeer(stmts, fromId);
+  const prompt = `[hivemind from ${fromId}${sender?.summary ? ` — ${sender.summary}` : ""}] ${text}`;
+
+  try {
+    await sendText(prompt, surfaceId);
+    await sendKey("enter", surfaceId);
+    log(`Delivered message to ${target.agent_type} peer ${target.id} via cmux surface ${surfaceId}`);
+    return true;
+  } catch (e) {
+    log(`Failed to deliver via cmux to peer ${target.id}: ${e}`);
+    return false;
+  }
+}
+
 // Cache OpenCode session IDs per base URL to avoid repeated lookups
 const opencodeSessionCache = new Map<string, { sessionId: string; fetchedAt: number }>();
 
@@ -215,14 +239,26 @@ export function deliverOrQueue(
 ): void {
   const target = getPeer(stmts, toId);
 
-  // OpenCode peers: deliver via HTTP prompt_async (fire-and-forget)
-  if (target?.agent_type === "opencode" && target.opencode_url) {
-    deliverToOpenCode(target, fromId, text, stmts).then((ok) => {
-      msgStmts.insertMessage.run(fromId, toId, text, now, ok ? 1 : 0);
-    }).catch(() => {
-      msgStmts.insertMessage.run(fromId, toId, text, now, 0);
-    });
-    return;
+  // OpenCode peers: deliver via cmux terminal or HTTP prompt_async
+  if (target?.agent_type === "opencode") {
+    if (target.surface_id) {
+      // Preferred: type message into OpenCode's terminal via cmux
+      deliverViaCmux(target, fromId, text, stmts).then((ok) => {
+        msgStmts.insertMessage.run(fromId, toId, text, now, ok ? 1 : 0);
+      }).catch(() => {
+        msgStmts.insertMessage.run(fromId, toId, text, now, 0);
+      });
+      return;
+    }
+    if (target.opencode_url) {
+      // Fallback: HTTP prompt_async
+      deliverToOpenCode(target, fromId, text, stmts).then((ok) => {
+        msgStmts.insertMessage.run(fromId, toId, text, now, ok ? 1 : 0);
+      }).catch(() => {
+        msgStmts.insertMessage.run(fromId, toId, text, now, 0);
+      });
+      return;
+    }
   }
 
   // Default: deliver via WebSocket (Claude Code, Copilot, etc.)

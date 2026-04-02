@@ -45,6 +45,7 @@ let reconnectAttempts = 0;
 
 const myAgentType: AgentType = (process.env.CLAUDE_HIVEMIND_AGENT_TYPE as AgentType) ?? "claude-code";
 const myOpenCodeUrl: string | null = process.env.OPENCODE_URL ?? null;
+const mySurfaceId: string | null = process.env.CMUX_SURFACE_ID ?? null;
 
 let pendingPeersResolve: ((peers: Peer[]) => void) | null = null;
 let pendingPeersReject: ((err: Error) => void) | null = null;
@@ -145,6 +146,7 @@ function connectToBroker(): void {
       namespace: myNamespace,
       agent_type: myAgentType,
       opencode_url: myOpenCodeUrl ?? undefined,
+      surface_id: mySurfaceId ?? undefined,
     };
     ws!.send(JSON.stringify(registerMsg));
   });
@@ -198,22 +200,34 @@ function handleBrokerMessage(msg: BrokerMessage): void {
       break;
 
     case "message":
-      mcp
-        .notification({
-          method: "notifications/claude/channel",
-          params: {
-            content: msg.text,
-            meta: {
-              from_id: msg.from_id,
-              from_summary: msg.from_summary,
-              from_cwd: msg.from_cwd,
-              sent_at: msg.sent_at,
+      if (myAgentType === "claude-code") {
+        // Claude Code: push via MCP channel (interrupts mid-task)
+        mcp
+          .notification({
+            method: "notifications/claude/channel",
+            params: {
+              content: msg.text,
+              meta: {
+                from_id: msg.from_id,
+                from_summary: msg.from_summary,
+                from_cwd: msg.from_cwd,
+                sent_at: msg.sent_at,
+              },
             },
-          },
-        })
-        .catch((e) =>
-          log(`Failed to push channel notification: ${e}`)
-        );
+          })
+          .catch((e) =>
+            log(`Failed to push channel notification: ${e}`)
+          );
+      } else if (mySurfaceId) {
+        // OpenCode/Copilot with cmux: type message into terminal
+        const prompt = `[hivemind from ${msg.from_id}${msg.from_summary ? ` — ${msg.from_summary}` : ""}] ${msg.text}`;
+        import("./cmux/client.ts").then(({ sendText, sendKey }) => {
+          sendText(prompt, mySurfaceId!).then(() => sendKey("enter", mySurfaceId!));
+        }).catch((e) => log(`Failed to deliver via cmux: ${e}`));
+      } else {
+        // No delivery mechanism — log so the user at least sees it
+        log(`INCOMING MESSAGE from ${msg.from_id}: ${msg.text}`);
+      }
       log(`Message from ${msg.from_id}: ${msg.text.slice(0, 80)}`);
       break;
 
@@ -477,6 +491,7 @@ async function startBrokerConnection() {
   log(`Namespace: ${myNamespace}`);
   log(`Agent type: ${myAgentType}`);
   if (myOpenCodeUrl) log(`OpenCode URL: ${myOpenCodeUrl}`);
+  if (mySurfaceId) log(`cmux surface: ${mySurfaceId}`);
 
   await ensureBroker();
   connectToBroker();

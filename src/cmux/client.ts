@@ -135,6 +135,9 @@ export async function launchOpenCodeInstance(opts: LaunchOptions): Promise<{ wor
   const workspaceId = await createWorkspace(name);
   await selectWorkspace(workspaceId);
 
+  // Capture surface ID before building config — this is the terminal we'll push messages to
+  const surfaceId = await getActiveSurface() ?? undefined;
+
   // OpenCode MCP config with hivemind integration
   // OpenCode uses: opencode.json (no dot), "mcp" key, "type": "local", "environment", command as array
   const serverPath = new URL("../server.ts", import.meta.url).pathname;
@@ -146,6 +149,7 @@ export async function launchOpenCodeInstance(opts: LaunchOptions): Promise<{ wor
         environment: {
           CLAUDE_HIVEMIND: "1",
           CLAUDE_HIVEMIND_AGENT_TYPE: "opencode",
+          ...(surfaceId ? { CMUX_SURFACE_ID: surfaceId } : {}),
         },
       },
     },
@@ -159,8 +163,6 @@ export async function launchOpenCodeInstance(opts: LaunchOptions): Promise<{ wor
     "&&",
     process.env.OPENCODE_COMMAND || "opencode",
   ].join(" ");
-
-  const surfaceId = await getActiveSurface() ?? undefined;
   await sendText(openCodeCmd, surfaceId);
   await sendKey("enter", surfaceId);
 
