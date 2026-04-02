@@ -59,6 +59,7 @@ export type ClientMessage =
       agent_type?: AgentType;
       opencode_url?: string; // Base URL for OpenCode HTTP push delivery
       surface_id?: string;   // cmux surface ID for terminal push delivery
+      workspace_id?: string; // cmux workspace ID for rename on registration
     }
   | { type: "set_summary"; summary: string }
   | { type: "send_message"; to: PeerId; text: string }

@@ -47,6 +47,7 @@ let reconnectAttempts = 0;
 const myAgentType: AgentType = (process.env.CLAUDE_HIVEMIND_AGENT_TYPE as AgentType) ?? "claude-code";
 const myOpenCodeUrl: string | null = process.env.OPENCODE_URL ?? null;
 const mySurfaceId: string | null = process.env.CMUX_SURFACE_ID ?? null;
+const myWorkspaceId: string | null = process.env.CMUX_WORKSPACE_ID ?? null;
 
 let pendingPeersResolve: ((peers: Peer[]) => void) | null = null;
 let pendingPeersReject: ((err: Error) => void) | null = null;
@@ -148,6 +149,7 @@ function connectToBroker(): void {
       agent_type: myAgentType,
       opencode_url: myOpenCodeUrl ?? undefined,
       surface_id: mySurfaceId ?? undefined,
+      workspace_id: myWorkspaceId ?? undefined,
     };
     ws!.send(JSON.stringify(registerMsg));
   });

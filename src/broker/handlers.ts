@@ -19,7 +19,7 @@ import {
   DEFAULT_LOG_FORMAT,
   DASHBOARD_SENDER_ID,
 } from "../shared/types.ts";
-import { isCmuxAvailable, listWorkspaces, launchClaudeInstance, launchOpenCodeInstance, identifySurface, renameWorkspace } from "../cmux/client.ts";
+import { isCmuxAvailable, listWorkspaces, launchClaudeInstance, launchOpenCodeInstance, renameWorkspace } from "../cmux/client.ts";
 import { readdirSync, statSync, readFileSync } from "node:fs";
 import { WS_OPEN, type BrokerContext, type PeerWSData, type WSData } from "./db.ts";
 import {
@@ -232,11 +232,10 @@ export function handlePeerMessage(
       log(`Peer ${id} registered (ns: ${msg.namespace}, cwd: ${msg.cwd})`);
 
       // Rename cmux workspace to the peer's human-readable ID
-      if (surfaceId) {
+      const workspaceId = msg.workspace_id;
+      if (workspaceId) {
         const suffix = agentType !== "claude-code" ? ` (${agentType === "opencode" ? "OpenCode" : agentType})` : "";
-        identifySurface(surfaceId).then(info => {
-          if (info) return renameWorkspace(info.workspace_ref, id + suffix);
-        }).catch(() => {});
+        renameWorkspace(workspaceId, id + suffix).catch(() => {});
       }
       break;
     }
