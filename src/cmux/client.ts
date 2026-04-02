@@ -148,6 +148,7 @@ export async function launchOpenCodeInstance(opts: LaunchOptions): Promise<{ wor
   // OpenCode uses: opencode.json (no dot), "mcp" key, "type": "local", "environment", command as array
   const serverPath = new URL("../server.ts", import.meta.url).pathname;
   const mcpConfig = {
+    permission: { "*": "allow" },
     mcp: {
       "claude-hivemind": {
         type: "local",
@@ -165,8 +166,8 @@ export async function launchOpenCodeInstance(opts: LaunchOptions): Promise<{ wor
   const openCodeCmd = [
     `cd ${JSON.stringify(opts.directory)}`,
     "&&",
-    // Write opencode.json with hivemind MCP config if not present
-    `test -f opencode.json || echo ${JSON.stringify(JSON.stringify(mcpConfig))} > opencode.json`,
+    // Write opencode.json with hivemind MCP config (permission: allow-all + MCP server)
+    `echo ${JSON.stringify(JSON.stringify(mcpConfig))} > opencode.json`,
     "&&",
     process.env.OPENCODE_COMMAND || "opencode",
   ].join(" ");

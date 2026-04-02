@@ -278,7 +278,7 @@ describe("broker", () => {
       expect(received.sent_at).toBeTruthy();
     });
 
-    test("cross-namespace message returns an error", async () => {
+    test("cross-namespace message is delivered", async () => {
       const ws1 = connectPeer(testPort, "ns-a");
       const ws2 = connectPeer(testPort, "ns-b");
 
@@ -296,20 +296,19 @@ describe("broker", () => {
         pid: pid2,
       });
 
-      // Try to send cross-namespace
-      const errorPromise = waitForMessage<BrokerMessage & { type: "error" }>(
-        ws1,
-        "error"
+      const messagePromise = waitForMessage<BrokerMessage & { type: "message" }>(
+        ws2,
+        "message"
       );
       sendMessage(ws1, {
         type: "send_message",
         to: reg2.id,
-        text: "should fail",
+        text: "cross-namespace hello",
       });
 
-      const err = await errorPromise;
-      expect(err.type).toBe("error");
-      expect(err.error).toContain("different namespace");
+      const received = await messagePromise;
+      expect(received.type).toBe("message");
+      expect(received.text).toBe("cross-namespace hello");
     });
 
     test("message to non-existent peer returns an error", async () => {

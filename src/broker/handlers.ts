@@ -268,15 +268,8 @@ export function handlePeerMessage(
         return;
       }
 
-      if (target.namespace !== ws.data.namespace) {
-        ws.send(
-          JSON.stringify({
-            type: "error",
-            error: `Cannot message peer ${msg.to}: different namespace (${target.namespace} vs ${ws.data.namespace})`,
-          } satisfies BrokerMessage)
-        );
-        return;
-      }
+      // Cross-namespace messaging is allowed — agents in different project groups can collaborate
+
 
       const now = new Date().toISOString();
       deliverOrQueue(ctx, peerStmts, msgStmts, fromId, msg.to, msg.text, now);
