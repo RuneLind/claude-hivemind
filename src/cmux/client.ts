@@ -136,13 +136,14 @@ export async function launchOpenCodeInstance(opts: LaunchOptions): Promise<{ wor
   await selectWorkspace(workspaceId);
 
   // OpenCode MCP config with hivemind integration
+  // OpenCode uses: opencode.json (no dot), "mcp" key, "type": "local", "environment", command as array
+  const serverPath = new URL("../server.ts", import.meta.url).pathname;
   const mcpConfig = {
-    mcpServers: {
+    mcp: {
       "claude-hivemind": {
-        type: "stdio",
-        command: "bun",
-        args: ["run", new URL("../server.ts", import.meta.url).pathname],
-        env: {
+        type: "local",
+        command: ["bun", "run", serverPath],
+        environment: {
           CLAUDE_HIVEMIND: "1",
           CLAUDE_HIVEMIND_AGENT_TYPE: "opencode",
         },
@@ -153,10 +154,10 @@ export async function launchOpenCodeInstance(opts: LaunchOptions): Promise<{ wor
   const openCodeCmd = [
     `cd ${JSON.stringify(opts.directory)}`,
     "&&",
-    // Write temporary .opencode.json with hivemind MCP config if not present
-    `test -f .opencode.json || echo ${JSON.stringify(JSON.stringify(mcpConfig))} > .opencode.json`,
+    // Write opencode.json with hivemind MCP config if not present
+    `test -f opencode.json || echo ${JSON.stringify(JSON.stringify(mcpConfig))} > opencode.json`,
     "&&",
-    "opencode",
+    process.env.OPENCODE_COMMAND || "opencode",
   ].join(" ");
 
   const surfaceId = await getActiveSurface() ?? undefined;

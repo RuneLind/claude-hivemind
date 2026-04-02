@@ -57,7 +57,7 @@ Surface IDs are captured so delayed keystrokes target the correct terminal even 
 5. `surface.send_key` enter — execute
 6. (Optional) setTimeout 8s → send initial prompt
 
-The generated `.opencode.json` configures the hivemind MCP server with `CLAUDE_HIVEMIND=1` and `CLAUDE_HIVEMIND_AGENT_TYPE=opencode` env vars, so the broker knows to deliver messages via HTTP `prompt_async` instead of MCP channels.
+The generated `opencode.json` configures the hivemind MCP server with `CLAUDE_HIVEMIND=1` and `CLAUDE_HIVEMIND_AGENT_TYPE=opencode` env vars, so the broker knows to deliver messages via HTTP `prompt_async` instead of MCP channels. Uses OpenCode's config format: `"mcp"` key (not `"mcpServers"`), `"type": "local"` (not `"stdio"`), `"environment"` (not `"env"`), command as array.
 
 ## CLI Reference
 

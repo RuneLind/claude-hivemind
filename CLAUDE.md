@@ -42,6 +42,7 @@ bun kill
 | `CLAUDE_HIVEMIND_DB` | `~/.claude-hivemind.db` | SQLite database path |
 | `CLAUDE_HIVEMIND_AGENT_TYPE` | `claude-code` | Agent type: `claude-code`, `opencode`, or `copilot` |
 | `OPENCODE_URL` | (unset) | OpenCode HTTP API base URL for push delivery (e.g. `http://localhost:3000`) |
+| `OPENCODE_COMMAND` | `opencode` | OpenCode CLI binary name (e.g. `opencode-vanilla`) |
 | `CMUX_SOCKET_PATH` | `/tmp/cmux.sock` | cmux Unix socket path |
 
 ## Bun

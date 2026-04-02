@@ -175,16 +175,15 @@ If CLI extensions are unavailable, Copilot can still connect to the hivemind MCP
 
 OpenCode connects to the hivemind MCP server for pull tools (list_peers, send_message). The broker pushes messages to OpenCode via its HTTP API. This is fully implemented:
 
-**Pull path (OpenCode → broker):** MCP server configured in `.opencode.json`:
+**Pull path (OpenCode → broker):** MCP server configured in `opencode.json` (no leading dot):
 
 ```json
 {
-  "mcpServers": {
+  "mcp": {
     "claude-hivemind": {
-      "type": "stdio",
-      "command": "bun",
-      "args": ["run", "/path/to/claude-hivemind/src/server.ts"],
-      "env": {
+      "type": "local",
+      "command": ["bun", "run", "/path/to/claude-hivemind/src/server.ts"],
+      "environment": {
         "CLAUDE_HIVEMIND": "1",
         "CLAUDE_HIVEMIND_AGENT_TYPE": "opencode",
         "OPENCODE_URL": "http://localhost:3000"
@@ -206,7 +205,7 @@ async function deliverToOpenCode(target: Peer, fromId: string, text: string, stm
 
 The broker resolves the active session via `GET {opencode_url}/session`, caches it for 30s, then delivers via `POST {opencode_url}/session/{id}/prompt_async`.
 
-**Dashboard launch:** `launchOpenCodeInstance()` in `src/cmux/client.ts` creates a cmux workspace, writes `.opencode.json` with hivemind MCP config, and starts `opencode`.
+**Dashboard launch:** `launchOpenCodeInstance()` in `src/cmux/client.ts` creates a cmux workspace, writes `opencode.json` with hivemind MCP config, and starts `opencode`.
 
 ### Future: Plugin (richer integration)
 
@@ -303,7 +302,7 @@ The broker uses `agent_type` to select the delivery mechanism when routing messa
 - [x] MCP server detects agent type via `CLAUDE_HIVEMIND_AGENT_TYPE` env var, includes in registration
 - [x] Dashboard peer cards show agent type badge (blue=Claude, purple=OpenCode, orange=Copilot)
 - [x] Dashboard launch modal has agent type selector (Claude Code / OpenCode)
-- [x] `launchOpenCodeInstance()` in cmux client — creates workspace, writes `.opencode.json` with hivemind MCP config
+- [x] `launchOpenCodeInstance()` in cmux client — creates workspace, writes `opencode.json` with hivemind MCP config
 - [x] Tool descriptions and instructions are agent-type-aware (not Claude Code-specific)
 
 ### Remaining
