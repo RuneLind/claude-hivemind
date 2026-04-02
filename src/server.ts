@@ -233,19 +233,20 @@ function handleBrokerMessage(msg: BrokerMessage): void {
           );
       } else if (mySurfaceId) {
         // OpenCode/Copilot with cmux: short messages typed directly, long ones via file
-        const label = `hivemind from ${msg.from_id}`;
         let prompt: string;
         if (msg.text.length <= 200) {
-          prompt = `[${label}] ${msg.text}`;
+          prompt = `[from ${msg.from_id}] ${msg.text}`;
         } else {
-          const msgDir = "/tmp/hivemind-messages";
-          const msgFile = `${msgDir}/${msg.from_id}-${Date.now()}.md`;
+          const msgDir = "/tmp/hm-msg";
+          const ts = Date.now();
+          const msgFile = `${msgDir}/${ts}.md`;
           try {
             mkdirSync(msgDir, { recursive: true });
-            writeFileSync(msgFile, `# hivemind message from ${msg.from_id}${msg.from_summary ? ` — ${msg.from_summary}` : ""}\n\n${msg.text}\n`);
-            prompt = `[${label}] Read ${msgFile} and reply using send_message`;
+            const header = `Message from ${msg.from_id}${msg.from_summary ? ` — ${msg.from_summary}` : ""}`;
+            writeFileSync(msgFile, `# ${header}\n\n${msg.text}\n`);
+            prompt = `[from ${msg.from_id}] Read ${msgFile}`;
           } catch {
-            prompt = `[${label}] ${msg.text.slice(0, 200)}`;
+            prompt = `[from ${msg.from_id}] ${msg.text.slice(0, 200)}`;
           }
         }
         import("./cmux/client.ts").then(({ sendText, sendKey }) => {

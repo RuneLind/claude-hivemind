@@ -24,12 +24,13 @@ export function stateScript(): string {
 
     var MAX_LOG_LINES = 1000;
 
-    var START_SERVICE_MESSAGE = 'Please ensure your application is running and healthy, then register it:\\n\\n' +
-      '1. **Build**: Run a clean build (e.g. \`mvn package -DskipTests\`) to ensure you have the latest version.\\n' +
-      '2. **Kill zombies**: Check if anything is already running on your application port (e.g. \`lsof -i :<port> -t\`). If a process is found, kill it before starting fresh.\\n' +
-      '3. **Start**: Start the application with the appropriate local profile.\\n' +
-      '4. **Health check**: Wait for the application to be ready, then verify the health endpoint returns a healthy status (e.g. curl the health URL and confirm \`"status":"UP"\`). Common health paths: \`/internal/health\`, \`/actuator/health\`, \`/health\`.\\n' +
-      '5. **Register**: Once healthy, call \`register_service\` with the correct port, health URL, log format, and **log_file** (absolute path to the application log file, e.g. \`target/app.log\` or check \`logging.file.name\` in application properties). The log_file is required for log viewing in the dashboard.';
+    var START_SERVICE_MESSAGE = 'Build, start, and register your application locally.\\n\\n' +
+      '1. **Build (MANDATORY)**: Run a clean Maven build (\`mvn clean package -DskipTests\`). This step is NOT optional — always build from the current branch, even if the app appears to be running already.\\n' +
+      '2. **Stop Docker container**: Check if a Docker container is running on your application port (e.g. \`docker ps --format \\'{{.Names}} {{.Ports}}\\' | grep <port>\`). If found, stop it (\`docker stop <container-name>\`). Docker compose containers often have stale/wrong versions — do NOT reuse them.\\n' +
+      '3. **Kill other zombies**: Check for any other process on your port (\`lsof -i :<port> -t\`). Kill if found.\\n' +
+      '4. **Start locally with Maven**: Start the app using \`mvn spring-boot:run\` with the appropriate local profile (NOT via Docker). This runs the freshly built code from step 1.\\n' +
+      '5. **Health check**: Wait for the app to be ready, then verify the health endpoint returns \`{"status":"UP"}\`. Common paths: \`/internal/health\`, \`/actuator/health\`, \`/health\`.\\n' +
+      '6. **Register**: Call \`register_service\` with port, health URL, log format, and **log_file** (absolute path to the application log file, e.g. \`target/app.log\` or check \`logging.file.name\` in application properties). The log_file is required for log viewing in the dashboard.';
 
     function handleMessage(msg) {
       switch (msg.type) {

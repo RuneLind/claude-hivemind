@@ -15,8 +15,8 @@ import { WS_OPEN, type BrokerContext } from "./db.ts";
 import { sendText, sendKey } from "../cmux/client.ts";
 import { writeFileSync, mkdirSync } from "node:fs";
 
-const HIVEMIND_MSG_DIR = "/tmp/hivemind-messages";
-try { mkdirSync(HIVEMIND_MSG_DIR, { recursive: true }); } catch {}
+const MSG_DIR = "/tmp/hm-msg";
+try { mkdirSync(MSG_DIR, { recursive: true }); } catch {}
 
 export function log(msg: string) {
   console.error(`[claude-hivemind broker] ${msg}`);
@@ -153,16 +153,17 @@ async function deliverViaCmux(
   if (!surfaceId) return false;
 
   const sender = getPeer(stmts, fromId);
-  const label = `hivemind message from ${fromId}${sender?.summary ? ` — ${sender.summary}` : ""}`;
   let prompt: string;
 
   // Short messages go directly; long ones go to a file to avoid terminal input limits
   if (text.length <= 200) {
-    prompt = `[${label}] ${text}`;
+    prompt = `[from ${fromId}] ${text}`;
   } else {
-    const msgFile = `${HIVEMIND_MSG_DIR}/${fromId}-${Date.now()}.md`;
-    writeFileSync(msgFile, `# ${label}\n\n${text}\n`);
-    prompt = `[${label}] Read ${msgFile} and reply using send_message`;
+    const ts = Date.now();
+    const msgFile = `${MSG_DIR}/${ts}.md`;
+    const header = `Message from ${fromId}${sender?.summary ? ` — ${sender.summary}` : ""}`;
+    writeFileSync(msgFile, `# ${header}\n\n${text}\n`);
+    prompt = `[from ${fromId}] Read ${msgFile}`;
   }
 
   try {
