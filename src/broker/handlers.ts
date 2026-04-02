@@ -19,7 +19,7 @@ import {
   DEFAULT_LOG_FORMAT,
   DASHBOARD_SENDER_ID,
 } from "../shared/types.ts";
-import { isCmuxAvailable, listWorkspaces, launchClaudeInstance } from "../cmux/client.ts";
+import { isCmuxAvailable, listWorkspaces, launchClaudeInstance, launchOpenCodeInstance } from "../cmux/client.ts";
 import { readdirSync, statSync, readFileSync } from "node:fs";
 import { WS_OPEN, type BrokerContext, type PeerWSData, type WSData } from "./db.ts";
 import {
@@ -167,6 +167,9 @@ export function handlePeerMessage(
       const saved = peerStmts.selectSavedSummary.get(msg.cwd) as { summary: string } | null;
       const summary = msg.summary || saved?.summary || "";
 
+      const agentType = msg.agent_type ?? "claude-code";
+      const opencodeUrl = msg.opencode_url ?? null;
+
       peerStmts.insertPeer.run(
         id,
         msg.pid,
@@ -176,6 +179,8 @@ export function handlePeerMessage(
         msg.tty,
         summary,
         msg.namespace,
+        agentType,
+        opencodeUrl,
         now,
         now,
         1
@@ -361,20 +366,9 @@ export function handleDashboardMessage(
     case "send_to_peer": {
       const peer = getPeer(peerStmts, msg.peer_id);
       if (!peer) return;
-      const targetWs = ctx.peerSockets.get(msg.peer_id);
-      if (targetWs && targetWs.readyState === WS_OPEN) {
-        targetWs.send(
-          JSON.stringify({
-            type: "message",
-            from_id: DASHBOARD_SENDER_ID,
-            from_summary: "Hivemind Dashboard",
-            from_cwd: "",
-            text: msg.message,
-            sent_at: new Date().toISOString(),
-          } satisfies BrokerMessage)
-        );
-        log(`Dashboard sent message to ${msg.peer_id}`);
-      }
+      const now = new Date().toISOString();
+      deliverOrQueue(ctx, peerStmts, msgStmts, DASHBOARD_SENDER_ID, msg.peer_id, msg.message, now);
+      log(`Dashboard sent message to ${msg.peer_id}`);
       break;
     }
 
@@ -478,14 +472,16 @@ export function handleDashboardMessage(
         ? msg.directories
         : [{ directory: msg.directory, name: msg.name }];
       const sharedPrompt = msg.prompt;
-      log(`Launching ${dirs.length} Claude Code instance(s) via cmux`);
+      const agentType = msg.agent_type ?? "claude-code";
+      const launcher = agentType === "opencode" ? launchOpenCodeInstance : launchClaudeInstance;
+      log(`Launching ${dirs.length} ${agentType} instance(s) via cmux`);
       (async () => {
         for (let i = 0; i < dirs.length; i++) {
           const { directory, name } = dirs[i];
           // Stagger launches to reduce CPU/IO contention during startup
           if (i > 0) await new Promise(r => setTimeout(r, 1500));
           try {
-            const { workspaceId } = await launchClaudeInstance({ directory, name, prompt: sharedPrompt });
+            const { workspaceId } = await launcher({ directory, name, prompt: sharedPrompt });
             log(`Launched cmux workspace ${workspaceId} for ${directory}`);
             ws.send(JSON.stringify({
               type: "cmux_launch_result",

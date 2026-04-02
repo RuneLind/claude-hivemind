@@ -30,11 +30,17 @@ export function initDatabase(dbPath: string): Database {
       tty TEXT,
       summary TEXT NOT NULL DEFAULT '',
       namespace TEXT NOT NULL DEFAULT 'default',
+      agent_type TEXT NOT NULL DEFAULT 'claude-code',
+      opencode_url TEXT,
       registered_at TEXT NOT NULL,
       last_seen TEXT NOT NULL,
       connected INTEGER NOT NULL DEFAULT 0
     )
   `);
+
+  // Migrate existing databases: add agent_type and opencode_url columns if missing
+  try { db.run(`ALTER TABLE peers ADD COLUMN agent_type TEXT NOT NULL DEFAULT 'claude-code'`); } catch {}
+  try { db.run(`ALTER TABLE peers ADD COLUMN opencode_url TEXT`); } catch {}
 
   db.run(
     `CREATE INDEX IF NOT EXISTS idx_peers_namespace ON peers(namespace)`

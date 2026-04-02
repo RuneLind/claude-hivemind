@@ -130,6 +130,52 @@ export interface LaunchOptions {
   flags?: string[];
 }
 
+export async function launchOpenCodeInstance(opts: LaunchOptions): Promise<{ workspaceId: string }> {
+  const name = opts.name ?? opts.directory.split("/").pop() ?? "opencode";
+  const workspaceId = await createWorkspace(name);
+  await selectWorkspace(workspaceId);
+
+  // OpenCode MCP config with hivemind integration
+  const mcpConfig = {
+    mcpServers: {
+      "claude-hivemind": {
+        type: "stdio",
+        command: "bun",
+        args: ["run", new URL("../server.ts", import.meta.url).pathname],
+        env: {
+          CLAUDE_HIVEMIND: "1",
+          CLAUDE_HIVEMIND_AGENT_TYPE: "opencode",
+        },
+      },
+    },
+  };
+
+  const openCodeCmd = [
+    `cd ${JSON.stringify(opts.directory)}`,
+    "&&",
+    // Write temporary .opencode.json with hivemind MCP config if not present
+    `test -f .opencode.json || echo ${JSON.stringify(JSON.stringify(mcpConfig))} > .opencode.json`,
+    "&&",
+    "opencode",
+  ].join(" ");
+
+  const surfaceId = await getActiveSurface() ?? undefined;
+  await sendText(openCodeCmd, surfaceId);
+  await sendKey("enter", surfaceId);
+
+  if (opts.prompt) {
+    // OpenCode takes a few seconds to initialize
+    setTimeout(async () => {
+      try {
+        await sendText(opts.prompt!, surfaceId);
+        await sendKey("enter", surfaceId);
+      } catch { /* user can type manually */ }
+    }, 8000);
+  }
+
+  return { workspaceId };
+}
+
 export async function launchClaudeInstance(opts: LaunchOptions): Promise<{ workspaceId: string }> {
   const name = opts.name ?? opts.directory.split("/").pop() ?? "claude";
   const workspaceId = await createWorkspace(name);

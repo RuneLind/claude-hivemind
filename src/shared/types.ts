@@ -2,6 +2,7 @@
 
 export type PeerId = string;
 export type Namespace = string;
+export type AgentType = "claude-code" | "opencode" | "copilot";
 
 export interface Peer {
   id: PeerId;
@@ -12,6 +13,8 @@ export interface Peer {
   tty: string | null;
   summary: string;
   namespace: Namespace;
+  agent_type: AgentType;
+  opencode_url: string | null; // Base URL for OpenCode HTTP API (e.g. http://localhost:3000)
   registered_at: string; // ISO timestamp
   last_seen: string; // ISO timestamp
   connected: number; // 0 or 1 (SQLite boolean)
@@ -52,6 +55,8 @@ export type ClientMessage =
       tty: string | null;
       summary: string;
       namespace: Namespace;
+      agent_type?: AgentType;
+      opencode_url?: string; // Base URL for OpenCode HTTP push delivery
     }
   | { type: "set_summary"; summary: string }
   | { type: "send_message"; to: PeerId; text: string }
@@ -133,8 +138,8 @@ export type DashboardClientMessage =
   | { type: "unsubscribe_docker_logs"; containerId: string }
   | { type: "stop_docker_container"; containerId: string }
   | { type: "stop_service"; peer_id: PeerId }
-  | { type: "launch_claude_instance"; directory: string; name?: string; prompt?: string }
-  | { type: "launch_claude_instances"; directories: { directory: string; name?: string }[]; prompt?: string }
+  | { type: "launch_claude_instance"; directory: string; name?: string; prompt?: string; agent_type?: AgentType }
+  | { type: "launch_claude_instances"; directories: { directory: string; name?: string }[]; prompt?: string; agent_type?: AgentType }
   | { type: "scan_repos"; directory: string }
   | { type: "save_profile"; name: string; directory: string; repos: string[]; prompt: string }
   | { type: "delete_profile"; profileId: string }

@@ -1,15 +1,15 @@
 # claude-hivemind
 
-Peer discovery and messaging for Claude Code instances, with namespace isolation and a web dashboard.
+Peer discovery and messaging for AI coding agents (Claude Code, OpenCode, Copilot), with namespace isolation and a web dashboard.
 
 ## Architecture
 
 - `src/broker.ts` — Entry point for the broker daemon (HTTP + WebSocket on localhost:7899). Wires together modules from `src/broker/`.
 - `src/broker/` — Broker internals: database schema (`db.ts`), peer lifecycle (`peers.ts`), service health (`services.ts`), Docker monitoring (`docker.ts`), log tailing (`logs.ts`), WS message handlers (`handlers.ts`). See `src/broker/CLAUDE.md`.
-- `src/server.ts` — MCP stdio server, one per Claude Code instance. Connects to broker via WebSocket, pushes inbound messages via channel notifications.
+- `src/server.ts` — MCP stdio server, one per agent instance (Claude Code, OpenCode, Copilot). Connects to broker via WebSocket. Agent type detected from `CLAUDE_HIVEMIND_AGENT_TYPE` env var.
 - `src/cli.ts` — CLI utility for inspecting broker state and managing peers.
 - `src/dashboard/` — Web dashboard (vanilla TypeScript, server-rendered HTML) showing peers grouped by namespace, Docker containers grouped by Compose project, service health, and log streaming.
-- `src/cmux/` — JSON-RPC client for cmux terminal multiplexer. Creates workspaces and launches Claude Code instances from the dashboard. See `src/cmux/CLAUDE.md`.
+- `src/cmux/` — JSON-RPC client for cmux terminal multiplexer. Creates workspaces and launches Claude Code or OpenCode instances from the dashboard. See `src/cmux/CLAUDE.md`.
 - `src/shared/types.ts` — WebSocket protocol types (client/broker/dashboard message unions).
 - `src/shared/namespace.ts` — Namespace resolution from CWD (auto-derives from ~/source/<group>/).
 
@@ -40,6 +40,8 @@ bun kill
 | `CLAUDE_HIVEMIND` | (unset) | Set to `1` to activate broker connection. Without it, MCP server stays dormant. |
 | `CLAUDE_HIVEMIND_PORT` | `7899` | Broker port |
 | `CLAUDE_HIVEMIND_DB` | `~/.claude-hivemind.db` | SQLite database path |
+| `CLAUDE_HIVEMIND_AGENT_TYPE` | `claude-code` | Agent type: `claude-code`, `opencode`, or `copilot` |
+| `OPENCODE_URL` | (unset) | OpenCode HTTP API base URL for push delivery (e.g. `http://localhost:3000`) |
 | `CMUX_SOCKET_PATH` | `/tmp/cmux.sock` | cmux Unix socket path |
 
 ## Bun

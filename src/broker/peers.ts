@@ -9,6 +9,7 @@ import type {
   NamespaceInfo,
   PeerMessageStats,
   PairMessageStats,
+  AgentType,
 } from "../shared/types.ts";
 import { WS_OPEN, type BrokerContext } from "./db.ts";
 
@@ -19,8 +20,8 @@ export function log(msg: string) {
 export function createPeerStatements(db: Database) {
   return {
     insertPeer: db.prepare(`
-      INSERT INTO peers (id, pid, cwd, git_root, git_branch, tty, summary, namespace, registered_at, last_seen, connected)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO peers (id, pid, cwd, git_root, git_branch, tty, summary, namespace, agent_type, opencode_url, registered_at, last_seen, connected)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `),
     updateLastSeen: db.prepare(
       `UPDATE peers SET last_seen = ? WHERE id = ?`
@@ -137,6 +138,72 @@ export function getMessageStats(msgStmts: MessageStatements): { peer_stats: Peer
   };
 }
 
+// Cache OpenCode session IDs per base URL to avoid repeated lookups
+const opencodeSessionCache = new Map<string, { sessionId: string; fetchedAt: number }>();
+
+async function resolveOpenCodeSession(baseUrl: string): Promise<string | null> {
+  const cached = opencodeSessionCache.get(baseUrl);
+  if (cached && Date.now() - cached.fetchedAt < 30_000) return cached.sessionId;
+
+  try {
+    const res = await fetch(`${baseUrl}/session`, { signal: AbortSignal.timeout(3000) });
+    if (!res.ok) return null;
+    const data = await res.json() as { sessions?: { id: string; updatedAt?: string }[] } | { id: string }[];
+    // OpenCode returns sessions list — pick the most recently updated
+    const sessions = Array.isArray(data) ? data : (data.sessions ?? []);
+    if (sessions.length === 0) return null;
+    const sorted = sessions.sort((a: any, b: any) =>
+      (b.updatedAt ?? "").localeCompare(a.updatedAt ?? "")
+    );
+    const sessionId = sorted[0].id;
+    opencodeSessionCache.set(baseUrl, { sessionId, fetchedAt: Date.now() });
+    return sessionId;
+  } catch (e) {
+    log(`Failed to resolve OpenCode session at ${baseUrl}: ${e}`);
+    return null;
+  }
+}
+
+async function deliverToOpenCode(
+  target: Peer,
+  fromId: string,
+  text: string,
+  stmts: PeerStatements,
+): Promise<boolean> {
+  const baseUrl = target.opencode_url;
+  if (!baseUrl) return false;
+
+  const sessionId = await resolveOpenCodeSession(baseUrl);
+  if (!sessionId) {
+    log(`No active OpenCode session found at ${baseUrl} for peer ${target.id}`);
+    return false;
+  }
+
+  const sender = getPeer(stmts, fromId);
+  const prompt = `[hivemind from ${fromId}${sender?.summary ? ` — ${sender.summary}` : ""}] ${text}`;
+
+  try {
+    const res = await fetch(`${baseUrl}/session/${sessionId}/prompt_async`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt }),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (res.ok || res.status === 204) {
+      log(`Delivered message to OpenCode peer ${target.id} via HTTP`);
+      return true;
+    }
+    log(`OpenCode prompt_async returned ${res.status} for peer ${target.id}`);
+    // Clear cached session on failure — it may have expired
+    opencodeSessionCache.delete(baseUrl);
+    return false;
+  } catch (e) {
+    log(`Failed to deliver to OpenCode peer ${target.id}: ${e}`);
+    opencodeSessionCache.delete(baseUrl);
+    return false;
+  }
+}
+
 export function deliverOrQueue(
   ctx: BrokerContext,
   stmts: PeerStatements,
@@ -146,6 +213,19 @@ export function deliverOrQueue(
   text: string,
   now: string,
 ): void {
+  const target = getPeer(stmts, toId);
+
+  // OpenCode peers: deliver via HTTP prompt_async (fire-and-forget)
+  if (target?.agent_type === "opencode" && target.opencode_url) {
+    deliverToOpenCode(target, fromId, text, stmts).then((ok) => {
+      msgStmts.insertMessage.run(fromId, toId, text, now, ok ? 1 : 0);
+    }).catch(() => {
+      msgStmts.insertMessage.run(fromId, toId, text, now, 0);
+    });
+    return;
+  }
+
+  // Default: deliver via WebSocket (Claude Code, Copilot, etc.)
   const targetWs = ctx.peerSockets.get(toId);
   if (targetWs && targetWs.readyState === WS_OPEN) {
     const sender = getPeer(stmts, fromId);

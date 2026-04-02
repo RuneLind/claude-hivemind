@@ -20,6 +20,7 @@ import { DEFAULT_HEALTH_URL } from "./shared/types.ts";
 import type {
   PeerId,
   Peer,
+  AgentType,
   ClientMessage,
   BrokerMessage,
 } from "./shared/types.ts";
@@ -41,6 +42,9 @@ let myGitBranch: string | null = null;
 let myNamespace = "default";
 let ws: WebSocket | null = null;
 let reconnectAttempts = 0;
+
+const myAgentType: AgentType = (process.env.CLAUDE_HIVEMIND_AGENT_TYPE as AgentType) ?? "claude-code";
+const myOpenCodeUrl: string | null = process.env.OPENCODE_URL ?? null;
 
 let pendingPeersResolve: ((peers: Peer[]) => void) | null = null;
 let pendingPeersReject: ((err: Error) => void) | null = null;
@@ -139,6 +143,8 @@ function connectToBroker(): void {
       tty: getTty(),
       summary: "",
       namespace: myNamespace,
+      agent_type: myAgentType,
+      opencode_url: myOpenCodeUrl ?? undefined,
     };
     ws!.send(JSON.stringify(registerMsg));
   });
@@ -266,18 +272,18 @@ const mcp = new Server(
       experimental: { "claude/channel": {} },
       tools: {},
     },
-    instructions: `You are connected to the claude-hivemind network. Other Claude Code instances on this machine can see you and send you messages within your namespace (project group).
+    instructions: `You are connected to the claude-hivemind network. Other AI coding agents (Claude Code, OpenCode, Copilot) on this machine can see you and send you messages within your namespace (project group).
 
 IMPORTANT: When you receive a <channel source="claude-hivemind" ...> message, RESPOND IMMEDIATELY. Do not wait until your current task is finished. Pause what you are doing, reply to the message using send_message, then resume your work. Treat incoming peer messages like a coworker tapping you on the shoulder — answer right away, even if you're in the middle of something.
 
 Read the from_id, from_summary, and from_cwd attributes to understand who sent the message. Reply by calling send_message with their from_id.
 
 Available tools:
-- list_peers: Discover other Claude Code instances (scope: namespace or machine)
-- send_message: Send a message to another instance by ID (same namespace only)
+- list_peers: Discover other AI agents (scope: namespace or machine)
+- send_message: Send a message to another agent by ID (same namespace only)
 - set_summary: Set a 1-2 sentence summary of what you're working on (visible to other peers)
 
-When you start, proactively call set_summary to describe what you're working on. This helps other instances understand your context.`,
+When you start, proactively call set_summary to describe what you're working on. This helps other agents understand your context.`,
   }
 );
 
@@ -289,7 +295,7 @@ const TOOLS = [
   {
     name: "list_peers",
     description:
-      'List other Claude Code instances. Default scope "namespace" shows peers in your project group. Use "machine" to see all instances.',
+      'List other AI coding agents (Claude Code, OpenCode, Copilot). Default scope "namespace" shows peers in your project group. Use "machine" to see all agents.',
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -297,7 +303,7 @@ const TOOLS = [
           type: "string" as const,
           enum: ["namespace", "machine"],
           description:
-            '"namespace" (default) = peers in your project group. "machine" = all instances on this computer.',
+            '"namespace" (default) = peers in your project group. "machine" = all agents on this computer.',
         },
       },
     },
@@ -305,7 +311,7 @@ const TOOLS = [
   {
     name: "send_message",
     description:
-      "Send a message to another Claude Code instance by peer ID. Only peers in the same namespace can message each other.",
+      "Send a message to another AI coding agent by peer ID. Only peers in the same namespace can message each other.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -385,12 +391,13 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         const peers = await requestPeerList(scope);
 
         if (peers.length === 0) {
-          return textResult(`No other Claude Code instances found (scope: ${scope}, namespace: ${myNamespace}).`);
+          return textResult(`No other agents found (scope: ${scope}, namespace: ${myNamespace}).`);
         }
 
         const lines = peers.map((p) => {
           const parts = [
             `ID: ${p.id}`,
+            `Type: ${p.agent_type ?? "claude-code"}`,
             `PID: ${p.pid}`,
             `CWD: ${p.cwd}`,
             `Namespace: ${p.namespace}`,
@@ -468,6 +475,8 @@ async function startBrokerConnection() {
   log(`Git root: ${myGitRoot ?? "(none)"}`);
   log(`Git branch: ${myGitBranch ?? "(none)"}`);
   log(`Namespace: ${myNamespace}`);
+  log(`Agent type: ${myAgentType}`);
+  if (myOpenCodeUrl) log(`OpenCode URL: ${myOpenCodeUrl}`);
 
   await ensureBroker();
   connectToBroker();
