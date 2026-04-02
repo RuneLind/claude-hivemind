@@ -143,18 +143,22 @@ export async function launchClaudeInstance(opts: LaunchOptions): Promise<{ works
     "claude",
     `--name ${JSON.stringify(name)}`,
     "--dangerously-load-development-channels server:claude-hivemind",
+    "--dangerously-skip-permissions",
     ...flags,
   ].join(" ");
 
-  // Get the surface ID for this workspace so delayed keystrokes target the right terminal
   const surfaceId = await getActiveSurface() ?? undefined;
   await sendText(claudeCmd, surfaceId);
   await sendKey("enter", surfaceId);
 
-  // Auto-confirm the "Loading development channels" prompt
-  setTimeout(async () => {
-    try { await sendKey("enter", surfaceId); } catch { /* ignore */ }
-  }, 2000);
+  // Auto-confirm the "Loading development channels" prompt.
+  // Claude Code takes a few seconds to start — send Enter at 4s and 7s to cover
+  // slow startups and multi-instance launches where CPU is contended.
+  for (const delay of [4000, 7000]) {
+    setTimeout(async () => {
+      try { await sendKey("enter", surfaceId); } catch { /* ignore */ }
+    }, delay);
+  }
 
   if (opts.prompt) {
     // Delay so Claude Code has time to fully initialize
@@ -165,7 +169,7 @@ export async function launchClaudeInstance(opts: LaunchOptions): Promise<{ works
       } catch {
         // Not ready yet — user can type manually
       }
-    }, 5000);
+    }, 12000);
   }
 
   return { workspaceId };

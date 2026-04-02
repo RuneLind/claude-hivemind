@@ -39,10 +39,10 @@ The `rpc()` function in `client.ts` opens a new TCP socket per call — acceptab
 1. `workspace.create` — new workspace named after the repo
 2. `workspace.select` — focus it
 3. `surface.list` — capture the surface ID for targeted input
-4. `surface.send_text` — send `cd <dir> && CLAUDE_HIVEMIND=1 claude --name <name> --dangerously-load-development-channels server:claude-hivemind`
+4. `surface.send_text` — send `cd <dir> && CLAUDE_HIVEMIND=1 claude --name <name> --dangerously-load-development-channels server:claude-hivemind --dangerously-skip-permissions`
 5. `surface.send_key` enter — execute the command
-6. setTimeout 2s → `surface.send_key` enter — auto-confirm development channels prompt
-7. (Optional) setTimeout 5s → send initial prompt
+6. setTimeout 4s + 7s → `surface.send_key` enter — auto-confirm development channels prompt (two attempts to cover slow startups)
+7. (Optional) setTimeout 12s → send initial prompt
 
 Surface IDs are captured so delayed keystrokes target the correct terminal even when launching multiple instances in sequence.
 

@@ -54,6 +54,8 @@ import {
   createCmuxState,
   pollCmuxStatus,
   scanReposInDirectory,
+  createProfileStatements,
+  getAllProfiles,
   type DashboardDeps,
 } from "./broker/handlers.ts";
 
@@ -71,6 +73,7 @@ const db = initDatabase(DB_PATH);
 const peerStmts = createPeerStatements(db);
 const msgStmts = createMessageStatements(db);
 const svcStmts = createServiceStatements(db);
+const profileStmts = createProfileStatements(db);
 
 // --- State ---
 
@@ -321,6 +324,7 @@ const server = Bun.serve<WSData>({
         const stats = getMessageStats(msgStmts);
         const services = svcStmts.selectAllServices.all() as ServiceInfo[];
         const baselines = svcStmts.selectAllBaselines.all() as LogBaseline[];
+        const profiles = getAllProfiles(profileStmts);
         ws.send(
           JSON.stringify({
             type: "snapshot",
@@ -330,6 +334,7 @@ const server = Bun.serve<WSData>({
             pair_stats: stats.pair_stats,
             services,
             baselines,
+            profiles,
           } satisfies DashboardMessage)
         );
         if (dockerState.available && dockerState.containers.size > 0) {
@@ -427,7 +432,7 @@ const server = Bun.serve<WSData>({
 const ctx: BrokerContext = { server, peerSockets };
 
 const dashboardDeps: DashboardDeps = {
-  ctx, peerStmts, msgStmts, svcStmts,
+  ctx, peerStmts, msgStmts, svcStmts, profileStmts,
   dockerState, dockerLogSubs, logSubState, cmuxState,
 };
 

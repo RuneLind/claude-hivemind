@@ -19,6 +19,7 @@ export function stateScript(): string {
       collapsed: {},
       cmuxAvailable: false,
       cmuxWorkspaces: [],
+      profiles: [],
     };
 
     var MAX_LOG_LINES = 1000;
@@ -37,6 +38,7 @@ export function stateScript(): string {
           STATE.peerStats = msg.peer_stats || [];
           STATE.pairStats = msg.pair_stats || [];
           STATE.services = msg.services || [];
+          STATE.profiles = msg.profiles || [];
           STATE.baselines = {};
           (msg.baselines || []).forEach(function(b) { STATE.baselines[b.namespace] = b.baseline_at; });
           addActivity('Loaded ' + msg.peers.length + ' peer(s)');
@@ -183,6 +185,29 @@ export function stateScript(): string {
 
         case 'scan_repos_result':
           if (typeof handleScanResult === 'function') handleScanResult(msg.repos || []);
+          break;
+
+        case 'profiles_list':
+          STATE.profiles = msg.profiles || [];
+          renderProfileList();
+          break;
+
+        case 'profile_saved': {
+          var idx = STATE.profiles.findIndex(function(p) { return p.id === msg.profile.id; });
+          if (idx >= 0) {
+            STATE.profiles[idx] = msg.profile;
+          } else {
+            STATE.profiles.push(msg.profile);
+          }
+          renderProfileList();
+          addActivity('Profile saved: ' + msg.profile.name);
+          break;
+        }
+
+        case 'profile_deleted':
+          STATE.profiles = STATE.profiles.filter(function(p) { return p.id !== msg.profileId; });
+          renderProfileList();
+          addActivity('Profile deleted');
           break;
 
       }
