@@ -115,6 +115,26 @@ export async function selectWorkspace(workspaceId: string): Promise<void> {
   assertOk(res, "select workspace");
 }
 
+export async function identifySurface(surfaceId: string): Promise<{ workspace_ref: string } | null> {
+  try {
+    const proc = Bun.spawn(["cmux", "identify", "--surface", surfaceId], {
+      stdout: "pipe", stderr: "pipe",
+    });
+    const output = await new Response(proc.stdout).text();
+    await proc.exited;
+    const data = JSON.parse(output);
+    const ref = data.focused?.workspace_ref;
+    return ref ? { workspace_ref: ref } : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function renameWorkspace(workspaceRef: string, title: string): Promise<void> {
+  const res = await rpc("workspace.rename", { workspace_id: workspaceRef, title });
+  assertOk(res, "rename workspace");
+}
+
 export async function getActiveSurface(): Promise<string | null> {
   const res = await rpc("surface.list", {});
   if (!res.ok) return null;
