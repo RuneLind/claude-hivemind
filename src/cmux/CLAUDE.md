@@ -1,10 +1,10 @@
 # cmux integration
 
-JSON-RPC client for [cmux](https://cmux.com) terminal multiplexer. Used by the broker to launch Claude Code instances from the dashboard.
+JSON-RPC client for [cmux](https://cmux.com) terminal multiplexer. Used by the broker to launch Claude Code and OpenCode instances from the dashboard.
 
 ## Architecture
 
-- `client.ts` — Low-level RPC client over Unix socket + high-level `launchClaudeInstance()` function.
+- `client.ts` — Low-level RPC client over Unix socket + high-level `launchClaudeInstance()` and `launchOpenCodeInstance()` functions.
 - Broker integration in `../broker/handlers.ts` — polls cmux status every 15s, handles `launch_claude_instance` / `launch_claude_instances` / `scan_repos` messages from dashboard.
 - Dashboard UI in `../dashboard/views/components/launch-modal.ts` — "+ Agents" button, folder scanning, checkbox selection.
 
@@ -45,6 +45,19 @@ The `rpc()` function in `client.ts` opens a new TCP socket per call — acceptab
 7. (Optional) setTimeout 12s → send initial prompt
 
 Surface IDs are captured so delayed keystrokes target the correct terminal even when launching multiple instances in sequence.
+
+### OpenCode Launch Flow
+
+`launchOpenCodeInstance()` does:
+
+1. `workspace.create` — new workspace named after the repo
+2. `workspace.select` — focus it
+3. `surface.list` — capture surface ID
+4. `surface.send_text` — write `.opencode.json` with hivemind MCP config (if not present), then `cd <dir> && opencode`
+5. `surface.send_key` enter — execute
+6. (Optional) setTimeout 8s → send initial prompt
+
+The generated `opencode.json` configures the hivemind MCP server with `CLAUDE_HIVEMIND=1` and `CLAUDE_HIVEMIND_AGENT_TYPE=opencode` env vars, so the broker knows to deliver messages via HTTP `prompt_async` instead of MCP channels. Uses OpenCode's config format: `"mcp"` key (not `"mcpServers"`), `"type": "local"` (not `"stdio"`), `"environment"` (not `"env"`), command as array.
 
 ## CLI Reference
 

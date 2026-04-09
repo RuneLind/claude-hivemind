@@ -20,6 +20,7 @@ import { DEFAULT_HEALTH_URL } from "./shared/types.ts";
 import type {
   PeerId,
   Peer,
+  AgentType,
   ClientMessage,
   BrokerMessage,
 } from "./shared/types.ts";
@@ -27,6 +28,7 @@ import {
   resolveNamespace,
   loadNamespaceConfig,
 } from "./shared/namespace.ts";
+import { mkdirSync, writeFileSync } from "node:fs";
 
 const BROKER_PORT = parseInt(process.env.CLAUDE_HIVEMIND_PORT ?? "7899", 10);
 const BROKER_URL = `http://127.0.0.1:${BROKER_PORT}`;
@@ -42,6 +44,12 @@ let myNamespace = "default";
 let ws: WebSocket | null = null;
 let reconnectAttempts = 0;
 
+const myAgentType: AgentType = (process.env.CLAUDE_HIVEMIND_AGENT_TYPE as AgentType) ?? "claude-code";
+const myOpenCodeUrl: string | null = process.env.OPENCODE_URL ?? null;
+const mySurfaceId: string | null = process.env.CMUX_SURFACE_ID ?? null;
+const myWorkspaceId: string | null = process.env.CMUX_WORKSPACE_ID ?? null;
+
+let orientationSent = false;
 let pendingPeersResolve: ((peers: Peer[]) => void) | null = null;
 let pendingPeersReject: ((err: Error) => void) | null = null;
 
@@ -139,6 +147,10 @@ function connectToBroker(): void {
       tty: getTty(),
       summary: "",
       namespace: myNamespace,
+      agent_type: myAgentType,
+      opencode_url: myOpenCodeUrl ?? undefined,
+      surface_id: mySurfaceId ?? undefined,
+      workspace_id: myWorkspaceId ?? undefined,
     };
     ws!.send(JSON.stringify(registerMsg));
   });
@@ -189,25 +201,62 @@ function handleBrokerMessage(msg: BrokerMessage): void {
     case "registered":
       myId = msg.id;
       log(`Registered as peer ${myId} in namespace ${msg.namespace}`);
+
+      // Send orientation once to non-Claude agents so they know about hivemind tools
+      if (myAgentType !== "claude-code" && mySurfaceId && !orientationSent) {
+        orientationSent = true;
+        setTimeout(() => {
+          import("./cmux/client.ts").then(({ sendText, sendKey }) => {
+            sendText(`Call set_summary to describe your work`, mySurfaceId!).then(() => sendKey("enter", mySurfaceId!));
+          }).catch(() => {});
+        }, 3000);
+      }
       break;
 
     case "message":
-      mcp
-        .notification({
-          method: "notifications/claude/channel",
-          params: {
-            content: msg.text,
-            meta: {
-              from_id: msg.from_id,
-              from_summary: msg.from_summary,
-              from_cwd: msg.from_cwd,
-              sent_at: msg.sent_at,
+      if (myAgentType === "claude-code") {
+        // Claude Code: push via MCP channel (interrupts mid-task)
+        mcp
+          .notification({
+            method: "notifications/claude/channel",
+            params: {
+              content: msg.text,
+              meta: {
+                from_id: msg.from_id,
+                from_summary: msg.from_summary,
+                from_cwd: msg.from_cwd,
+                sent_at: msg.sent_at,
+              },
             },
-          },
-        })
-        .catch((e) =>
-          log(`Failed to push channel notification: ${e}`)
-        );
+          })
+          .catch((e) =>
+            log(`Failed to push channel notification: ${e}`)
+          );
+      } else if (mySurfaceId) {
+        // OpenCode/Copilot with cmux: short messages typed directly, long ones via file
+        let prompt: string;
+        if (msg.text.length <= 200) {
+          prompt = `[from ${msg.from_id}] ${msg.text}`;
+        } else {
+          const msgDir = "/tmp/hm-msg";
+          const ts = Date.now();
+          const msgFile = `${msgDir}/${ts}.md`;
+          try {
+            mkdirSync(msgDir, { recursive: true });
+            const header = `Message from ${msg.from_id}${msg.from_summary ? ` — ${msg.from_summary}` : ""}`;
+            writeFileSync(msgFile, `# ${header}\n\n${msg.text}\n`);
+            prompt = `[from ${msg.from_id}] Read ${msgFile}`;
+          } catch {
+            prompt = `[from ${msg.from_id}] ${msg.text.slice(0, 200)}`;
+          }
+        }
+        import("./cmux/client.ts").then(({ sendText, sendKey }) => {
+          sendText(prompt, mySurfaceId!).then(() => sendKey("enter", mySurfaceId!));
+        }).catch((e) => log(`Failed to deliver via cmux: ${e}`));
+      } else {
+        // No delivery mechanism — log so the user at least sees it
+        log(`INCOMING MESSAGE from ${msg.from_id}: ${msg.text}`);
+      }
       log(`Message from ${msg.from_id}: ${msg.text.slice(0, 80)}`);
       break;
 
@@ -266,18 +315,18 @@ const mcp = new Server(
       experimental: { "claude/channel": {} },
       tools: {},
     },
-    instructions: `You are connected to the claude-hivemind network. Other Claude Code instances on this machine can see you and send you messages within your namespace (project group).
+    instructions: `You are connected to the claude-hivemind network. Other AI coding agents (Claude Code, OpenCode, Copilot) on this machine can see you and send you messages within your namespace (project group).
 
 IMPORTANT: When you receive a <channel source="claude-hivemind" ...> message, RESPOND IMMEDIATELY. Do not wait until your current task is finished. Pause what you are doing, reply to the message using send_message, then resume your work. Treat incoming peer messages like a coworker tapping you on the shoulder — answer right away, even if you're in the middle of something.
 
 Read the from_id, from_summary, and from_cwd attributes to understand who sent the message. Reply by calling send_message with their from_id.
 
 Available tools:
-- list_peers: Discover other Claude Code instances (scope: namespace or machine)
-- send_message: Send a message to another instance by ID (same namespace only)
+- list_peers: Discover other AI agents (scope: namespace or machine)
+- send_message: Send a message to another agent by ID (same namespace only)
 - set_summary: Set a 1-2 sentence summary of what you're working on (visible to other peers)
 
-When you start, proactively call set_summary to describe what you're working on. This helps other instances understand your context.`,
+When you start, proactively call set_summary to describe what you're working on. This helps other agents understand your context.`,
   }
 );
 
@@ -289,7 +338,7 @@ const TOOLS = [
   {
     name: "list_peers",
     description:
-      'List other Claude Code instances. Default scope "namespace" shows peers in your project group. Use "machine" to see all instances.',
+      'List other AI coding agents (Claude Code, OpenCode, Copilot). Default scope "namespace" shows peers in your project group. Use "machine" to see all agents.',
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -297,7 +346,7 @@ const TOOLS = [
           type: "string" as const,
           enum: ["namespace", "machine"],
           description:
-            '"namespace" (default) = peers in your project group. "machine" = all instances on this computer.',
+            '"namespace" (default) = peers in your project group. "machine" = all agents on this computer.',
         },
       },
     },
@@ -305,7 +354,7 @@ const TOOLS = [
   {
     name: "send_message",
     description:
-      "Send a message to another Claude Code instance by peer ID. Only peers in the same namespace can message each other.",
+      "Send a message to another AI coding agent by peer ID. Only peers in the same namespace can message each other.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -385,12 +434,13 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         const peers = await requestPeerList(scope);
 
         if (peers.length === 0) {
-          return textResult(`No other Claude Code instances found (scope: ${scope}, namespace: ${myNamespace}).`);
+          return textResult(`No other agents found (scope: ${scope}, namespace: ${myNamespace}).`);
         }
 
         const lines = peers.map((p) => {
           const parts = [
             `ID: ${p.id}`,
+            `Type: ${p.agent_type ?? "claude-code"}`,
             `PID: ${p.pid}`,
             `CWD: ${p.cwd}`,
             `Namespace: ${p.namespace}`,
@@ -468,6 +518,9 @@ async function startBrokerConnection() {
   log(`Git root: ${myGitRoot ?? "(none)"}`);
   log(`Git branch: ${myGitBranch ?? "(none)"}`);
   log(`Namespace: ${myNamespace}`);
+  log(`Agent type: ${myAgentType}`);
+  if (myOpenCodeUrl) log(`OpenCode URL: ${myOpenCodeUrl}`);
+  if (mySurfaceId) log(`cmux surface: ${mySurfaceId}`);
 
   await ensureBroker();
   connectToBroker();
