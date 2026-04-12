@@ -7,14 +7,24 @@
 
 import { Socket } from "node:net";
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 
 function resolveCmuxSocket(): string {
   if (process.env.CMUX_SOCKET_PATH) return process.env.CMUX_SOCKET_PATH;
-  try {
-    return readFileSync("/tmp/cmux-last-socket-path", "utf-8").trim();
-  } catch {
-    return "/tmp/cmux.sock";
+  if (process.env.CMUX_SOCKET) return process.env.CMUX_SOCKET;
+
+  const stableHint = `${homedir()}/Library/Application Support/cmux/last-socket-path`;
+  const stableSocket = `${homedir()}/Library/Application Support/cmux/cmux.sock`;
+  const legacyHint = "/tmp/cmux-last-socket-path";
+  const legacySocket = "/tmp/cmux.sock";
+
+  for (const hint of [stableHint, legacyHint]) {
+    try {
+      const path = readFileSync(hint, "utf-8").trim();
+      if (path) return path;
+    } catch { /* try next */ }
   }
+  return stableSocket || legacySocket;
 }
 
 const CMUX_SOCKET = resolveCmuxSocket();
