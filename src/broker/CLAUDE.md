@@ -7,7 +7,7 @@ The broker is split into focused modules. The entry point `../broker.ts` wires e
 | File | Responsibility |
 |------|---------------|
 | `db.ts` | Schema creation, `BrokerContext` type, `WSData` types |
-| `peers.ts` | Peer CRUD, ID generation, messaging, stale cleanup, `log()` |
+| `peers.ts` | Peer CRUD, ID generation, messaging (WebSocket + OpenCode HTTP), stale cleanup, `log()` |
 | `services.ts` | Service health polling, baseline statements |
 | `docker.ts` | Docker container monitoring, event stream, Docker log tailing |
 | `logs.ts` | Log parsing, `LogTailer` class, service log subscriptions |
@@ -33,6 +33,14 @@ Each module creates its own prepared statements via a factory function (`createP
 ## State containers
 
 Docker, log subscriptions, and cmux each have a `createXState()` factory that returns a mutable state object. This keeps module-level state explicit and avoids hidden globals.
+
+## Message routing by agent type
+
+`deliverOrQueue()` in `peers.ts` routes messages based on the target peer's `agent_type`:
+
+- **claude-code** (default): Send via WebSocket → MCP server → MCP channel notification (interrupts mid-task)
+- **opencode**: Resolve active session via `GET {opencode_url}/session` (cached 30s), then `POST {opencode_url}/session/{id}/prompt_async` (queued for next turn)
+- **copilot**: WebSocket delivery (same as claude-code for now; future: CLI extension `session.send()`)
 
 ## Adding new features
 

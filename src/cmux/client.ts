@@ -7,14 +7,24 @@
 
 import { Socket } from "node:net";
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 
 function resolveCmuxSocket(): string {
   if (process.env.CMUX_SOCKET_PATH) return process.env.CMUX_SOCKET_PATH;
-  try {
-    return readFileSync("/tmp/cmux-last-socket-path", "utf-8").trim();
-  } catch {
-    return "/tmp/cmux.sock";
+  if (process.env.CMUX_SOCKET) return process.env.CMUX_SOCKET;
+
+  const stableHint = `${homedir()}/Library/Application Support/cmux/last-socket-path`;
+  const stableSocket = `${homedir()}/Library/Application Support/cmux/cmux.sock`;
+  const legacyHint = "/tmp/cmux-last-socket-path";
+  const legacySocket = "/tmp/cmux.sock";
+
+  for (const hint of [stableHint, legacyHint]) {
+    try {
+      const path = readFileSync(hint, "utf-8").trim();
+      if (path) return path;
+    } catch { /* try next */ }
   }
+  return stableSocket || legacySocket;
 }
 
 const CMUX_SOCKET = resolveCmuxSocket();
@@ -115,6 +125,11 @@ export async function selectWorkspace(workspaceId: string): Promise<void> {
   assertOk(res, "select workspace");
 }
 
+export async function renameWorkspace(workspaceRef: string, title: string): Promise<void> {
+  const res = await rpc("workspace.rename", { workspace_id: workspaceRef, title });
+  assertOk(res, "rename workspace");
+}
+
 export async function getActiveSurface(): Promise<string | null> {
   const res = await rpc("surface.list", {});
   if (!res.ok) return null;
@@ -130,6 +145,58 @@ export interface LaunchOptions {
   flags?: string[];
 }
 
+export async function launchOpenCodeInstance(opts: LaunchOptions): Promise<{ workspaceId: string }> {
+  const baseName = opts.name ?? opts.directory.split("/").pop() ?? "opencode";
+  const name = `${baseName} - OpenCode`;
+  const workspaceId = await createWorkspace(name);
+  await selectWorkspace(workspaceId);
+
+  // Capture surface ID before building config — this is the terminal we'll push messages to
+  const surfaceId = await getActiveSurface() ?? undefined;
+
+  // OpenCode MCP config with hivemind integration
+  // OpenCode uses: opencode.json (no dot), "mcp" key, "type": "local", "environment", command as array
+  const serverPath = new URL("../server.ts", import.meta.url).pathname;
+  const mcpConfig = {
+    permission: { "*": "allow" },
+    mcp: {
+      "claude-hivemind": {
+        type: "local",
+        command: ["bun", "run", serverPath],
+        environment: {
+          CLAUDE_HIVEMIND: "1",
+          CLAUDE_HIVEMIND_AGENT_TYPE: "opencode",
+          ...(surfaceId ? { CMUX_SURFACE_ID: surfaceId } : {}),
+          CMUX_WORKSPACE_ID: workspaceId,
+        },
+      },
+    },
+  };
+
+  const openCodeCmd = [
+    `cd ${JSON.stringify(opts.directory)}`,
+    "&&",
+    // Write opencode.json with hivemind MCP config (permission: allow-all + MCP server)
+    `echo ${JSON.stringify(JSON.stringify(mcpConfig))} > opencode.json`,
+    "&&",
+    process.env.OPENCODE_COMMAND || "opencode",
+  ].join(" ");
+  await sendText(openCodeCmd, surfaceId);
+  await sendKey("enter", surfaceId);
+
+  if (opts.prompt) {
+    // OpenCode takes a few seconds to initialize
+    setTimeout(async () => {
+      try {
+        await sendText(opts.prompt!, surfaceId);
+        await sendKey("enter", surfaceId);
+      } catch { /* user can type manually */ }
+    }, 8000);
+  }
+
+  return { workspaceId };
+}
+
 export async function launchClaudeInstance(opts: LaunchOptions): Promise<{ workspaceId: string }> {
   const name = opts.name ?? opts.directory.split("/").pop() ?? "claude";
   const workspaceId = await createWorkspace(name);
@@ -140,6 +207,7 @@ export async function launchClaudeInstance(opts: LaunchOptions): Promise<{ works
     `cd ${JSON.stringify(opts.directory)}`,
     "&&",
     "CLAUDE_HIVEMIND=1",
+    `CMUX_WORKSPACE_ID=${workspaceId}`,
     "claude",
     `--name ${JSON.stringify(name)}`,
     "--dangerously-load-development-channels server:claude-hivemind",
