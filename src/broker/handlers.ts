@@ -300,7 +300,7 @@ export function handlePeerMessage(
       }
       peers = peers
         .filter((p) => p.id !== ws.data.peerId)
-        .filter((p) => isProcessAlive(p.pid));
+        .filter((p) => isProcessAlive(p.pid) && (!p.connected || ctx.peerSockets.has(p.id)));
 
       ws.send(JSON.stringify({ type: "peers", peers } satisfies BrokerMessage));
       break;

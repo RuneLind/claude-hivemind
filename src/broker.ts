@@ -122,7 +122,9 @@ const server = Bun.serve<WSData>({
         if (body.exclude_id) {
           peers = peers.filter((p) => p.id !== body.exclude_id);
         }
-        peers = peers.filter((p) => isProcessAlive(p.pid));
+        peers = peers.filter((p) =>
+          isProcessAlive(p.pid) && (!p.connected || peerSockets.has(p.id))
+        );
         return Response.json(peers);
       },
     },
@@ -149,7 +151,9 @@ const server = Bun.serve<WSData>({
     },
 
     "/api/status": () => {
-      const peers = getAllPeers(peerStmts).filter((p) => isProcessAlive(p.pid));
+      const peers = getAllPeers(peerStmts).filter((p) =>
+        isProcessAlive(p.pid) && (!p.connected || peerSockets.has(p.id))
+      );
       return Response.json({ peers, namespaces: namespacesFromPeers(peers) });
     },
 
@@ -320,7 +324,10 @@ const server = Bun.serve<WSData>({
     open(ws) {
       if (ws.data.kind === "dashboard") {
         ws.subscribe("dashboard");
-        const peers = getAllPeers(peerStmts).filter((p) => isProcessAlive(p.pid));
+        // Filter: PID must be alive AND if marked connected, must have an active WebSocket
+        const peers = getAllPeers(peerStmts).filter((p) =>
+          isProcessAlive(p.pid) && (!p.connected || peerSockets.has(p.id))
+        );
         const stats = getMessageStats(msgStmts);
         const services = svcStmts.selectAllServices.all() as ServiceInfo[];
         const baselines = svcStmts.selectAllBaselines.all() as LogBaseline[];
@@ -438,8 +445,8 @@ const dashboardDeps: DashboardDeps = {
 
 // --- Start background tasks ---
 
-cleanStalePeers(peerStmts, msgStmts, svcStmts);
-setInterval(() => cleanStalePeers(peerStmts, msgStmts, svcStmts), 30_000);
+cleanStalePeers(peerStmts, msgStmts, svcStmts, peerSockets);
+setInterval(() => cleanStalePeers(peerStmts, msgStmts, svcStmts, peerSockets), 30_000);
 setInterval(() => pollServiceHealth(ctx, peerStmts, svcStmts), 15_000);
 
 initDockerMonitoring(ctx, dockerState);

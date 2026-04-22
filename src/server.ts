@@ -28,7 +28,8 @@ import {
   resolveNamespace,
   loadNamespaceConfig,
 } from "./shared/namespace.ts";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { formatPeerPrompt } from "./shared/message-prompt.ts";
+import { sendText, sendKey } from "./cmux/client.ts";
 
 const BROKER_PORT = parseInt(process.env.CLAUDE_HIVEMIND_PORT ?? "7899", 10);
 const BROKER_URL = `http://127.0.0.1:${BROKER_PORT}`;
@@ -202,20 +203,18 @@ function handleBrokerMessage(msg: BrokerMessage): void {
       myId = msg.id;
       log(`Registered as peer ${myId} in namespace ${msg.namespace}`);
 
-      // Send orientation once to non-Claude agents so they know about hivemind tools
       if (myAgentType !== "claude-code" && mySurfaceId && !orientationSent) {
         orientationSent = true;
         setTimeout(() => {
-          import("./cmux/client.ts").then(({ sendText, sendKey }) => {
-            sendText(`Call set_summary to describe your work`, mySurfaceId!).then(() => sendKey("enter", mySurfaceId!));
-          }).catch(() => {});
+          sendText(`Call set_summary to describe your work`, mySurfaceId!)
+            .then(() => sendKey("enter", mySurfaceId!))
+            .catch((e) => log(`Failed to send orientation: ${e}`));
         }, 3000);
       }
       break;
 
     case "message":
       if (myAgentType === "claude-code") {
-        // Claude Code: push via MCP channel (interrupts mid-task)
         mcp
           .notification({
             method: "notifications/claude/channel",
@@ -229,32 +228,13 @@ function handleBrokerMessage(msg: BrokerMessage): void {
               },
             },
           })
-          .catch((e) =>
-            log(`Failed to push channel notification: ${e}`)
-          );
+          .catch((e) => log(`Failed to push channel notification: ${e}`));
       } else if (mySurfaceId) {
-        // OpenCode/Copilot with cmux: short messages typed directly, long ones via file
-        let prompt: string;
-        if (msg.text.length <= 200) {
-          prompt = `[from ${msg.from_id}] ${msg.text}`;
-        } else {
-          const msgDir = "/tmp/hm-msg";
-          const ts = Date.now();
-          const msgFile = `${msgDir}/${ts}.md`;
-          try {
-            mkdirSync(msgDir, { recursive: true });
-            const header = `Message from ${msg.from_id}${msg.from_summary ? ` — ${msg.from_summary}` : ""}`;
-            writeFileSync(msgFile, `# ${header}\n\n${msg.text}\n`);
-            prompt = `[from ${msg.from_id}] Read ${msgFile}`;
-          } catch {
-            prompt = `[from ${msg.from_id}] ${msg.text.slice(0, 200)}`;
-          }
-        }
-        import("./cmux/client.ts").then(({ sendText, sendKey }) => {
-          sendText(prompt, mySurfaceId!).then(() => sendKey("enter", mySurfaceId!));
-        }).catch((e) => log(`Failed to deliver via cmux: ${e}`));
+        const prompt = formatPeerPrompt(msg.from_id, msg.text, msg.from_summary);
+        sendText(prompt, mySurfaceId)
+          .then(() => sendKey("enter", mySurfaceId!))
+          .catch((e) => log(`Failed to deliver via cmux: ${e}`));
       } else {
-        // No delivery mechanism — log so the user at least sees it
         log(`INCOMING MESSAGE from ${msg.from_id}: ${msg.text}`);
       }
       log(`Message from ${msg.from_id}: ${msg.text.slice(0, 80)}`);

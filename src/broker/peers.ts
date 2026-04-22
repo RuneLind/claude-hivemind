@@ -9,14 +9,10 @@ import type {
   NamespaceInfo,
   PeerMessageStats,
   PairMessageStats,
-  AgentType,
 } from "../shared/types.ts";
 import { WS_OPEN, type BrokerContext } from "./db.ts";
 import { sendText, sendKey } from "../cmux/client.ts";
-import { writeFileSync, mkdirSync } from "node:fs";
-
-const MSG_DIR = "/tmp/hm-msg";
-try { mkdirSync(MSG_DIR, { recursive: true }); } catch {}
+import { formatPeerPrompt } from "../shared/message-prompt.ts";
 
 export function log(msg: string) {
   console.error(`[claude-hivemind broker] ${msg}`);
@@ -146,26 +142,13 @@ export function getMessageStats(msgStmts: MessageStatements): { peer_stats: Peer
 async function deliverViaCmux(
   target: Peer,
   fromId: string,
+  fromSummary: string | null,
   text: string,
-  stmts: PeerStatements,
 ): Promise<boolean> {
   const surfaceId = target.surface_id;
   if (!surfaceId) return false;
 
-  const sender = getPeer(stmts, fromId);
-  let prompt: string;
-
-  // Short messages go directly; long ones go to a file to avoid terminal input limits
-  if (text.length <= 200) {
-    prompt = `[from ${fromId}] ${text}`;
-  } else {
-    const ts = Date.now();
-    const msgFile = `${MSG_DIR}/${ts}.md`;
-    const header = `Message from ${fromId}${sender?.summary ? ` — ${sender.summary}` : ""}`;
-    writeFileSync(msgFile, `# ${header}\n\n${text}\n`);
-    prompt = `[from ${fromId}] Read ${msgFile}`;
-  }
-
+  const prompt = formatPeerPrompt(fromId, text, fromSummary);
   try {
     await sendText(prompt, surfaceId);
     await sendKey("enter", surfaceId);
@@ -177,50 +160,34 @@ async function deliverViaCmux(
   }
 }
 
-// Cache OpenCode session IDs per base URL to avoid repeated lookups
-const opencodeSessionCache = new Map<string, { sessionId: string; fetchedAt: number }>();
-
-async function resolveOpenCodeSession(baseUrl: string): Promise<string | null> {
-  const cached = opencodeSessionCache.get(baseUrl);
-  if (cached && Date.now() - cached.fetchedAt < 30_000) return cached.sessionId;
-
-  try {
-    const res = await fetch(`${baseUrl}/session`, { signal: AbortSignal.timeout(3000) });
-    if (!res.ok) return null;
-    const data = await res.json() as { sessions?: { id: string; updatedAt?: string }[] } | { id: string }[];
-    // OpenCode returns sessions list — pick the most recently updated
-    const sessions = Array.isArray(data) ? data : (data.sessions ?? []);
-    if (sessions.length === 0) return null;
-    const sorted = sessions.sort((a: any, b: any) =>
-      (b.updatedAt ?? "").localeCompare(a.updatedAt ?? "")
-    );
-    const sessionId = sorted[0].id;
-    opencodeSessionCache.set(baseUrl, { sessionId, fetchedAt: Date.now() });
-    return sessionId;
-  } catch (e) {
-    log(`Failed to resolve OpenCode session at ${baseUrl}: ${e}`);
-    return null;
-  }
-}
-
-async function deliverToOpenCode(
+async function deliverViaOpenCodeHttp(
   target: Peer,
   fromId: string,
+  fromSummary: string | null,
   text: string,
-  stmts: PeerStatements,
 ): Promise<boolean> {
   const baseUrl = target.opencode_url;
   if (!baseUrl) return false;
 
-  const sessionId = await resolveOpenCodeSession(baseUrl);
-  if (!sessionId) {
-    log(`No active OpenCode session found at ${baseUrl} for peer ${target.id}`);
+  let sessionId: string | null = null;
+  try {
+    const res = await fetch(`${baseUrl}/session`, { signal: AbortSignal.timeout(3000) });
+    if (!res.ok) return false;
+    const data = await res.json() as { sessions?: { id: string; updatedAt?: string }[] } | { id: string }[];
+    const sessions = Array.isArray(data) ? data : (data.sessions ?? []);
+    if (sessions.length === 0) {
+      log(`No active OpenCode session at ${baseUrl} for peer ${target.id}`);
+      return false;
+    }
+    sessionId = sessions.slice().sort((a: any, b: any) =>
+      (b.updatedAt ?? "").localeCompare(a.updatedAt ?? "")
+    )[0].id;
+  } catch (e) {
+    log(`Failed to resolve OpenCode session at ${baseUrl}: ${e}`);
     return false;
   }
 
-  const sender = getPeer(stmts, fromId);
-  const prompt = `[hivemind from ${fromId}${sender?.summary ? ` — ${sender.summary}` : ""}] ${text}`;
-
+  const prompt = `[hivemind from ${fromId}${fromSummary ? ` — ${fromSummary}` : ""}] ${text}`;
   try {
     const res = await fetch(`${baseUrl}/session/${sessionId}/prompt_async`, {
       method: "POST",
@@ -233,12 +200,9 @@ async function deliverToOpenCode(
       return true;
     }
     log(`OpenCode prompt_async returned ${res.status} for peer ${target.id}`);
-    // Clear cached session on failure — it may have expired
-    opencodeSessionCache.delete(baseUrl);
     return false;
   } catch (e) {
     log(`Failed to deliver to OpenCode peer ${target.id}: ${e}`);
-    opencodeSessionCache.delete(baseUrl);
     return false;
   }
 }
@@ -253,33 +217,27 @@ export function deliverOrQueue(
   now: string,
 ): void {
   const target = getPeer(stmts, toId);
+  const sender = getPeer(stmts, fromId);
+  const fromSummary = sender?.summary ?? null;
 
-  // OpenCode peers: deliver via cmux terminal or HTTP prompt_async
-  if (target?.agent_type === "opencode") {
-    if (target.surface_id) {
-      // Preferred: type message into OpenCode's terminal via cmux
-      deliverViaCmux(target, fromId, text, stmts).then((ok) => {
-        msgStmts.insertMessage.run(fromId, toId, text, now, ok ? 1 : 0);
-      }).catch(() => {
-        msgStmts.insertMessage.run(fromId, toId, text, now, 0);
-      });
-      return;
-    }
-    if (target.opencode_url) {
-      // Fallback: HTTP prompt_async
-      deliverToOpenCode(target, fromId, text, stmts).then((ok) => {
-        msgStmts.insertMessage.run(fromId, toId, text, now, ok ? 1 : 0);
-      }).catch(() => {
-        msgStmts.insertMessage.run(fromId, toId, text, now, 0);
-      });
-      return;
-    }
+  // Async delivery for OpenCode peers: insert synchronously as undelivered,
+  // then mark delivered when the async path resolves, so dashboard stats
+  // reflect the send immediately.
+  if (target?.agent_type === "opencode" && (target.surface_id || target.opencode_url)) {
+    const result = msgStmts.insertMessage.run(fromId, toId, text, now, 0);
+    const messageId = Number(result.lastInsertRowid);
+    const delivery = target.surface_id
+      ? deliverViaCmux(target, fromId, fromSummary, text)
+      : deliverViaOpenCodeHttp(target, fromId, fromSummary, text);
+    delivery
+      .then((ok) => { if (ok) msgStmts.markDelivered.run(messageId); })
+      .catch((e) => log(`Async delivery error for ${toId}: ${e}`));
+    return;
   }
 
-  // Default: deliver via WebSocket (Claude Code, Copilot, etc.)
+  // Synchronous delivery for Claude Code / Copilot via WebSocket
   const targetWs = ctx.peerSockets.get(toId);
   if (targetWs && targetWs.readyState === WS_OPEN) {
-    const sender = getPeer(stmts, fromId);
     targetWs.send(JSON.stringify({
       type: "message",
       from_id: fromId,
@@ -298,12 +256,20 @@ export function cleanStalePeers(
   stmts: PeerStatements,
   msgStmts: MessageStatements,
   serviceStmts: { deleteServiceByPeer: { run: (...args: any[]) => void } },
+  peerSockets?: Map<string, unknown>,
 ): void {
-  const peers = stmts.selectPeerIdPid.all() as { id: string; pid: number }[];
+  const peers = stmts.selectAllPeers.all() as Peer[];
   for (const peer of peers) {
-    if (!isProcessAlive(peer.pid)) {
+    const pidDead = !isProcessAlive(peer.pid);
+    // A peer marked connected in DB but missing from the WebSocket map is stale
+    // (PID recycled by OS, or broker restarted while peer was connected)
+    const orphanedConnection = peer.connected && peerSockets && !peerSockets.has(peer.id);
+    if (pidDead || orphanedConnection) {
       serviceStmts.deleteServiceByPeer.run(peer.id);
       stmts.deletePeerStmt.run(peer.id);
+      if (orphanedConnection && !pidDead) {
+        log(`Cleaned orphaned peer ${peer.id} (PID ${peer.pid} recycled, no active WebSocket)`);
+      }
     }
   }
   const cutoff = new Date(Date.now() - 7 * 24 * 3_600_000).toISOString();
