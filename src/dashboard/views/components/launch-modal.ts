@@ -112,6 +112,25 @@ export function launchModalStyles(): string {
     .launch-hint {
       font-size: 11px; color: #484f58; margin-top: 4px;
     }
+    .agent-type-selector {
+      display: flex; gap: 8px; margin-top: 4px;
+    }
+    .agent-type-option {
+      display: flex; align-items: center; gap: 6px;
+      padding: 6px 14px; border-radius: 6px;
+      border: 1px solid #30363d; background: none;
+      color: #8b949e; font-family: inherit; font-size: 12px;
+      cursor: pointer; transition: all 0.15s;
+    }
+    .agent-type-option:hover { border-color: #58a6ff; color: #e6edf3; }
+    .agent-type-option.selected { border-color: #58a6ff; color: #58a6ff; background: #0d1f3c; }
+    .agent-type-option.selected.opencode { border-color: #d2a8ff; color: #d2a8ff; background: #1c1030; }
+    .agent-type-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+    }
+    .agent-type-option .agent-type-dot { background: #484f58; }
+    .agent-type-option.selected .agent-type-dot { background: #58a6ff; }
+    .agent-type-option.selected.opencode .agent-type-dot { background: #d2a8ff; }
     .launch-btn {
       background: none; border: 1px solid #30363d; color: #8b949e;
       font-family: inherit; font-size: 11px;
@@ -188,6 +207,15 @@ export function launchModalHtml(): string {
         </div>
         <div class="launch-hint">Enter a folder name (e.g. <b>nav</b>) to scan ~/source/nav for git repos, or a full path</div>
         <div id="repoListContainer"></div>
+        <label>Agent type</label>
+        <div class="agent-type-selector" id="agentTypeSelector">
+          <button class="agent-type-option selected" data-type="claude-code" onclick="selectAgentType('claude-code')">
+            <span class="agent-type-dot"></span> Claude Code
+          </button>
+          <button class="agent-type-option opencode" data-type="opencode" onclick="selectAgentType('opencode')">
+            <span class="agent-type-dot"></span> OpenCode
+          </button>
+        </div>
         <label for="launchPrompt">Shared prompt for all agents (optional)</label>
         <textarea id="launchPrompt" placeholder="e.g. Build and start the service, then register it with hivemind"></textarea>
         <div id="saveProfileRow" class="save-profile-row">
@@ -213,6 +241,20 @@ export function launchModalScript(): string {
     var scannedRepos = [];
     var activeProfileId = null;
     var pendingProfileLoad = null;
+    var selectedAgentType = 'claude-code';
+
+    function selectAgentType(type) {
+      selectedAgentType = type;
+      var btns = document.querySelectorAll('.agent-type-option');
+      for (var i = 0; i < btns.length; i++) {
+        var btn = btns[i];
+        if (btn.getAttribute('data-type') === type) {
+          btn.classList.add('selected');
+        } else {
+          btn.classList.remove('selected');
+        }
+      }
+    }
 
     function openLaunchModal() {
       var overlay = $('launchOverlay');
@@ -228,6 +270,7 @@ export function launchModalScript(): string {
       scannedRepos = [];
       activeProfileId = null;
       pendingProfileLoad = null;
+      selectAgentType('claude-code');
       renderProfileList();
       $('launchDir').focus();
     }
@@ -324,11 +367,12 @@ export function launchModalScript(): string {
 
       $('launchError').style.display = 'none';
       var dirs = selected.map(function(r) { return { directory: r.path, name: r.name }; });
-      var msg = { type: 'launch_claude_instances', directories: dirs };
+      var msg = { type: 'launch_claude_instances', directories: dirs, agent_type: selectedAgentType };
       var prompt = $('launchPrompt').value.trim();
       if (prompt) msg.prompt = prompt;
       wsSend(msg);
-      addActivity('Launching ' + selected.length + ' agents...');
+      var label = selectedAgentType === 'opencode' ? 'OpenCode' : 'Claude Code';
+      addActivity('Launching ' + selected.length + ' ' + label + ' agents...');
       closeLaunchModal();
     }
 

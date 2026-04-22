@@ -11,6 +11,8 @@ import type {
   PairMessageStats,
 } from "../shared/types.ts";
 import { WS_OPEN, type BrokerContext } from "./db.ts";
+import { sendText, sendKey } from "../cmux/client.ts";
+import { formatPeerPrompt } from "../shared/message-prompt.ts";
 
 export function log(msg: string) {
   console.error(`[claude-hivemind broker] ${msg}`);
@@ -19,8 +21,8 @@ export function log(msg: string) {
 export function createPeerStatements(db: Database) {
   return {
     insertPeer: db.prepare(`
-      INSERT INTO peers (id, pid, cwd, git_root, git_branch, tty, summary, namespace, registered_at, last_seen, connected)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO peers (id, pid, cwd, git_root, git_branch, tty, summary, namespace, agent_type, opencode_url, surface_id, registered_at, last_seen, connected)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `),
     updateLastSeen: db.prepare(
       `UPDATE peers SET last_seen = ? WHERE id = ?`
@@ -137,6 +139,74 @@ export function getMessageStats(msgStmts: MessageStatements): { peer_stats: Peer
   };
 }
 
+async function deliverViaCmux(
+  target: Peer,
+  fromId: string,
+  fromSummary: string | null,
+  text: string,
+): Promise<boolean> {
+  const surfaceId = target.surface_id;
+  if (!surfaceId) return false;
+
+  const prompt = formatPeerPrompt(fromId, text, fromSummary);
+  try {
+    await sendText(prompt, surfaceId);
+    await sendKey("enter", surfaceId);
+    log(`Delivered message to ${target.agent_type} peer ${target.id} via cmux surface ${surfaceId}`);
+    return true;
+  } catch (e) {
+    log(`Failed to deliver via cmux to peer ${target.id}: ${e}`);
+    return false;
+  }
+}
+
+async function deliverViaOpenCodeHttp(
+  target: Peer,
+  fromId: string,
+  fromSummary: string | null,
+  text: string,
+): Promise<boolean> {
+  const baseUrl = target.opencode_url;
+  if (!baseUrl) return false;
+
+  let sessionId: string | null = null;
+  try {
+    const res = await fetch(`${baseUrl}/session`, { signal: AbortSignal.timeout(3000) });
+    if (!res.ok) return false;
+    const data = await res.json() as { sessions?: { id: string; updatedAt?: string }[] } | { id: string }[];
+    const sessions = Array.isArray(data) ? data : (data.sessions ?? []);
+    if (sessions.length === 0) {
+      log(`No active OpenCode session at ${baseUrl} for peer ${target.id}`);
+      return false;
+    }
+    sessionId = sessions.slice().sort((a: any, b: any) =>
+      (b.updatedAt ?? "").localeCompare(a.updatedAt ?? "")
+    )[0].id;
+  } catch (e) {
+    log(`Failed to resolve OpenCode session at ${baseUrl}: ${e}`);
+    return false;
+  }
+
+  const prompt = `[hivemind from ${fromId}${fromSummary ? ` — ${fromSummary}` : ""}] ${text}`;
+  try {
+    const res = await fetch(`${baseUrl}/session/${sessionId}/prompt_async`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt }),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (res.ok || res.status === 204) {
+      log(`Delivered message to OpenCode peer ${target.id} via HTTP`);
+      return true;
+    }
+    log(`OpenCode prompt_async returned ${res.status} for peer ${target.id}`);
+    return false;
+  } catch (e) {
+    log(`Failed to deliver to OpenCode peer ${target.id}: ${e}`);
+    return false;
+  }
+}
+
 export function deliverOrQueue(
   ctx: BrokerContext,
   stmts: PeerStatements,
@@ -146,9 +216,28 @@ export function deliverOrQueue(
   text: string,
   now: string,
 ): void {
+  const target = getPeer(stmts, toId);
+  const sender = getPeer(stmts, fromId);
+  const fromSummary = sender?.summary ?? null;
+
+  // Async delivery for OpenCode peers: insert synchronously as undelivered,
+  // then mark delivered when the async path resolves, so dashboard stats
+  // reflect the send immediately.
+  if (target?.agent_type === "opencode" && (target.surface_id || target.opencode_url)) {
+    const result = msgStmts.insertMessage.run(fromId, toId, text, now, 0);
+    const messageId = Number(result.lastInsertRowid);
+    const delivery = target.surface_id
+      ? deliverViaCmux(target, fromId, fromSummary, text)
+      : deliverViaOpenCodeHttp(target, fromId, fromSummary, text);
+    delivery
+      .then((ok) => { if (ok) msgStmts.markDelivered.run(messageId); })
+      .catch((e) => log(`Async delivery error for ${toId}: ${e}`));
+    return;
+  }
+
+  // Synchronous delivery for Claude Code / Copilot via WebSocket
   const targetWs = ctx.peerSockets.get(toId);
   if (targetWs && targetWs.readyState === WS_OPEN) {
-    const sender = getPeer(stmts, fromId);
     targetWs.send(JSON.stringify({
       type: "message",
       from_id: fromId,
@@ -167,12 +256,20 @@ export function cleanStalePeers(
   stmts: PeerStatements,
   msgStmts: MessageStatements,
   serviceStmts: { deleteServiceByPeer: { run: (...args: any[]) => void } },
+  peerSockets?: Map<string, unknown>,
 ): void {
-  const peers = stmts.selectPeerIdPid.all() as { id: string; pid: number }[];
+  const peers = stmts.selectAllPeers.all() as Peer[];
   for (const peer of peers) {
-    if (!isProcessAlive(peer.pid)) {
+    const pidDead = !isProcessAlive(peer.pid);
+    // A peer marked connected in DB but missing from the WebSocket map is stale
+    // (PID recycled by OS, or broker restarted while peer was connected)
+    const orphanedConnection = peer.connected && peerSockets && !peerSockets.has(peer.id);
+    if (pidDead || orphanedConnection) {
       serviceStmts.deleteServiceByPeer.run(peer.id);
       stmts.deletePeerStmt.run(peer.id);
+      if (orphanedConnection && !pidDead) {
+        log(`Cleaned orphaned peer ${peer.id} (PID ${peer.pid} recycled, no active WebSocket)`);
+      }
     }
   }
   const cutoff = new Date(Date.now() - 7 * 24 * 3_600_000).toISOString();

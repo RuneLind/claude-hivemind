@@ -58,6 +58,15 @@ export function peerCardStyles(): string {
       display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
     }
     .peer-id { font-weight: 600; color: #58a6ff; font-size: 13px; }
+    .agent-type-badge {
+      display: inline-block;
+      font-size: 10px; font-weight: 500;
+      padding: 1px 6px; border-radius: 4px;
+      border: 1px solid;
+    }
+    .agent-type-badge.claude-code { color: #58a6ff; border-color: #1f3a5f; background: #0d1f3c; }
+    .agent-type-badge.opencode { color: #d2a8ff; border-color: #3d2860; background: #1c1030; }
+    .agent-type-badge.copilot { color: #f0883e; border-color: #5a3520; background: #2a1a10; }
     .message-count-badge {
       margin-left: auto;
       background: #1f2a37;
@@ -155,6 +164,9 @@ export function peerCardScript(): string {
 
       html += '<div class="peer-header">';
       html += '<span class="peer-id">' + escapeHtml(peer.id) + '</span>';
+      var agentType = peer.agent_type || 'claude-code';
+      var agentLabel = agentType === 'claude-code' ? 'Claude' : agentType === 'opencode' ? 'OpenCode' : agentType === 'copilot' ? 'Copilot' : agentType;
+      html += '<span class="agent-type-badge ' + agentType + '">' + agentLabel + '</span>';
       if (total > 0) {
         html += '<button class="message-count-badge" onclick="openConversation(\\'' + escapeJs(peer.id) + '\\', null)" title="View messages">';
         html += total + ' msg' + (total !== 1 ? 's' : '');
