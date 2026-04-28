@@ -110,10 +110,24 @@ export function getAllPeers(stmts: PeerStatements): Peer[] {
   return stmts.selectAllPeers.all() as Peer[];
 }
 
-export function generateId(stmts: PeerStatements, cwd: string): string {
+export function generateId(
+  stmts: PeerStatements,
+  peerSockets: Map<string, unknown>,
+  cwd: string,
+): string {
   const base = cwd.split("/").pop() ?? "peer";
-  const livePeers = getAllPeers(stmts).filter((p) => isProcessAlive(p.pid));
-  const existing = livePeers.filter((p) => p.id === base || p.id.startsWith(base + "-"));
+  // peerSockets is authoritative for "actively connected" — PID checks lie
+  // briefly during fast re-execs (zombie PID, or close handler not yet fired)
+  // and would push us to <name>-2 even though the slot is effectively free.
+  const livePeers = getAllPeers(stmts).filter((p) => peerSockets.has(p.id));
+  // Only `<base>` and `<base>-<digits>` count as conflicts — hyphenated names
+  // like `melosys-api-claude` share a prefix with `melosys` but are distinct
+  // identities and must not push us to `melosys-2`.
+  const existing = livePeers.filter((p) => {
+    if (p.id === base) return true;
+    if (!p.id.startsWith(base + "-")) return false;
+    return /^\d+$/.test(p.id.slice(base.length + 1));
+  });
   if (existing.length === 0) return base;
   for (let i = 2; ; i++) {
     const candidate = `${base}-${i}`;

@@ -162,7 +162,16 @@ export function handlePeerMessage(
     case "register": {
       const now = new Date().toISOString();
       peerStmts.deleteByPid.run(msg.pid);
-      const id = generateId(peerStmts, msg.cwd);
+      const id = generateId(peerStmts, ctx.peerSockets, msg.cwd);
+
+      // generateId now ignores DB rows without an active WS, so the chosen ID
+      // may still match a stale row whose close handler hasn't fired yet.
+      // Clear it (and its service entry) so the upcoming INSERT doesn't
+      // collide on the PRIMARY KEY.
+      if (peerStmts.selectPeerById.get(id)) {
+        svcStmts.deleteServiceByPeer.run(id);
+        peerStmts.deletePeerStmt.run(id);
+      }
 
       const saved = peerStmts.selectSavedSummary.get(msg.cwd) as { summary: string } | null;
       const summary = msg.summary || saved?.summary || "";
