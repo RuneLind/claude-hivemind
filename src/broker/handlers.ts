@@ -161,7 +161,7 @@ export function handlePeerMessage(
   switch (msg.type) {
     case "register": {
       const now = new Date().toISOString();
-      peerStmts.deleteByPid.run(msg.pid);
+      peerStmts.deleteByPidNs.run(msg.pid, msg.namespace);
       const id = generateId(peerStmts, ctx.peerSockets, msg.cwd);
 
       // generateId now ignores DB rows without an active WS, so the chosen ID

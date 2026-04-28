@@ -39,7 +39,7 @@ export function createPeerStatements(db: Database) {
     selectPeersByNamespace: db.prepare(
       `SELECT * FROM peers WHERE namespace = ?`
     ),
-    deleteByPid: db.prepare(`DELETE FROM peers WHERE pid = ?`),
+    deleteByPidNs: db.prepare(`DELETE FROM peers WHERE pid = ? AND namespace = ?`),
     selectPeerIdPid: db.prepare(`SELECT id, pid FROM peers`),
     upsertSummary: db.prepare(`
       INSERT INTO saved_summaries (cwd, summary, updated_at) VALUES (?, ?, ?)
