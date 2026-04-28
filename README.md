@@ -1,12 +1,12 @@
 # claude-hivemind
 
-Let your Claude Code instances find each other and talk — with namespace isolation and a live dashboard.
+Let your AI coding agents find each other and talk — with namespace isolation and a live dashboard.
 
-Peers are automatically grouped by project directory (e.g., everything under `~/source/work/` is one namespace, `~/source/personal/` is another). Peers can only see and message others in the same namespace.
+Supports **Claude Code**, **OpenCode**, and **GitHub Copilot CLI** as first-class peers. Peers are automatically grouped by project directory (e.g., everything under `~/source/work/` is one namespace, `~/source/personal/` is another). Peers can only see and message others in the same namespace.
 
 ## How it works
 
-There are three components: the **broker**, the **MCP server**, and the **Claude Code channel**.
+There are three components: the **broker**, the **MCP server**, and a **per-agent push transport**.
 
 ```mermaid
 graph TB
@@ -14,7 +14,7 @@ graph TB
         CA[Claude Code A] <-->|stdio| MCP_A[MCP Server]
     end
     subgraph "Terminal 2 — work/project-web"
-        CB[Claude Code B] <-->|stdio| MCP_B[MCP Server]
+        CB[OpenCode B] <-->|stdio| MCP_B[MCP Server]
     end
     subgraph "Terminal 3 — personal/my-app"
         CC[Claude Code C] <-->|stdio| MCP_C[MCP Server]
@@ -23,6 +23,7 @@ graph TB
     MCP_A <-->|WebSocket| Broker
     MCP_B <-->|WebSocket| Broker
     MCP_C <-->|WebSocket| Broker
+    Broker -.->|prompt_async HTTP| CB
 
     Broker[Broker Daemon<br/>localhost:7899<br/>SQLite + Dashboard]
 
@@ -31,9 +32,15 @@ graph TB
 
 **Broker** — A singleton HTTP + WebSocket server on `localhost:7899`. Tracks all peers in SQLite, routes messages between them, enforces namespace isolation, and serves the web dashboard. Auto-started by the MCP server if not already running.
 
-**MCP Server** — One per Claude Code instance, spawned as a stdio MCP server. Connects to the broker via WebSocket for real-time messaging. When a message arrives, it pushes it to Claude Code instantly via the `claude/channel` notification protocol — no polling.
+**MCP Server** — One per agent instance, spawned as a stdio MCP server. Connects to the broker via WebSocket for real-time messaging. Agent type comes from `CLAUDE_HIVEMIND_AGENT_TYPE` (`claude-code`, `opencode`, or `copilot`).
 
-**Channel** — Claude Code's mechanism for receiving push notifications from MCP servers. When a peer sends a message, it arrives as a `<channel source="claude-hivemind">` block in the conversation, and Claude responds immediately.
+**Push transport** — How an inbound message reaches the agent depends on its type:
+
+| Agent | Push mechanism | Interrupts mid-task? |
+|-------|----------------|----------------------|
+| Claude Code | `claude/channel` MCP notification → `<channel source="claude-hivemind">` block | Yes |
+| OpenCode | `POST {OPENCODE_URL}/session/{id}/prompt_async` | No (queued for next turn) |
+| Copilot | WebSocket → MCP (CLI extension `session.send()` planned) | No (queued) |
 
 ### Message flow
 
@@ -97,13 +104,35 @@ bun install
 claude mcp add --scope user --transport stdio claude-hivemind -- bun ~/claude-hivemind/src/server.ts
 ```
 
-### 3. Run Claude Code with the hivemind
+### 3. Run an agent with the hivemind
+
+**Claude Code:**
 
 ```bash
 CLAUDE_HIVEMIND=1 claude --dangerously-skip-permissions --dangerously-load-development-channels server:claude-hivemind
 ```
 
-The `CLAUDE_HIVEMIND=1` env var activates the broker connection. Without it, the MCP server stays dormant and the instance won't register — so regular Claude Code sessions are unaffected.
+**OpenCode:** add the hivemind MCP server to `.opencode.json` in your project (or let the dashboard's launch flow generate it for you):
+
+```json
+{
+  "mcp": {
+    "claude-hivemind": {
+      "type": "local",
+      "command": ["bun", "/Users/you/claude-hivemind/src/server.ts"],
+      "environment": {
+        "CLAUDE_HIVEMIND": "1",
+        "CLAUDE_HIVEMIND_AGENT_TYPE": "opencode",
+        "OPENCODE_URL": "http://localhost:3000"
+      }
+    }
+  }
+}
+```
+
+Then start `opencode` in that directory. `OPENCODE_URL` lets the broker push messages via `prompt_async`.
+
+The `CLAUDE_HIVEMIND=1` env var activates the broker connection. Without it, the MCP server stays dormant and the instance won't register — so regular agent sessions are unaffected.
 
 Tip: create an alias for convenience:
 ```bash
@@ -116,6 +145,18 @@ alias claude-hive='CLAUDE_HIVEMIND=1 claude --dangerously-skip-permissions --dan
 bun dashboard
 # or open http://127.0.0.1:7899/
 ```
+
+## Environment variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CLAUDE_HIVEMIND` | (unset) | Set to `1` to activate the broker connection |
+| `CLAUDE_HIVEMIND_PORT` | `7899` | Broker port |
+| `CLAUDE_HIVEMIND_DB` | `~/.claude-hivemind.db` | SQLite database path |
+| `CLAUDE_HIVEMIND_AGENT_TYPE` | `claude-code` | Agent type: `claude-code`, `opencode`, or `copilot` |
+| `OPENCODE_URL` | (unset) | OpenCode HTTP API base URL for push delivery (e.g. `http://localhost:3000`) |
+| `OPENCODE_COMMAND` | `opencode` | OpenCode CLI binary name (e.g. `opencode-vanilla`) |
+| `CMUX_SOCKET_PATH` | auto-detected | cmux Unix socket path |
 
 ## Running the broker manually
 
@@ -170,7 +211,7 @@ Docker monitoring is enabled automatically when Docker is installed. If Docker i
 
 ## cmux integration (optional)
 
-If you have [cmux](https://cmux.com) installed, the dashboard shows a **+ Agent** button that lets you launch new Claude Code instances directly from the browser. Each instance opens in a new cmux workspace with the hivemind channel pre-loaded.
+If you have [cmux](https://cmux.com) installed, the dashboard shows a **+ Agents** button that lets you launch new Claude Code or OpenCode instances directly from the browser. Each instance opens in a new cmux workspace with the hivemind transport pre-configured (Claude Code via the development channel, OpenCode via an auto-generated `.opencode.json`).
 
 cmux is a macOS terminal multiplexer designed for managing multiple AI agent sessions. The hivemind broker connects to cmux via its Unix socket API (`/tmp/cmux.sock`) and polls for availability every 15 seconds. When cmux is detected, the launch button appears; when it's not, the button is hidden.
 
@@ -182,9 +223,9 @@ To enable:
    CMUX_SOCKET_MODE=allowAll cmux
    ```
 3. Start the hivemind broker (`bun dev`)
-4. Open the dashboard — the "+ Agent" button appears in the header
+4. Open the dashboard — the "+ Agents" button appears in the header
 
-The launch modal lets you specify a working directory, workspace name, and an optional initial prompt. The broker creates a cmux workspace, sends the `claude` command, and the new instance auto-connects back to hivemind as a peer.
+The launch modal lets you specify a working directory, agent type (Claude Code or OpenCode), and an optional initial prompt. The broker creates a cmux workspace, sends the appropriate launch command, and the new instance auto-connects back to hivemind as a peer.
 
 You can also check cmux status via the API:
 ```bash
