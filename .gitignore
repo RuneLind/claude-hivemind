@@ -32,3 +32,11 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # Finder (MacOS) folder config
 .DS_Store
+
+# Working / scratch docs belong in the mimir wiki repo, not here.
+# See ../mimir/plans/consolidate-working-docs-into-mimir.md for the policy.
+docs/handover-*.md
+docs/*-followups.md
+docs/*-plan.md
+docs/blog-*.md
+docs/*-races.md
