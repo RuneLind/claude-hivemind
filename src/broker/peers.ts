@@ -18,6 +18,13 @@ export function log(msg: string) {
   console.error(`[claude-hivemind broker] ${msg}`);
 }
 
+const DAY_MS = 24 * 3_600_000;
+// Delivered messages are kept for inspection in the dashboard's conversation
+// view; undelivered ones get a longer grace period so a peer that vanishes
+// for a few weeks still gets its backlog when it reconnects.
+const DELIVERED_RETENTION_MS = 7 * DAY_MS;
+const UNDELIVERED_RETENTION_MS = 30 * DAY_MS;
+
 export function createPeerStatements(db: Database) {
   return {
     insertPeer: db.prepare(`
@@ -63,8 +70,11 @@ export function createMessageStatements(db: Database) {
     markDelivered: db.prepare(
       `UPDATE messages SET delivered = 1 WHERE id = ?`
     ),
-    deleteOldMessages: db.prepare(
+    deleteOldDeliveredMessages: db.prepare(
       `DELETE FROM messages WHERE delivered = 1 AND sent_at < ?`
+    ),
+    deleteOldUndeliveredMessages: db.prepare(
+      `DELETE FROM messages WHERE delivered = 0 AND sent_at < ?`
     ),
     selectPeerStats: db.prepare(`
       SELECT peer_id, SUM(sent) as sent, SUM(received) as received FROM (
@@ -295,6 +305,7 @@ export function cleanStalePeers(
       }
     }
   }
-  const cutoff = new Date(Date.now() - 7 * 24 * 3_600_000).toISOString();
-  msgStmts.deleteOldMessages.run(cutoff);
+  const now = Date.now();
+  msgStmts.deleteOldDeliveredMessages.run(new Date(now - DELIVERED_RETENTION_MS).toISOString());
+  msgStmts.deleteOldUndeliveredMessages.run(new Date(now - UNDELIVERED_RETENTION_MS).toISOString());
 }
