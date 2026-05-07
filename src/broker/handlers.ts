@@ -121,20 +121,20 @@ export function getAllProfiles(stmts: ProfileStatements): LaunchProfile[] {
 export async function scanReposInDirectory(dir: string): Promise<ScannedRepo[]> {
   const fullPath = dir.startsWith("/") ? dir : `${SOURCE_DIR}/${dir}`;
 
-  let entries: string[];
-  try { entries = await readdir(fullPath); } catch { return []; }
+  let entries: import("node:fs").Dirent[];
+  try { entries = await readdir(fullPath, { withFileTypes: true }); } catch { return []; }
 
   const results = await Promise.all(entries.map(async (entry): Promise<ScannedRepo | null> => {
-    const entryPath = `${fullPath}/${entry}`;
-    try {
-      if (!(await stat(entryPath)).isDirectory()) return null;
-      await stat(`${entryPath}/.git`);
-    } catch { return null; }
+    if (!entry.isDirectory()) return null;
+    const entryPath = `${fullPath}/${entry.name}`;
+    let gitDir = `${entryPath}/.git`;
+
+    let gitStat;
+    try { gitStat = await stat(gitDir); } catch { return null; }
 
     let branch: string | null = null;
     try {
-      let gitDir = `${entryPath}/.git`;
-      if (!(await stat(gitDir)).isDirectory()) {
+      if (!gitStat.isDirectory()) {
         const m = (await Bun.file(gitDir).text()).trim().match(/^gitdir:\s*(.+)$/);
         if (m) gitDir = m[1];
       }
@@ -142,7 +142,7 @@ export async function scanReposInDirectory(dir: string): Promise<ScannedRepo[]> 
       const match = head.match(/^ref: refs\/heads\/(.+)$/);
       branch = match ? match[1] : head.slice(0, 8);
     } catch { /* no branch info */ }
-    return { name: entry, path: entryPath, branch };
+    return { name: entry.name, path: entryPath, branch };
   }));
 
   return results
@@ -517,12 +517,14 @@ export function handleDashboardMessage(
     }
 
     case "scan_repos": {
-      scanReposInDirectory(msg.directory).then((repos) => {
-        ws.send(JSON.stringify({
-          type: "scan_repos_result",
-          repos,
-        } satisfies DashboardMessage));
-      });
+      scanReposInDirectory(msg.directory)
+        .then((repos) => {
+          ws.send(JSON.stringify({
+            type: "scan_repos_result",
+            repos,
+          } satisfies DashboardMessage));
+        })
+        .catch((e) => log(`scan_repos error: ${e}`));
       break;
     }
 
