@@ -41,15 +41,22 @@ export function createServiceStatements(db: Database) {
 
 export type ServiceStatements = ReturnType<typeof createServiceStatements>;
 
-let polling = false;
+export interface ServicePollState {
+  polling: boolean;
+}
+
+export function createServicePollState(): ServicePollState {
+  return { polling: false };
+}
 
 export async function pollServiceHealth(
   ctx: BrokerContext,
   peerStmts: PeerStatements,
   svcStmts: ServiceStatements,
+  state: ServicePollState,
 ): Promise<void> {
-  if (polling) return;
-  polling = true;
+  if (state.polling) return;
+  state.polling = true;
   try {
     const services = svcStmts.selectAllServices.all() as ServiceInfo[];
     if (services.length === 0) return;
@@ -82,6 +89,6 @@ export async function pollServiceHealth(
       })
     );
   } finally {
-    polling = false;
+    state.polling = false;
   }
 }

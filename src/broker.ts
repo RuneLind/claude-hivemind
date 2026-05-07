@@ -34,7 +34,7 @@ import {
   cleanStalePeers,
   log,
 } from "./broker/peers.ts";
-import { createServiceStatements, pollServiceHealth } from "./broker/services.ts";
+import { createServiceStatements, createServicePollState, pollServiceHealth } from "./broker/services.ts";
 import {
   createDockerState,
   createDockerLogSubscriptionState,
@@ -82,6 +82,7 @@ const dockerState = createDockerState();
 const dockerLogSubs = createDockerLogSubscriptionState();
 const logSubState = createLogSubscriptionState();
 const cmuxState = createCmuxState();
+const servicePollState = createServicePollState();
 
 // --- HTTP + WebSocket server ---
 
@@ -433,14 +434,14 @@ const ctx: BrokerContext = { server, peerSockets };
 
 const dashboardDeps: DashboardDeps = {
   ctx, peerStmts, msgStmts, svcStmts, profileStmts,
-  dockerState, dockerLogSubs, logSubState, cmuxState,
+  dockerState, dockerLogSubs, logSubState, cmuxState, servicePollState,
 };
 
 // --- Start background tasks ---
 
 cleanStalePeers(peerStmts, msgStmts, svcStmts, peerSockets);
 setInterval(() => cleanStalePeers(peerStmts, msgStmts, svcStmts, peerSockets), 30_000);
-setInterval(() => pollServiceHealth(ctx, peerStmts, svcStmts), 15_000);
+setInterval(() => pollServiceHealth(ctx, peerStmts, svcStmts, servicePollState), 15_000);
 
 initDockerMonitoring(ctx, dockerState);
 

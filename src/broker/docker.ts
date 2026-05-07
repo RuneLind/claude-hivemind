@@ -15,11 +15,10 @@ export interface DockerState {
   available: boolean;
   polling: boolean;
   eventProc: ReturnType<typeof Bun.spawn> | null;
+  // Skip publish when unchanged
+  lastContainersJson: string;
+  lastLogStatsJson: string;
 }
-
-// Internal change-detection state (not part of public DockerState)
-let lastDockerJson = "";
-let lastDockerLogStatsJson = "";
 
 export function createDockerState(): DockerState {
   return {
@@ -28,6 +27,8 @@ export function createDockerState(): DockerState {
     available: false,
     polling: false,
     eventProc: null,
+    lastContainersJson: "",
+    lastLogStatsJson: "",
   };
 }
 
@@ -165,8 +166,8 @@ async function pollDockerContainers(ctx: BrokerContext, state: DockerState): Pro
 
     const containers = Array.from(state.containers.values());
     const json = JSON.stringify(containers);
-    if (json !== lastDockerJson) {
-      lastDockerJson = json;
+    if (json !== state.lastContainersJson) {
+      state.lastContainersJson = json;
       ctx.server.publish("dashboard", JSON.stringify({
         type: "docker_update",
         containers,
@@ -211,8 +212,8 @@ async function pollDockerLogStats(ctx: BrokerContext, state: DockerState): Promi
 
   if (results.length > 0) {
     const json = JSON.stringify(results);
-    if (json !== lastDockerLogStatsJson) {
-      lastDockerLogStatsJson = json;
+    if (json !== state.lastLogStatsJson) {
+      state.lastLogStatsJson = json;
       ctx.server.publish("dashboard", JSON.stringify({
         type: "docker_log_stats",
         logStats: results,
