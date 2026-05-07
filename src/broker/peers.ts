@@ -25,6 +25,12 @@ const DAY_MS = 24 * 3_600_000;
 const DELIVERED_RETENTION_MS = 7 * DAY_MS;
 const UNDELIVERED_RETENTION_MS = 30 * DAY_MS;
 
+// Resolving the active OpenCode session takes a 1–3s round-trip; chatty pairs
+// would pay it on every send. Cached per base URL with a short TTL so the
+// next message reuses the session without re-fetching.
+const OPENCODE_SESSION_TTL_MS = 30_000;
+const opencodeSessionCache = new Map<string, { sessionId: string; cachedAt: number }>();
+
 export function createPeerStatements(db: Database) {
   return {
     insertPeer: db.prepare(`
@@ -193,6 +199,31 @@ async function deliverViaCmux(
   }
 }
 
+async function resolveOpenCodeSession(baseUrl: string, peerId: string): Promise<string | null> {
+  const cached = opencodeSessionCache.get(baseUrl);
+  if (cached && Date.now() - cached.cachedAt < OPENCODE_SESSION_TTL_MS) {
+    return cached.sessionId;
+  }
+  try {
+    const res = await fetch(`${baseUrl}/session`, { signal: AbortSignal.timeout(3000) });
+    if (!res.ok) return null;
+    const data = await res.json() as { sessions?: { id: string; updatedAt?: string }[] } | { id: string }[];
+    const sessions = Array.isArray(data) ? data : (data.sessions ?? []);
+    if (sessions.length === 0) {
+      log(`No active OpenCode session at ${baseUrl} for peer ${peerId}`);
+      return null;
+    }
+    const sessionId = sessions.slice().sort((a: any, b: any) =>
+      (b.updatedAt ?? "").localeCompare(a.updatedAt ?? "")
+    )[0].id;
+    opencodeSessionCache.set(baseUrl, { sessionId, cachedAt: Date.now() });
+    return sessionId;
+  } catch (e) {
+    log(`Failed to resolve OpenCode session at ${baseUrl}: ${e}`);
+    return null;
+  }
+}
+
 async function deliverViaOpenCodeHttp(
   target: Peer,
   fromId: string,
@@ -202,23 +233,8 @@ async function deliverViaOpenCodeHttp(
   const baseUrl = target.opencode_url;
   if (!baseUrl) return false;
 
-  let sessionId: string | null = null;
-  try {
-    const res = await fetch(`${baseUrl}/session`, { signal: AbortSignal.timeout(3000) });
-    if (!res.ok) return false;
-    const data = await res.json() as { sessions?: { id: string; updatedAt?: string }[] } | { id: string }[];
-    const sessions = Array.isArray(data) ? data : (data.sessions ?? []);
-    if (sessions.length === 0) {
-      log(`No active OpenCode session at ${baseUrl} for peer ${target.id}`);
-      return false;
-    }
-    sessionId = sessions.slice().sort((a: any, b: any) =>
-      (b.updatedAt ?? "").localeCompare(a.updatedAt ?? "")
-    )[0].id;
-  } catch (e) {
-    log(`Failed to resolve OpenCode session at ${baseUrl}: ${e}`);
-    return false;
-  }
+  const sessionId = await resolveOpenCodeSession(baseUrl, target.id);
+  if (!sessionId) return false;
 
   const prompt = `[hivemind from ${fromId}${fromSummary ? ` — ${fromSummary}` : ""}] ${text}`;
   try {
@@ -231,6 +247,11 @@ async function deliverViaOpenCodeHttp(
     if (res.ok || res.status === 204) {
       log(`Delivered message to OpenCode peer ${target.id} via HTTP`);
       return true;
+    }
+    // Cached session is stale (deleted/expired on the OpenCode side); drop it
+    // so the next message re-resolves against the live /session listing.
+    if (res.status === 404 || res.status === 410) {
+      opencodeSessionCache.delete(baseUrl);
     }
     log(`OpenCode prompt_async returned ${res.status} for peer ${target.id}`);
     return false;
