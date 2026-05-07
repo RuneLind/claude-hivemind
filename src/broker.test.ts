@@ -651,10 +651,10 @@ describe("broker", () => {
       expect(isPeerLive(fakePeer(pid, 1), peerSockets)).toBe(false);
     });
 
-    test("dead PID → not live (regardless of WS map state)", async () => {
-      const proc = Bun.spawn(["sleep", "0.05"], { stdout: "ignore", stderr: "ignore" });
-      const pid = proc.pid;
-      await proc.exited;
+    test("dead PID → not live (regardless of WS map state)", () => {
+      // 999999 is high enough to be guaranteed unused on a dev machine;
+      // process.kill(pid, 0) throws ESRCH and isProcessAlive returns false.
+      const pid = 999_999;
       const withWs = new Map<string, unknown>([["p1", {}]]);
       expect(isPeerLive(fakePeer(pid, 1), withWs)).toBe(false);
       expect(isPeerLive(fakePeer(pid, 0), new Map())).toBe(false);

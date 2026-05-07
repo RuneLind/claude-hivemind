@@ -102,10 +102,8 @@ export function isProcessAlive(pid: number): boolean {
   }
 }
 
-// A peer is "live" if its PID is alive AND, when the DB says it's connected,
-// the peerSockets map confirms an active WebSocket. The second clause catches
-// orphaned rows: peer rebooted, broker restarted while peer was connected, or
-// PID got recycled — `connected=1` is stale until close handler fires.
+// `connected=1` rows can be stale after broker restart or PID recycling;
+// the WS-map check distinguishes a real connection from a leftover row.
 export function isPeerLive(
   peer: Peer,
   peerSockets: Map<string, unknown>,
