@@ -20,7 +20,7 @@ import {
   DASHBOARD_SENDER_ID,
 } from "../shared/types.ts";
 import { isCmuxAvailable, listWorkspaces, launchClaudeInstance, launchOpenCodeInstance, renameWorkspace } from "../cmux/client.ts";
-import { readdirSync, statSync, readFileSync } from "node:fs";
+import { readdir, stat } from "node:fs/promises";
 import { WS_OPEN, type BrokerContext, type PeerWSData, type WSData } from "./db.ts";
 import {
   generateId,
@@ -118,34 +118,36 @@ export function getAllProfiles(stmts: ProfileStatements): LaunchProfile[] {
 
 // --- repo scanning ---
 
-export function scanReposInDirectory(dir: string): ScannedRepo[] {
-  let fullPath = dir.startsWith("/") ? dir : `${SOURCE_DIR}/${dir}`;
+export async function scanReposInDirectory(dir: string): Promise<ScannedRepo[]> {
+  const fullPath = dir.startsWith("/") ? dir : `${SOURCE_DIR}/${dir}`;
 
   let entries: string[];
-  try { entries = readdirSync(fullPath); } catch { return []; }
+  try { entries = await readdir(fullPath); } catch { return []; }
 
-  const repos: ScannedRepo[] = [];
-  for (const entry of entries) {
+  const results = await Promise.all(entries.map(async (entry): Promise<ScannedRepo | null> => {
     const entryPath = `${fullPath}/${entry}`;
     try {
-      if (!statSync(entryPath).isDirectory()) continue;
-      statSync(`${entryPath}/.git`);
-    } catch { continue; }
+      if (!(await stat(entryPath)).isDirectory()) return null;
+      await stat(`${entryPath}/.git`);
+    } catch { return null; }
 
     let branch: string | null = null;
     try {
       let gitDir = `${entryPath}/.git`;
-      if (!statSync(gitDir).isDirectory()) {
-        const m = readFileSync(gitDir, "utf-8").trim().match(/^gitdir:\s*(.+)$/);
+      if (!(await stat(gitDir)).isDirectory()) {
+        const m = (await Bun.file(gitDir).text()).trim().match(/^gitdir:\s*(.+)$/);
         if (m) gitDir = m[1];
       }
-      const head = readFileSync(`${gitDir}/HEAD`, "utf-8").trim();
+      const head = (await Bun.file(`${gitDir}/HEAD`).text()).trim();
       const match = head.match(/^ref: refs\/heads\/(.+)$/);
       branch = match ? match[1] : head.slice(0, 8);
     } catch { /* no branch info */ }
-    repos.push({ name: entry, path: entryPath, branch });
-  }
-  return repos.sort((a, b) => a.name.localeCompare(b.name));
+    return { name: entry, path: entryPath, branch };
+  }));
+
+  return results
+    .filter((r): r is ScannedRepo => r !== null)
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 // --- Peer message handler ---
@@ -515,11 +517,12 @@ export function handleDashboardMessage(
     }
 
     case "scan_repos": {
-      const repos = scanReposInDirectory(msg.directory);
-      ws.send(JSON.stringify({
-        type: "scan_repos_result",
-        repos,
-      } satisfies DashboardMessage));
+      scanReposInDirectory(msg.directory).then((repos) => {
+        ws.send(JSON.stringify({
+          type: "scan_repos_result",
+          repos,
+        } satisfies DashboardMessage));
+      });
       break;
     }
 

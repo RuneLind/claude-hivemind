@@ -280,11 +280,11 @@ const server = Bun.serve<WSData>({
     },
 
     "/api/scan-repos": {
-      GET(req) {
+      async GET(req) {
         const url = new URL(req.url);
         const dir = url.searchParams.get("dir");
         if (!dir) return Response.json({ error: "dir required" }, { status: 400 });
-        const repos = scanReposInDirectory(dir);
+        const repos = await scanReposInDirectory(dir);
         return Response.json({ repos });
       },
     },
