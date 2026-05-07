@@ -1,6 +1,6 @@
 # claude-hivemind
 
-Peer discovery and messaging for AI coding agents (Claude Code, OpenCode, Copilot), with namespace isolation and a web dashboard.
+Peer discovery and messaging for AI coding agents (Claude Code, OpenCode, Copilot), with namespace-scoped discovery and a web dashboard.
 
 ## Architecture
 
