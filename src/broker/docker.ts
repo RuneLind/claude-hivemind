@@ -15,7 +15,7 @@ export interface DockerState {
   available: boolean;
   polling: boolean;
   eventProc: ReturnType<typeof Bun.spawn> | null;
-  // Last serialized snapshots — used to skip publishing when nothing changed
+  // Skip publish when unchanged
   lastContainersJson: string;
   lastLogStatsJson: string;
 }
