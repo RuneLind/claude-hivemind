@@ -27,7 +27,7 @@ import {
   createMessageStatements,
   getAllPeers,
   getPeer,
-  isProcessAlive,
+  isPeerLive,
   namespacesFromPeers,
   getMessageStats,
   deliverOrQueue,
@@ -122,9 +122,7 @@ const server = Bun.serve<WSData>({
         if (body.exclude_id) {
           peers = peers.filter((p) => p.id !== body.exclude_id);
         }
-        peers = peers.filter((p) =>
-          isProcessAlive(p.pid) && (!p.connected || peerSockets.has(p.id))
-        );
+        peers = peers.filter((p) => isPeerLive(p, peerSockets));
         return Response.json(peers);
       },
     },
@@ -151,9 +149,7 @@ const server = Bun.serve<WSData>({
     },
 
     "/api/status": () => {
-      const peers = getAllPeers(peerStmts).filter((p) =>
-        isProcessAlive(p.pid) && (!p.connected || peerSockets.has(p.id))
-      );
+      const peers = getAllPeers(peerStmts).filter((p) => isPeerLive(p, peerSockets));
       return Response.json({ peers, namespaces: namespacesFromPeers(peers) });
     },
 
@@ -324,10 +320,7 @@ const server = Bun.serve<WSData>({
     open(ws) {
       if (ws.data.kind === "dashboard") {
         ws.subscribe("dashboard");
-        // Filter: PID must be alive AND if marked connected, must have an active WebSocket
-        const peers = getAllPeers(peerStmts).filter((p) =>
-          isProcessAlive(p.pid) && (!p.connected || peerSockets.has(p.id))
-        );
+        const peers = getAllPeers(peerStmts).filter((p) => isPeerLive(p, peerSockets));
         const stats = getMessageStats(msgStmts);
         const services = svcStmts.selectAllServices.all() as ServiceInfo[];
         const baselines = svcStmts.selectAllBaselines.all() as LogBaseline[];

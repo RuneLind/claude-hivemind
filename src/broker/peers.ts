@@ -102,6 +102,17 @@ export function isProcessAlive(pid: number): boolean {
   }
 }
 
+// A peer is "live" if its PID is alive AND, when the DB says it's connected,
+// the peerSockets map confirms an active WebSocket. The second clause catches
+// orphaned rows: peer rebooted, broker restarted while peer was connected, or
+// PID got recycled — `connected=1` is stale until close handler fires.
+export function isPeerLive(
+  peer: Peer,
+  peerSockets: Map<string, unknown>,
+): boolean {
+  return isProcessAlive(peer.pid) && (!peer.connected || peerSockets.has(peer.id));
+}
+
 export function getPeer(stmts: PeerStatements, id: string): Peer | null {
   return (stmts.selectPeerById.get(id) as Peer) ?? null;
 }
