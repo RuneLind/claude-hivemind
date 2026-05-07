@@ -3,7 +3,8 @@ import type { Subprocess } from "bun";
 import { tmpdir } from "os";
 import { join } from "path";
 import { unlinkSync } from "fs";
-import type { BrokerMessage, DashboardMessage, ClientMessage } from "./shared/types.ts";
+import type { BrokerMessage, DashboardMessage, ClientMessage, Peer } from "./shared/types.ts";
+import { isPeerLive } from "./broker/peers.ts";
 
 // --- Test infrastructure ---
 
@@ -607,6 +608,56 @@ describe("broker", () => {
       const data = (await res.json()) as { peers: Array<{ id: string; summary: string }> };
       const peer = data.peers.find((p) => p.id === reg.id);
       expect(peer?.summary).toBe("updated summary");
+    });
+  });
+
+  describe("isPeerLive", () => {
+    function fakePeer(pid: number, connected: 0 | 1, id = "p1"): Peer {
+      return {
+        id,
+        pid,
+        cwd: "/test",
+        git_root: null,
+        git_branch: null,
+        tty: null,
+        summary: "",
+        namespace: "default",
+        agent_type: "claude-code",
+        opencode_url: null,
+        surface_id: null,
+        registered_at: "2026-01-01T00:00:00Z",
+        last_seen: "2026-01-01T00:00:00Z",
+        connected,
+      };
+    }
+
+    test("live PID + connected=1 + WS map has entry → live", () => {
+      const pid = spawnSleeper();
+      const peerSockets = new Map<string, unknown>([["p1", {}]]);
+      expect(isPeerLive(fakePeer(pid, 1), peerSockets)).toBe(true);
+    });
+
+    test("live PID + connected=0 → live (no WS check needed)", () => {
+      const pid = spawnSleeper();
+      const peerSockets = new Map<string, unknown>();
+      expect(isPeerLive(fakePeer(pid, 0), peerSockets)).toBe(true);
+    });
+
+    test("live PID + connected=1 + no WS entry → not live (orphaned row)", () => {
+      // The bug case: DB says connected, but the WS map disagrees.
+      // Happens after broker restart while peer was connected, or PID recycled.
+      const pid = spawnSleeper();
+      const peerSockets = new Map<string, unknown>();
+      expect(isPeerLive(fakePeer(pid, 1), peerSockets)).toBe(false);
+    });
+
+    test("dead PID → not live (regardless of WS map state)", () => {
+      // 999999 is high enough to be guaranteed unused on a dev machine;
+      // process.kill(pid, 0) throws ESRCH and isProcessAlive returns false.
+      const pid = 999_999;
+      const withWs = new Map<string, unknown>([["p1", {}]]);
+      expect(isPeerLive(fakePeer(pid, 1), withWs)).toBe(false);
+      expect(isPeerLive(fakePeer(pid, 0), new Map())).toBe(false);
     });
   });
 

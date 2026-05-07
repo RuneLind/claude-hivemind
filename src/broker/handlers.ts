@@ -26,7 +26,7 @@ import {
   generateId,
   getPeer,
   getAllPeers,
-  isProcessAlive,
+  isPeerLive,
   getMessageStats,
   deliverOrQueue,
   log,
@@ -309,7 +309,7 @@ export function handlePeerMessage(
       }
       peers = peers
         .filter((p) => p.id !== ws.data.peerId)
-        .filter((p) => isProcessAlive(p.pid) && (!p.connected || ctx.peerSockets.has(p.id)));
+        .filter((p) => isPeerLive(p, ctx.peerSockets));
 
       ws.send(JSON.stringify({ type: "peers", peers } satisfies BrokerMessage));
       break;
