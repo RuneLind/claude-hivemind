@@ -33,7 +33,7 @@ import {
   type PeerStatements,
   type MessageStatements,
 } from "./peers.ts";
-import type { ServiceStatements } from "./services.ts";
+import type { ServiceStatements, ServicePollState } from "./services.ts";
 import { pollServiceHealth } from "./services.ts";
 import type { DockerState, DockerLogSubscriptionState } from "./docker.ts";
 import { runDockerCommand, subscribeDockerLogs, unsubscribeDockerLogs } from "./docker.ts";
@@ -365,6 +365,7 @@ export interface DashboardDeps {
   dockerLogSubs: DockerLogSubscriptionState;
   logSubState: LogSubscriptionState;
   cmuxState: CmuxState;
+  servicePollState: ServicePollState;
 }
 
 export function handleDashboardMessage(
@@ -372,7 +373,7 @@ export function handleDashboardMessage(
   ws: import("bun").ServerWebSocket<WSData>,
   deps: DashboardDeps,
 ): void {
-  const { ctx, peerStmts, msgStmts, svcStmts, profileStmts, dockerState, dockerLogSubs, logSubState, cmuxState } = deps;
+  const { ctx, peerStmts, msgStmts, svcStmts, profileStmts, dockerState, dockerLogSubs, logSubState, cmuxState, servicePollState } = deps;
   switch (msg.type) {
     case "send_to_peer": {
       const peer = getPeer(peerStmts, msg.peer_id);
@@ -461,7 +462,7 @@ export function handleDashboardMessage(
           });
           await killProc.exited;
           log(`Killed processes on port ${svc.port}`);
-          setTimeout(() => pollServiceHealth(ctx, peerStmts, svcStmts), 500);
+          setTimeout(() => pollServiceHealth(ctx, peerStmts, svcStmts, servicePollState), 500);
         } catch (e) {
           log(`Error stopping service on port ${svc.port}: ${e}`);
         }
