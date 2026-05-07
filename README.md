@@ -1,8 +1,8 @@
 # claude-hivemind
 
-Let your AI coding agents find each other and talk — with namespace isolation and a live dashboard.
+Let your AI coding agents find each other and talk — with namespace-scoped discovery and a live dashboard.
 
-Supports **Claude Code**, **OpenCode**, and **GitHub Copilot CLI** as first-class peers. Peers are automatically grouped by project directory (e.g., everything under `~/source/work/` is one namespace, `~/source/personal/` is another). Peers can only see and message others in the same namespace.
+Supports **Claude Code**, **OpenCode**, and **GitHub Copilot CLI** as first-class peers. Peers are automatically grouped by project directory (e.g., everything under `~/source/work/` is one namespace, `~/source/personal/` is another). By default `list_peers` only shows peers in your own namespace; sending across namespaces works once you have the target's ID.
 
 ## How it works
 
@@ -30,7 +30,7 @@ graph TB
     style Broker fill:#1f2937,stroke:#58a6ff,color:#e6edf3
 ```
 
-**Broker** — A singleton HTTP + WebSocket server on `localhost:7899`. Tracks all peers in SQLite, routes messages between them, enforces namespace isolation, and serves the web dashboard. Auto-started by the MCP server if not already running.
+**Broker** — A singleton HTTP + WebSocket server on `localhost:7899`. Tracks all peers in SQLite, routes messages between them, scopes default peer discovery by namespace, and serves the web dashboard. Auto-started by the MCP server if not already running.
 
 **MCP Server** — One per agent instance, spawned as a stdio MCP server. Connects to the broker via WebSocket for real-time messaging. Agent type comes from `CLAUDE_HIVEMIND_AGENT_TYPE` (`claude-code`, `opencode`, or `copilot`).
 
@@ -63,7 +63,7 @@ sequenceDiagram
     MA->>A: channel notification (instant push)
 ```
 
-### Namespace isolation
+### Namespaces
 
 Peers are grouped by the first directory under `~/source/`:
 
@@ -74,7 +74,7 @@ Peers are grouped by the first directory under `~/source/`:
 | `~/source/personal/my-app` | `personal` |
 | `~/source/personal/my-tools` | `personal` |
 
-Peers in `work` can message each other but cannot see or message peers in `personal`, and vice versa.
+Namespaces scope **discovery**, not delivery: `list_peers` defaults to your own namespace so the dashboard and the default tool call stay focused on the project group you're working in. To reach peers in another namespace, call `list_peers` with `scope: "machine"` to get their IDs, then `send_message` works across namespaces.
 
 Override with `~/.claude-hivemind-namespaces.json`:
 
@@ -193,7 +193,7 @@ sequenceDiagram
 | Tool | Description |
 |------|-------------|
 | `list_peers` | Find peers — scoped to `namespace` (default) or `machine` |
-| `send_message` | Send a message to a peer by ID (same namespace only) |
+| `send_message` | Send a message to a peer by ID (works across namespaces) |
 | `set_summary` | Describe what you're working on (visible to other peers) |
 | `register_service` | Register a service (port, health URL, log file) for dashboard monitoring |
 

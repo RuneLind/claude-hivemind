@@ -295,7 +295,7 @@ const mcp = new Server(
       experimental: { "claude/channel": {} },
       tools: {},
     },
-    instructions: `You are connected to the claude-hivemind network. Other AI coding agents (Claude Code, OpenCode, Copilot) on this machine can see you and send you messages within your namespace (project group).
+    instructions: `You are connected to the claude-hivemind network. Other AI coding agents (Claude Code, OpenCode, Copilot) on this machine can see you and send you messages. By default list_peers only shows agents in your namespace (project group), but messages can be sent to any peer ID across namespaces.
 
 IMPORTANT: When you receive a <channel source="claude-hivemind" ...> message, RESPOND IMMEDIATELY. Do not wait until your current task is finished. Pause what you are doing, reply to the message using send_message, then resume your work. Treat incoming peer messages like a coworker tapping you on the shoulder — answer right away, even if you're in the middle of something.
 
@@ -303,7 +303,7 @@ Read the from_id, from_summary, and from_cwd attributes to understand who sent t
 
 Available tools:
 - list_peers: Discover other AI agents (scope: namespace or machine)
-- send_message: Send a message to another agent by ID (same namespace only)
+- send_message: Send a message to another agent by ID (works across namespaces)
 - set_summary: Set a 1-2 sentence summary of what you're working on (visible to other peers)
 
 When you start, proactively call set_summary to describe what you're working on. This helps other agents understand your context.`,
@@ -334,7 +334,7 @@ const TOOLS = [
   {
     name: "send_message",
     description:
-      "Send a message to another AI coding agent by peer ID. Only peers in the same namespace can message each other.",
+      "Send a message to another AI coding agent by peer ID. Cross-namespace sends work as long as you have the target's ID (use list_peers with scope 'machine' to discover peers outside your namespace).",
     inputSchema: {
       type: "object" as const,
       properties: {

@@ -3,7 +3,7 @@
  * claude-hivemind broker daemon
  *
  * Singleton HTTP + WebSocket server on localhost:7899 backed by SQLite.
- * Tracks peers, routes messages with namespace isolation, serves dashboard.
+ * Tracks peers, routes messages, scopes default discovery by namespace, serves dashboard.
  *
  * Auto-launched by the MCP server if not already running.
  * Run directly: bun broker.ts
