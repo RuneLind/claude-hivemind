@@ -43,3 +43,13 @@ docs/*-races.md
 
 # Local-only Claude Code memory (private LLM-session redirect to mimir wiki repo)
 CLAUDE.local.md
+
+# Claude Code: track settings.json, ignore agent worktrees and other local state
+.claude/*
+!.claude/settings.json
+
+# Cursor IDE local config
+.cursor/
+
+# Local MCP server config (bun ./src/server.ts) — not checked in
+.mcp.json
