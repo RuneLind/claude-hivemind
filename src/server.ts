@@ -30,6 +30,7 @@ import {
 } from "./shared/namespace.ts";
 import { formatPeerPrompt } from "./shared/message-prompt.ts";
 import { sendText, sendKey } from "./cmux/client.ts";
+import { CorrelationTracker } from "./correlation-tracker.ts";
 
 const BROKER_PORT = parseInt(process.env.CLAUDE_HIVEMIND_PORT ?? "7899", 10);
 const BROKER_URL = `http://127.0.0.1:${BROKER_PORT}`;
@@ -53,6 +54,10 @@ const myWorkspaceId: string | null = process.env.CMUX_WORKSPACE_ID ?? null;
 let orientationSent = false;
 let pendingPeersResolve: ((peers: Peer[]) => void) | null = null;
 let pendingPeersReject: ((err: Error) => void) | null = null;
+
+// Tracks inbound correlation tokens per peer so a reply auto-echoes the right
+// one (single-in-flight). See correlation-tracker.ts.
+const correlation = new CorrelationTracker();
 
 function log(msg: string) {
   console.error(`[claude-hivemind] ${msg}`);
@@ -214,6 +219,11 @@ function handleBrokerMessage(msg: BrokerMessage): void {
       break;
 
     case "message":
+      // Track the inbound token regardless of delivery transport, so a later
+      // send_message to this peer can auto-echo it. Runs before the agent-type
+      // branch so cmux-injected peers are covered too.
+      correlation.recordInbound(msg.from_id, msg.correlation_id);
+
       if (myAgentType === "claude-code") {
         mcp
           .notification({
@@ -225,6 +235,9 @@ function handleBrokerMessage(msg: BrokerMessage): void {
                 from_summary: msg.from_summary,
                 from_cwd: msg.from_cwd,
                 sent_at: msg.sent_at,
+                // Surface the token so a cooperating client can echo it
+                // explicitly via send_message's in_reply_to.
+                correlation_id: msg.correlation_id,
               },
             },
           })
@@ -334,7 +347,7 @@ const TOOLS = [
   {
     name: "send_message",
     description:
-      "Send a message to another AI coding agent by peer ID. Cross-namespace sends work as long as you have the target's ID (use list_peers with scope 'machine' to discover peers outside your namespace).",
+      "Send a message to another AI coding agent by peer ID. Cross-namespace sends work as long as you have the target's ID (use list_peers with scope 'machine' to discover peers outside your namespace). Replies to a peer's message are auto-correlated; pass in_reply_to only to disambiguate when several of that peer's messages are open at once.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -346,6 +359,11 @@ const TOOLS = [
         message: {
           type: "string" as const,
           description: "The message to send",
+        },
+        in_reply_to: {
+          type: "string" as const,
+          description:
+            "Optional. The correlation_id from a specific inbound message you are replying to (seen in the channel meta). Usually unnecessary — a reply auto-correlates to the peer's last message — but set it when the peer has sent you several messages and you need to pick which one this answers.",
         },
       },
       required: ["to", "message"],
@@ -443,10 +461,13 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "send_message": {
-      const { to, message } = args as { to: string; message: string };
+      const { to, message, in_reply_to } = args as { to: string; message: string; in_reply_to?: string };
       if (!myId) return textResult("Not registered with broker yet", true);
       if (!to) return textResult("Missing target peer ID (to)", true);
-      const sent = wsSend({ type: "send_message", to, text: message });
+      // Echo an explicit in_reply_to, else auto-echo only when one inbound
+      // token is in flight for this peer (omit when ambiguous → clean fallback).
+      const correlation_id = correlation.resolveOutbound(to, in_reply_to);
+      const sent = wsSend({ type: "send_message", to, text: message, correlation_id });
       if (!sent) return textResult("Not connected to broker. Message not sent.", true);
       return textResult(`Message sent to peer ${to}`);
     }
