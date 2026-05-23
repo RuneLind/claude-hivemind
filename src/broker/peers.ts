@@ -67,8 +67,8 @@ export function createPeerStatements(db: Database) {
 export function createMessageStatements(db: Database) {
   return {
     insertMessage: db.prepare(`
-      INSERT INTO messages (from_id, to_id, text, sent_at, delivered)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO messages (from_id, to_id, text, sent_at, delivered, correlation_id)
+      VALUES (?, ?, ?, ?, ?, ?)
     `),
     selectUndelivered: db.prepare(
       `SELECT * FROM messages WHERE to_id = ? AND delivered = 0 ORDER BY sent_at ASC`
@@ -93,12 +93,12 @@ export function createMessageStatements(db: Database) {
       SELECT from_id, to_id, COUNT(*) as count FROM messages GROUP BY from_id, to_id
     `),
     selectConversation: db.prepare(`
-      SELECT id, from_id, to_id, text, sent_at FROM messages
+      SELECT id, from_id, to_id, text, sent_at, correlation_id FROM messages
       WHERE (from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?)
       ORDER BY sent_at ASC
     `),
     selectPeerMessages: db.prepare(`
-      SELECT id, from_id, to_id, text, sent_at FROM messages
+      SELECT id, from_id, to_id, text, sent_at, correlation_id FROM messages
       WHERE from_id = ? OR to_id = ?
       ORDER BY sent_at ASC
     `),
@@ -269,6 +269,9 @@ export function deliverOrQueue(
   toId: string,
   text: string,
   now: string,
+  // Opaque token the sender attached. The broker never interprets it; it's
+  // persisted and round-tripped to the target so a reply can be correlated.
+  correlationId: string | null = null,
 ): void {
   const target = getPeer(stmts, toId);
   const sender = getPeer(stmts, fromId);
@@ -276,9 +279,11 @@ export function deliverOrQueue(
 
   // Async delivery for OpenCode peers: insert synchronously as undelivered,
   // then mark delivered when the async path resolves, so dashboard stats
-  // reflect the send immediately.
+  // reflect the send immediately. (Text-injection delivery can't carry the
+  // token, so OpenCode peers fall back to coarse correlation — see the design
+  // doc; we still persist it for the dashboard conversation view.)
   if (target?.agent_type === "opencode" && (target.surface_id || target.opencode_url)) {
-    const result = msgStmts.insertMessage.run(fromId, toId, text, now, 0);
+    const result = msgStmts.insertMessage.run(fromId, toId, text, now, 0, correlationId);
     const messageId = Number(result.lastInsertRowid);
     const delivery = target.surface_id
       ? deliverViaCmux(target, fromId, fromSummary, text)
@@ -299,10 +304,11 @@ export function deliverOrQueue(
       from_cwd: sender?.cwd ?? "",
       text,
       sent_at: now,
+      correlation_id: correlationId ?? undefined,
     } satisfies BrokerMessage));
-    msgStmts.insertMessage.run(fromId, toId, text, now, 1);
+    msgStmts.insertMessage.run(fromId, toId, text, now, 1, correlationId);
   } else {
-    msgStmts.insertMessage.run(fromId, toId, text, now, 0);
+    msgStmts.insertMessage.run(fromId, toId, text, now, 0, correlationId);
   }
 }
 

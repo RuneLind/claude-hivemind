@@ -42,6 +42,10 @@ Docker, log subscriptions, and cmux each have a `createXState()` factory that re
 - **opencode**: Resolve active session via `GET {opencode_url}/session` (cached 30s), then `POST {opencode_url}/session/{id}/prompt_async` (queued for next turn)
 - **copilot**: WebSocket delivery (same as claude-code for now; future: CLI extension `session.send()`)
 
+### `correlation_id` (opaque reply token)
+
+`send_message` may carry an optional `correlation_id` the broker **never interprets** — it persists it on the `messages` row and round-trips it to the target (live WS payload + queued redelivery). A peer mints a token on an outbound and matches it on the echoed reply to route the reply back to the request it answers. Text-injection transports (OpenCode HTTP push / cmux) can't carry it, so those targets fall back to coarse correlation. Design + consumer side: `mimir/plans/claude-hivemind-reply-correlation.md`.
+
 ## Adding new features
 
 - New DB tables: add `CREATE TABLE` to `db.ts` → `initDatabase()`, add prepared statements to the relevant domain module.

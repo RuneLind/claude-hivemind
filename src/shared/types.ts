@@ -28,6 +28,7 @@ export interface Message {
   text: string;
   sent_at: string; // ISO timestamp
   delivered: number; // 0 or 1
+  correlation_id?: string | null; // opaque token, persisted for queued redelivery
 }
 
 export const DEFAULT_HEALTH_URL = "/health";
@@ -62,7 +63,7 @@ export type ClientMessage =
       workspace_id?: string; // cmux workspace ID for rename on registration
     }
   | { type: "set_summary"; summary: string }
-  | { type: "send_message"; to: PeerId; text: string }
+  | { type: "send_message"; to: PeerId; text: string; correlation_id?: string }
   | { type: "list_peers"; scope: "namespace" | "machine" }
   | { type: "heartbeat" }
   | {
@@ -84,6 +85,10 @@ export type BrokerMessage =
       from_cwd: string;
       text: string;
       sent_at: string;
+      // Opaque correlation token, echoed back by the originator. The broker
+      // never interprets it — it round-trips whatever a sender attached to
+      // `send_message`, so a peer can match a reply to the request it answers.
+      correlation_id?: string;
     }
   | { type: "peers"; peers: Peer[] }
   | { type: "error"; error: string }
@@ -195,6 +200,7 @@ export interface StoredMessage {
   to_id: PeerId;
   text: string;
   sent_at: string;
+  correlation_id?: string | null;
 }
 
 // --- Log types ---
