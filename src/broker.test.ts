@@ -312,6 +312,87 @@ describe("broker", () => {
       expect(received.text).toBe("cross-namespace hello");
     });
 
+    test("correlation_id round-trips on live delivery", async () => {
+      const ws1 = connectPeer(testPort, "corr-ns");
+      const ws2 = connectPeer(testPort, "corr-ns");
+      const pid1 = spawnSleeper();
+      const pid2 = spawnSleeper();
+
+      await registerPeer(ws1, { cwd: "/test/corr-sender", namespace: "corr-ns", pid: pid1 });
+      const reg2 = await registerPeer(ws2, { cwd: "/test/corr-receiver", namespace: "corr-ns", pid: pid2 });
+
+      const messagePromise = waitForMessage<BrokerMessage & { type: "message" }>(ws2, "message");
+      sendMessage(ws1, {
+        type: "send_message",
+        to: reg2.id,
+        text: "ping",
+        correlation_id: "tok-abc-123",
+      });
+
+      const received = await messagePromise;
+      expect(received.correlation_id).toBe("tok-abc-123");
+    });
+
+    test("message without correlation_id omits the field (backward compatible)", async () => {
+      const ws1 = connectPeer(testPort, "corr-bc-ns");
+      const ws2 = connectPeer(testPort, "corr-bc-ns");
+      const pid1 = spawnSleeper();
+      const pid2 = spawnSleeper();
+
+      await registerPeer(ws1, { cwd: "/test/corr-bc-sender", namespace: "corr-bc-ns", pid: pid1 });
+      const reg2 = await registerPeer(ws2, { cwd: "/test/corr-bc-receiver", namespace: "corr-bc-ns", pid: pid2 });
+
+      const messagePromise = waitForMessage<BrokerMessage & { type: "message" }>(ws2, "message");
+      sendMessage(ws1, { type: "send_message", to: reg2.id, text: "no token" });
+
+      const received = await messagePromise;
+      expect(received.correlation_id).toBeUndefined();
+    });
+
+    test("correlation_id survives queueing for an offline peer", async () => {
+      // Sender stays connected; the target registers, disconnects, then a
+      // message is queued for it. On reconnect the queued message must still
+      // carry the correlation_id.
+      const sender = connectPeer(testPort, "corr-queue-ns");
+      const pidSender = spawnSleeper();
+      await registerPeer(sender, { cwd: "/test/corr-q-sender", namespace: "corr-queue-ns", pid: pidSender });
+
+      const receiver1 = connectPeer(testPort, "corr-queue-ns");
+      const pidReceiver = spawnSleeper();
+      const regR = await registerPeer(receiver1, {
+        cwd: "/test/corr-q-receiver",
+        namespace: "corr-queue-ns",
+        pid: pidReceiver,
+      });
+
+      // Drop the receiver so the next send is queued, not delivered live.
+      await closeSocket(receiver1);
+      removeFromActive(receiver1);
+      await Bun.sleep(200); // let the broker's close handler drop it from peerSockets
+
+      sendMessage(sender, {
+        type: "send_message",
+        to: regR.id,
+        text: "queued ping",
+        correlation_id: "tok-queued-9",
+      });
+      await Bun.sleep(100);
+
+      // Reconnect with the SAME cwd so the broker reuses the peer id and
+      // delivers the backlog.
+      const receiver2 = connectPeer(testPort, "corr-queue-ns");
+      const queuedPromise = waitForMessage<BrokerMessage & { type: "message" }>(receiver2, "message");
+      await registerPeer(receiver2, {
+        cwd: "/test/corr-q-receiver",
+        namespace: "corr-queue-ns",
+        pid: pidReceiver,
+      });
+
+      const queued = await queuedPromise;
+      expect(queued.text).toBe("queued ping");
+      expect(queued.correlation_id).toBe("tok-queued-9");
+    });
+
     test("message to non-existent peer returns an error", async () => {
       const ws = connectPeer(testPort, "err-ns");
       const pid = spawnSleeper();

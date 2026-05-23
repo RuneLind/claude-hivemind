@@ -224,6 +224,7 @@ export function handlePeerMessage(
           from_cwd: sender?.cwd ?? "",
           text: m.text,
           sent_at: m.sent_at,
+          correlation_id: m.correlation_id ?? undefined,
         };
         ws.send(JSON.stringify(deliverMsg));
         msgStmts.markDelivered.run(m.id);
@@ -283,7 +284,7 @@ export function handlePeerMessage(
 
 
       const now = new Date().toISOString();
-      deliverOrQueue(ctx, peerStmts, msgStmts, fromId, msg.to, msg.text, now);
+      deliverOrQueue(ctx, peerStmts, msgStmts, fromId, msg.to, msg.text, now, msg.correlation_id ?? null);
 
       const stats = getMessageStats(msgStmts);
       ctx.server.publish(

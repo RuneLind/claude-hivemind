@@ -134,6 +134,7 @@ const server = Bun.serve<WSData>({
           from_id: string;
           to_id: string;
           text: string;
+          correlation_id?: string;
         };
         const target = getPeer(peerStmts, body.to_id);
         if (!target) {
@@ -144,7 +145,7 @@ const server = Bun.serve<WSData>({
         }
 
         const now = new Date().toISOString();
-        deliverOrQueue(ctx, peerStmts, msgStmts, body.from_id, body.to_id, body.text, now);
+        deliverOrQueue(ctx, peerStmts, msgStmts, body.from_id, body.to_id, body.text, now, body.correlation_id ?? null);
         return Response.json({ ok: true });
       },
     },

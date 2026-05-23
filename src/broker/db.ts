@@ -63,9 +63,15 @@ export function initDatabase(dbPath: string): Database {
       to_id TEXT NOT NULL,
       text TEXT NOT NULL,
       sent_at TEXT NOT NULL,
-      delivered INTEGER NOT NULL DEFAULT 0
+      delivered INTEGER NOT NULL DEFAULT 0,
+      correlation_id TEXT
     )
   `);
+
+  // Migrate existing databases: add correlation_id if missing. Opaque token a
+  // sender attaches to a message; persisted so a queued (offline-peer) message
+  // still carries it on redelivery.
+  try { db.run(`ALTER TABLE messages ADD COLUMN correlation_id TEXT`); } catch {}
 
   db.run(`
     CREATE TABLE IF NOT EXISTS services (
