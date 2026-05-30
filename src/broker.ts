@@ -87,6 +87,25 @@ function isAllowedOrigin(req: Request): boolean {
   return ALLOWED_ORIGINS.has(origin);
 }
 
+// --- Top-level safety nets ---
+//
+// A single unhandled rejection or thrown error in background polling (Docker,
+// service health, cmux) must not tear the broker down — that would drop every
+// connected peer. Log and survive instead.
+process.on("unhandledRejection", (reason) => {
+  log(`Unhandled rejection: ${reason instanceof Error ? reason.stack ?? reason.message : String(reason)}`);
+});
+process.on("uncaughtException", (err) => {
+  log(`Uncaught exception: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
+});
+
+function isAddrInUse(err: unknown): boolean {
+  if (!err) return false;
+  const code = (err as { code?: string }).code;
+  if (code === "EADDRINUSE") return true;
+  return /EADDRINUSE|address already in use|in use/i.test(String(err));
+}
+
 // --- Database & statements ---
 
 const db = initDatabase(DB_PATH);
@@ -106,7 +125,8 @@ const servicePollState = createServicePollState();
 
 // --- HTTP + WebSocket server ---
 
-const server = Bun.serve<WSData>({
+function startServer() {
+  return Bun.serve<WSData>({
   port: PORT,
   hostname: "127.0.0.1",
 
@@ -350,43 +370,49 @@ const server = Bun.serve<WSData>({
     idleTimeout: 120,
 
     open(ws) {
-      if (ws.data.kind === "dashboard") {
-        ws.subscribe("dashboard");
-        const peers = getAllPeers(peerStmts).filter((p) => isPeerLive(p, peerSockets));
-        const stats = getMessageStats(msgStmts);
-        const services = svcStmts.selectAllServices.all() as ServiceInfo[];
-        const baselines = svcStmts.selectAllBaselines.all() as LogBaseline[];
-        const profiles = getAllProfiles(profileStmts);
-        ws.send(
-          JSON.stringify({
-            type: "snapshot",
-            peers,
-            namespaces: namespacesFromPeers(peers),
-            peer_stats: stats.peer_stats,
-            pair_stats: stats.pair_stats,
-            services,
-            baselines,
-            profiles,
-          } satisfies DashboardMessage)
-        );
-        if (dockerState.available && dockerState.containers.size > 0) {
+      // Mirror the error boundary in message(): a DB/snapshot failure here
+      // must not bubble up and tear down the connection (or worse).
+      try {
+        if (ws.data.kind === "dashboard") {
+          ws.subscribe("dashboard");
+          const peers = getAllPeers(peerStmts).filter((p) => isPeerLive(p, peerSockets));
+          const stats = getMessageStats(msgStmts);
+          const services = svcStmts.selectAllServices.all() as ServiceInfo[];
+          const baselines = svcStmts.selectAllBaselines.all() as LogBaseline[];
+          const profiles = getAllProfiles(profileStmts);
           ws.send(
             JSON.stringify({
-              type: "docker_snapshot",
-              containers: Array.from(dockerState.containers.values()),
-              logStats: Array.from(dockerState.logStats.values()),
+              type: "snapshot",
+              peers,
+              namespaces: namespacesFromPeers(peers),
+              peer_stats: stats.peer_stats,
+              pair_stats: stats.pair_stats,
+              services,
+              baselines,
+              profiles,
             } satisfies DashboardMessage)
           );
+          if (dockerState.available && dockerState.containers.size > 0) {
+            ws.send(
+              JSON.stringify({
+                type: "docker_snapshot",
+                containers: Array.from(dockerState.containers.values()),
+                logStats: Array.from(dockerState.logStats.values()),
+              } satisfies DashboardMessage)
+            );
+          }
+          if (cmuxState.available) {
+            ws.send(
+              JSON.stringify({
+                type: "cmux_status",
+                available: cmuxState.available,
+                workspaces: cmuxState.workspaces,
+              } satisfies DashboardMessage)
+            );
+          }
         }
-        if (cmuxState.available) {
-          ws.send(
-            JSON.stringify({
-              type: "cmux_status",
-              available: cmuxState.available,
-              workspaces: cmuxState.workspaces,
-            } satisfies DashboardMessage)
-          );
-        }
+      } catch (e) {
+        log(`Error handling socket open: ${e}`);
       }
     },
 
@@ -457,7 +483,20 @@ const server = Bun.serve<WSData>({
       }
     },
   },
-});
+  });
+}
+
+let server: ReturnType<typeof startServer>;
+try {
+  server = startServer();
+} catch (err) {
+  // Another broker may already own the port — that's fine, just bow out.
+  if (isAddrInUse(err)) {
+    log(`Port ${PORT} already in use — another broker is running; exiting`);
+    process.exit(0);
+  }
+  throw err;
+}
 
 // --- Assemble context (after Bun.serve creates server) ---
 
@@ -474,12 +513,19 @@ cleanStalePeers(peerStmts, msgStmts, svcStmts, peerSockets);
 setInterval(() => cleanStalePeers(peerStmts, msgStmts, svcStmts, peerSockets), 30_000);
 setInterval(() => pollServiceHealth(ctx, peerStmts, svcStmts, servicePollState), 15_000);
 
-initDockerMonitoring(ctx, dockerState);
+// Background monitoring is fire-and-forget; attach .catch() so a rejection
+// here doesn't surface as an unhandled rejection (and is logged regardless of
+// the top-level handler).
+initDockerMonitoring(ctx, dockerState).catch((e) =>
+  log(`Failed to start Docker monitoring: ${e}`)
+);
 
 pollCmuxStatus(ctx, cmuxState).then(() => {
   if (cmuxState.available) log("cmux detected — terminal orchestration enabled");
   else log("cmux not available — launch buttons disabled");
-});
-setInterval(() => pollCmuxStatus(ctx, cmuxState), 15_000);
+}).catch((e) => log(`cmux status poll failed: ${e}`));
+setInterval(() => {
+  pollCmuxStatus(ctx, cmuxState).catch((e) => log(`cmux status poll failed: ${e}`));
+}, 15_000);
 
 log(`Listening on 127.0.0.1:${PORT} (db: ${DB_PATH})`);

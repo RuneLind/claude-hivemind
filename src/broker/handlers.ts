@@ -155,11 +155,17 @@ export function createProfileStatements(db: import("bun:sqlite").Database) {
 export type ProfileStatements = ReturnType<typeof createProfileStatements>;
 
 function rowToProfile(row: any): LaunchProfile {
+  let repos: string[] = [];
+  try {
+    repos = JSON.parse(row.repos);
+  } catch (e) {
+    log(`Failed to parse repos for profile ${row.id}: ${e}`);
+  }
   return {
     id: row.id,
     name: row.name,
     directory: row.directory,
-    repos: JSON.parse(row.repos),
+    repos,
     prompt: row.prompt,
     created_at: row.created_at,
   };
@@ -346,7 +352,17 @@ export function handlePeerMessage(
 
 
       const now = new Date().toISOString();
-      deliverOrQueue(ctx, peerStmts, msgStmts, fromId, msg.to, msg.text, now, msg.correlation_id ?? null);
+      const status = deliverOrQueue(ctx, peerStmts, msgStmts, fromId, msg.to, msg.text, now, msg.correlation_id ?? null);
+
+      // Echo the delivery outcome back to the sender when it tagged the send
+      // with a send_id, so the MCP tool can report delivered/queued/failed.
+      if (msg.send_id) {
+        ws.send(JSON.stringify({
+          type: "send_result",
+          send_id: msg.send_id,
+          status,
+        } satisfies BrokerMessage));
+      }
 
       const stats = getMessageStats(msgStmts);
       ctx.server.publish(
@@ -520,10 +536,42 @@ export function handleDashboardMessage(
     case "stop_docker_container": {
       const container = dockerState.containers.get(msg.containerId);
       const name = container?.name ?? msg.containerId;
+      const containerId = msg.containerId;
       log(`Stopping Docker container ${name}`);
-      runDockerCommand(["stop", name]).then(() => {
-        log(`Docker container ${name} stopped`);
-      });
+      runDockerCommand(["stop", name])
+        .then((out) => {
+          const ok = out !== null;
+          if (ok) {
+            log(`Docker container ${name} stopped`);
+          } else {
+            log(`Failed to stop Docker container ${name}`);
+          }
+          ctx.server.publish(
+            "dashboard",
+            JSON.stringify({
+              type: "docker_action_result",
+              action: "stop",
+              containerId,
+              name,
+              ok,
+              error: ok ? undefined : "docker stop failed",
+            } satisfies DashboardMessage)
+          );
+        })
+        .catch((e) => {
+          log(`Error stopping Docker container ${name}: ${e}`);
+          ctx.server.publish(
+            "dashboard",
+            JSON.stringify({
+              type: "docker_action_result",
+              action: "stop",
+              containerId,
+              name,
+              ok: false,
+              error: String(e),
+            } satisfies DashboardMessage)
+          );
+        });
       break;
     }
 

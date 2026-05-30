@@ -261,6 +261,14 @@ async function deliverViaOpenCodeHttp(
   }
 }
 
+// Outcome of a deliverOrQueue call, surfaced back to the sender:
+// - "delivered": pushed to a live, open WebSocket (claude-code / copilot).
+// - "queued":   persisted for later delivery (peer offline), or handed to an
+//               async text-injection transport (OpenCode HTTP / cmux) whose
+//               outcome is not known synchronously.
+// - "failed":   neither delivery nor queueing succeeded.
+export type DeliveryStatus = "delivered" | "queued" | "failed";
+
 export function deliverOrQueue(
   ctx: BrokerContext,
   stmts: PeerStatements,
@@ -272,7 +280,7 @@ export function deliverOrQueue(
   // Opaque token the sender attached. The broker never interprets it; it's
   // persisted and round-tripped to the target so a reply can be correlated.
   correlationId: string | null = null,
-): void {
+): DeliveryStatus {
   const target = getPeer(stmts, toId);
   const sender = getPeer(stmts, fromId);
   const fromSummary = sender?.summary ?? null;
@@ -283,32 +291,49 @@ export function deliverOrQueue(
   // token, so OpenCode peers fall back to coarse correlation — see the design
   // doc; we still persist it for the dashboard conversation view.)
   if (target?.agent_type === "opencode" && (target.surface_id || target.opencode_url)) {
-    const result = msgStmts.insertMessage.run(fromId, toId, text, now, 0, correlationId);
-    const messageId = Number(result.lastInsertRowid);
-    const delivery = target.surface_id
-      ? deliverViaCmux(target, fromId, fromSummary, text)
-      : deliverViaOpenCodeHttp(target, fromId, fromSummary, text);
-    delivery
-      .then((ok) => { if (ok) msgStmts.markDelivered.run(messageId); })
-      .catch((e) => log(`Async delivery error for ${toId}: ${e}`));
-    return;
+    try {
+      const result = msgStmts.insertMessage.run(fromId, toId, text, now, 0, correlationId);
+      const messageId = Number(result.lastInsertRowid);
+      const delivery = target.surface_id
+        ? deliverViaCmux(target, fromId, fromSummary, text)
+        : deliverViaOpenCodeHttp(target, fromId, fromSummary, text);
+      delivery
+        .then((ok) => { if (ok) msgStmts.markDelivered.run(messageId); })
+        .catch((e) => log(`Async delivery error for ${toId}: ${e}`));
+      // Outcome is asynchronous; report as queued (accepted, not yet confirmed).
+      return "queued";
+    } catch (e) {
+      log(`Failed to enqueue message for OpenCode peer ${toId}: ${e}`);
+      return "failed";
+    }
   }
 
   // Synchronous delivery for Claude Code / Copilot via WebSocket
   const targetWs = ctx.peerSockets.get(toId);
   if (targetWs && targetWs.readyState === WS_OPEN) {
-    targetWs.send(JSON.stringify({
-      type: "message",
-      from_id: fromId,
-      from_summary: sender?.summary ?? "",
-      from_cwd: sender?.cwd ?? "",
-      text,
-      sent_at: now,
-      correlation_id: correlationId ?? undefined,
-    } satisfies BrokerMessage));
-    msgStmts.insertMessage.run(fromId, toId, text, now, 1, correlationId);
-  } else {
+    try {
+      targetWs.send(JSON.stringify({
+        type: "message",
+        from_id: fromId,
+        from_summary: sender?.summary ?? "",
+        from_cwd: sender?.cwd ?? "",
+        text,
+        sent_at: now,
+        correlation_id: correlationId ?? undefined,
+      } satisfies BrokerMessage));
+      msgStmts.insertMessage.run(fromId, toId, text, now, 1, correlationId);
+      return "delivered";
+    } catch (e) {
+      // Live send failed — fall through to persisting as undelivered.
+      log(`Live send to ${toId} failed, queueing instead: ${e}`);
+    }
+  }
+  try {
     msgStmts.insertMessage.run(fromId, toId, text, now, 0, correlationId);
+    return "queued";
+  } catch (e) {
+    log(`Failed to queue message for ${toId}: ${e}`);
+    return "failed";
   }
 }
 
