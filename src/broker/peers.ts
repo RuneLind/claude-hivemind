@@ -321,8 +321,19 @@ export function deliverOrQueue(
         sent_at: now,
         correlation_id: correlationId ?? undefined,
       } satisfies BrokerMessage));
-      msgStmts.insertMessage.run(fromId, toId, text, now, 1, correlationId);
-      return "delivered";
+      // A WS_OPEN socket can still be half-open (peer process died without a
+      // clean close, TCP not yet timed out): the fire-and-forget send above is
+      // not proof of receipt. We gate "delivered" on isPeerLive, but on this
+      // path the socket-presence clause is already satisfied (we got targetWs
+      // from peerSockets), so isPeerLive reduces to a PID liveness check. That
+      // catches a dead process, but NOT a half-open socket whose process is
+      // still running — a true receipt check would need last_seen/heartbeat
+      // tracking (follow-up). When the peer isn't live we persist as
+      // undelivered so the reconnect redelivery queue (selectUndelivered)
+      // re-sends it, and report "queued" rather than "delivered".
+      const live = target ? isPeerLive(target, ctx.peerSockets) : false;
+      msgStmts.insertMessage.run(fromId, toId, text, now, live ? 1 : 0, correlationId);
+      return live ? "delivered" : "queued";
     } catch (e) {
       // Live send failed — fall through to persisting as undelivered.
       log(`Live send to ${toId} failed, queueing instead: ${e}`);
