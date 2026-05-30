@@ -45,6 +45,15 @@ let myGitBranch: string | null = null;
 let myNamespace = "default";
 let ws: WebSocket | null = null;
 let reconnectAttempts = 0;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+
+// Cached so we can re-send them after a reconnect — otherwise the dashboard
+// silently loses this peer's summary and service health/log wiring.
+let lastSummary: string | null = null;
+let lastServicePayload:
+  | Extract<ClientMessage, { type: "register_service" }>
+  | null = null;
 
 const myAgentType: AgentType = (process.env.CLAUDE_HIVEMIND_AGENT_TYPE as AgentType) ?? "claude-code";
 const myOpenCodeUrl: string | null = process.env.OPENCODE_URL ?? null;
@@ -137,12 +146,30 @@ async function ensureBroker(): Promise<void> {
 }
 
 function connectToBroker(): void {
+  // Tear down any previous socket so its listeners can't fire against the new
+  // connection (a stale 'close' would otherwise schedule a parallel reconnect).
+  if (ws) {
+    const stale = ws;
+    ws = null;
+    try {
+      stale.onopen = null;
+      stale.onmessage = null;
+      stale.onclose = null;
+      stale.onerror = null;
+      stale.close();
+    } catch {}
+  }
+
   const wsUrl = `${BROKER_WS_URL}/ws/peer?namespace=${encodeURIComponent(myNamespace)}`;
   ws = new WebSocket(wsUrl);
 
   ws.addEventListener("open", () => {
     log("WebSocket connected to broker");
     reconnectAttempts = 0;
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
 
     const registerMsg: ClientMessage = {
       type: "register",
@@ -159,6 +186,18 @@ function connectToBroker(): void {
       workspace_id: myWorkspaceId ?? undefined,
     };
     ws!.send(JSON.stringify(registerMsg));
+
+    // Re-establish state the broker lost when the previous socket dropped:
+    // our summary and registered service. Without this the dashboard's health
+    // and log views silently stop working after a reconnect.
+    if (lastSummary !== null) {
+      ws!.send(JSON.stringify({ type: "set_summary", summary: lastSummary }));
+    }
+    if (lastServicePayload) {
+      ws!.send(JSON.stringify(lastServicePayload));
+    }
+
+    startHeartbeat();
   });
 
   ws.addEventListener("message", (event) => {
@@ -170,17 +209,40 @@ function connectToBroker(): void {
     }
   });
 
+  const self = ws;
   ws.addEventListener("close", () => {
+    // Ignore a close from a socket we've already replaced.
+    if (ws !== self) return;
     log("WebSocket closed, scheduling reconnect...");
     myId = null;
     ws = null;
+    stopHeartbeat();
     scheduleReconnect();
   });
 
   ws.addEventListener("error", () => {});
 }
 
+function startHeartbeat(): void {
+  // Clear any existing interval first so reconnects don't stack heartbeats.
+  stopHeartbeat();
+  heartbeatTimer = setInterval(() => {
+    wsSend({ type: "heartbeat" });
+  }, 30_000);
+}
+
+function stopHeartbeat(): void {
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  }
+}
+
 function scheduleReconnect(): void {
+  // Only ever one reconnect pending — a stray second caller (e.g. a late close
+  // event) must not start a parallel chain of timers/sockets.
+  if (reconnectTimer) return;
+
   const delay = Math.min(
     1000 * Math.pow(2, reconnectAttempts),
     MAX_RECONNECT_DELAY
@@ -188,16 +250,20 @@ function scheduleReconnect(): void {
   reconnectAttempts++;
   log(`Reconnecting in ${delay}ms (attempt ${reconnectAttempts})...`);
 
-  setTimeout(async () => {
+  reconnectTimer = setTimeout(async () => {
+    reconnectTimer = null;
     if (!(await isBrokerAlive())) {
       try {
         await ensureBroker();
       } catch (e) {
         log(`Failed to start broker: ${e}`);
+        // Re-arm the single reconnect chain; do not recurse synchronously.
         scheduleReconnect();
         return;
       }
     }
+    // connectToBroker drives the next reconnect via its socket's close handler;
+    // a failed connect fires 'close', which calls scheduleReconnect once.
     connectToBroker();
   }, delay);
 }
@@ -477,6 +543,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       if (!myId) return textResult("Not registered with broker yet", true);
       const sent = wsSend({ type: "set_summary", summary });
       if (!sent) return textResult("Not connected to broker. Summary not updated.", true);
+      // Cache so it can be re-sent after a reconnect.
+      lastSummary = summary;
       return textResult(`Summary updated: "${summary}"`);
     }
 
@@ -489,14 +557,17 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       };
       if (!myId) return textResult("Not registered with broker yet", true);
       const resolvedHealthUrl = health_url || DEFAULT_HEALTH_URL;
-      const sent = wsSend({
+      const servicePayload: Extract<ClientMessage, { type: "register_service" }> = {
         type: "register_service",
         port,
         health_url: resolvedHealthUrl,
         log_file,
         log_format,
-      });
+      };
+      const sent = wsSend(servicePayload);
       if (!sent) return textResult("Not connected to broker. Service not registered.", true);
+      // Cache so it can be re-sent after a reconnect.
+      lastServicePayload = servicePayload;
       return textResult(`Service registered on port ${port} (health: ${resolvedHealthUrl})`);
     }
 
@@ -525,13 +596,21 @@ async function startBrokerConnection() {
 
   await ensureBroker();
   connectToBroker();
-
-  setInterval(() => {
-    wsSend({ type: "heartbeat" });
-  }, 30_000);
+  // The heartbeat interval is started in the WS 'open' handler and torn down on
+  // close/cleanup, so reconnects never stack heartbeats.
 }
 
 async function main() {
+  // Process-level safety net: a stray rejection or exception (e.g. a transient
+  // broker/cmux failure) must not kill the MCP server and silently drop this
+  // peer off the network. Log and keep running.
+  process.on("unhandledRejection", (reason) => {
+    log(`Unhandled rejection: ${reason instanceof Error ? reason.stack ?? reason.message : String(reason)}`);
+  });
+  process.on("uncaughtException", (err) => {
+    log(`Uncaught exception: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
+  });
+
   if (!process.env.CLAUDE_HIVEMIND) {
     log("CLAUDE_HIVEMIND not set, staying dormant");
     await mcp.connect(new StdioServerTransport());
@@ -544,6 +623,11 @@ async function main() {
   log("MCP connected");
 
   const cleanup = () => {
+    stopHeartbeat();
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
     if (ws) ws.close();
     process.exit(0);
   };
