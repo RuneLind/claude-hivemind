@@ -21,6 +21,7 @@ import {
 } from "../shared/types.ts";
 import { isCmuxAvailable, listWorkspaces, launchClaudeInstance, launchOpenCodeInstance, renameWorkspace } from "../cmux/client.ts";
 import { readdir, stat } from "node:fs/promises";
+import { resolve, sep } from "node:path";
 import { WS_OPEN, type BrokerContext, type PeerWSData, type WSData } from "./db.ts";
 import {
   generateId,
@@ -40,6 +41,58 @@ import { runDockerCommand, subscribeDockerLogs, unsubscribeDockerLogs } from "./
 import type { LogSubscriptionState } from "./logs.ts";
 import { subscribeLogs, unsubscribeLogs } from "./logs.ts";
 const SOURCE_DIR = `${process.env.HOME}/source`;
+
+// --- Boundary validation helpers ---
+//
+// Peer registrations and service registrations arrive over the WebSocket as
+// untrusted input. The broker later reads back a registered log_file via the
+// (unauthenticated) /api/logs route, so a peer that points log_file at an
+// arbitrary readable file (~/.ssh/id_rsa, etc.) would turn that route into a
+// local file disclosure. We constrain log_file to the peer's own project tree
+// and bound the namespace to a safe charset/length.
+
+const VALID_AGENT_TYPES = new Set(["claude-code", "opencode", "copilot"]);
+
+/** Normalize an inbound agent_type to a known value; unknown/invalid -> claude-code. */
+function normalizeAgentType(raw: unknown): string {
+  return typeof raw === "string" && VALID_AGENT_TYPES.has(raw) ? raw : "claude-code";
+}
+
+/** Bound a namespace to a safe charset and length; invalid -> "default". */
+function sanitizeNamespace(raw: unknown): string {
+  if (typeof raw !== "string") return "default";
+  const trimmed = raw.trim();
+  if (trimmed.length === 0 || trimmed.length > 128) return "default";
+  return /^[A-Za-z0-9._\-/]+$/.test(trimmed) ? trimmed : "default";
+}
+
+/**
+ * Returns true if `child` resolves to a path within (or equal to) `root`.
+ * Both are resolved to canonical absolute paths first, defeating `..` escapes.
+ */
+function isWithin(root: string, child: string): boolean {
+  const r = resolve(root);
+  const c = resolve(child);
+  return c === r || c.startsWith(r + sep);
+}
+
+/**
+ * Validate a peer-supplied log_file: it must resolve to a path within the
+ * peer's own git_root (or, failing that, its cwd). Returns the canonical path
+ * if allowed, otherwise null (caller stores null = no log file).
+ */
+function validateLogFile(
+  logFile: string | null | undefined,
+  gitRoot: string | null | undefined,
+  cwd: string,
+): string | null {
+  if (!logFile) return null;
+  const roots = [gitRoot, cwd].filter((r): r is string => typeof r === "string" && r.length > 0);
+  for (const root of roots) {
+    if (isWithin(root, logFile)) return resolve(logFile);
+  }
+  return null;
+}
 
 // --- cmux state ---
 
@@ -119,7 +172,15 @@ export function getAllProfiles(stmts: ProfileStatements): LaunchProfile[] {
 // --- repo scanning ---
 
 export async function scanReposInDirectory(dir: string): Promise<ScannedRepo[]> {
-  const fullPath = dir.startsWith("/") ? dir : `${SOURCE_DIR}/${dir}`;
+  // Resolve the requested directory (absolute or relative to SOURCE_DIR) and
+  // require it to stay within SOURCE_DIR. This blocks `../` escapes and
+  // out-of-scope absolute paths from being scanned/disclosed.
+  const requested = dir.startsWith("/") ? dir : `${SOURCE_DIR}/${dir}`;
+  if (!isWithin(SOURCE_DIR, requested)) {
+    log(`scan_repos rejected out-of-scope dir: ${dir}`);
+    return [];
+  }
+  const fullPath = resolve(requested);
 
   let entries: import("node:fs").Dirent[];
   try { entries = await readdir(fullPath, { withFileTypes: true }); } catch { return []; }
@@ -163,7 +224,8 @@ export function handlePeerMessage(
   switch (msg.type) {
     case "register": {
       const now = new Date().toISOString();
-      peerStmts.deleteByPidNs.run(msg.pid, msg.namespace);
+      const namespace = sanitizeNamespace(msg.namespace);
+      peerStmts.deleteByPidNs.run(msg.pid, namespace);
       const id = generateId(peerStmts, ctx.peerSockets, msg.cwd);
 
       // generateId now ignores DB rows without an active WS, so the chosen ID
@@ -178,7 +240,7 @@ export function handlePeerMessage(
       const saved = peerStmts.selectSavedSummary.get(msg.cwd) as { summary: string } | null;
       const summary = msg.summary || saved?.summary || "";
 
-      const agentType = msg.agent_type ?? "claude-code";
+      const agentType = normalizeAgentType(msg.agent_type);
       const opencodeUrl = msg.opencode_url ?? null;
       const surfaceId = msg.surface_id ?? null;
 
@@ -190,7 +252,7 @@ export function handlePeerMessage(
         msg.git_branch,
         msg.tty,
         summary,
-        msg.namespace,
+        namespace,
         agentType,
         opencodeUrl,
         surfaceId,
@@ -200,9 +262,9 @@ export function handlePeerMessage(
       );
 
       ws.data.peerId = id;
-      ws.data.namespace = msg.namespace;
+      ws.data.namespace = namespace;
 
-      ws.subscribe(`ns:${msg.namespace}`);
+      ws.subscribe(`ns:${namespace}`);
       ws.subscribe(`peer:${id}`);
 
       ctx.peerSockets.set(id, ws as import("bun").ServerWebSocket<WSData>);
@@ -210,7 +272,7 @@ export function handlePeerMessage(
       const reply: BrokerMessage = {
         type: "registered",
         id,
-        namespace: msg.namespace,
+        namespace,
       };
       ws.send(JSON.stringify(reply));
 
@@ -232,7 +294,7 @@ export function handlePeerMessage(
 
       const peer = getPeer(peerStmts, id)!;
       const joinMsg = JSON.stringify({ type: "peer_joined", peer });
-      ctx.server.publish(`ns:${msg.namespace}`, joinMsg);
+      ctx.server.publish(`ns:${namespace}`, joinMsg);
       ctx.server.publish(
         "dashboard",
         JSON.stringify({
@@ -241,7 +303,7 @@ export function handlePeerMessage(
         } satisfies DashboardMessage)
       );
 
-      log(`Peer ${id} registered (ns: ${msg.namespace}, cwd: ${msg.cwd})`);
+      log(`Peer ${id} registered (ns: ${namespace}, cwd: ${msg.cwd})`);
 
       // Rename cmux workspace to the peer's human-readable ID
       const workspaceId = msg.workspace_id;
@@ -330,18 +392,29 @@ export function handlePeerMessage(
       if (!ws.data.peerId) return;
       const healthUrl = msg.health_url || DEFAULT_HEALTH_URL;
       const logFormat = msg.log_format || DEFAULT_LOG_FORMAT;
+
+      // Constrain log_file to the peer's own project tree so the unauthenticated
+      // /api/logs route can't be tricked into reading arbitrary local files.
+      const owner = getPeer(peerStmts, ws.data.peerId);
+      const safeLogFile = owner
+        ? validateLogFile(msg.log_file, owner.git_root, owner.cwd)
+        : null;
+      if (msg.log_file && !safeLogFile) {
+        log(`Rejected out-of-tree log_file from ${ws.data.peerId}: ${msg.log_file}`);
+      }
+
       svcStmts.upsertService.run(
         ws.data.peerId,
         msg.port,
         healthUrl,
-        msg.log_file ?? null,
+        safeLogFile,
         logFormat
       );
       const service: ServiceInfo = {
         peer_id: ws.data.peerId,
         port: msg.port,
         health_url: healthUrl,
-        log_file: msg.log_file ?? null,
+        log_file: safeLogFile,
         log_format: logFormat,
         status: "unknown",
         last_check: null,

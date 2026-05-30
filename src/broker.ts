@@ -67,6 +67,26 @@ const DB_PATH =
   process.env.CLAUDE_HIVEMIND_DB ?? `${process.env.HOME}/.claude-hivemind.db`;
 const GRACE_PERIOD_MS = 30_000;
 
+// --- Origin protection (CSRF / DNS-rebinding) ---
+//
+// The dashboard can launch agents with --dangerously-skip-permissions, so a
+// malicious page loaded in the user's browser (or a DNS-rebinding attack) must
+// not be able to drive the dashboard WS or the mutating HTTP routes. Browsers
+// always attach an Origin header on cross-origin requests (and on WebSocket
+// handshakes), and a rebinding attack presents a foreign Origin. We accept only
+// the broker's own loopback origins. Requests with no Origin header are allowed
+// — those are same-process / CLI / curl callers, not browser-driven CSRF.
+const ALLOWED_ORIGINS = new Set([
+  `http://localhost:${PORT}`,
+  `http://127.0.0.1:${PORT}`,
+]);
+
+function isAllowedOrigin(req: Request): boolean {
+  const origin = req.headers.get("origin");
+  if (origin === null) return true; // non-browser caller (CLI, curl, same-process)
+  return ALLOWED_ORIGINS.has(origin);
+}
+
 // --- Database & statements ---
 
 const db = initDatabase(DB_PATH);
@@ -130,6 +150,7 @@ const server = Bun.serve<WSData>({
 
     "/api/send-message": {
       async POST(req) {
+        if (!isAllowedOrigin(req)) return new Response("Forbidden origin", { status: 403 });
         const body = (await req.json()) as {
           from_id: string;
           to_id: string;
@@ -227,7 +248,8 @@ const server = Bun.serve<WSData>({
     },
 
     "/api/messages/clear": {
-      POST() {
+      POST(req) {
+        if (!isAllowedOrigin(req)) return new Response("Forbidden origin", { status: 403 });
         msgStmts.deleteAllMessages.run();
         server.publish(
           "dashboard",
@@ -261,6 +283,7 @@ const server = Bun.serve<WSData>({
 
     "/api/docker/start": {
       async POST(req) {
+        if (!isAllowedOrigin(req)) return new Response("Forbidden origin", { status: 403 });
         const url = new URL(req.url);
         const name = url.searchParams.get("name");
         if (!name) return Response.json({ error: "name required" }, { status: 400 });
@@ -305,6 +328,13 @@ const server = Bun.serve<WSData>({
     }
 
     if (url.pathname === "/ws/dashboard") {
+      // Reject cross-origin dashboard WS handshakes (CSRF / DNS-rebinding).
+      // The dashboard control channel can launch agents, so only the broker's
+      // own loopback origin may open it. Peer connections use /ws/peer and are
+      // intentionally not subject to this check.
+      if (!isAllowedOrigin(req)) {
+        return new Response("Forbidden origin", { status: 403 });
+      }
       const success = server.upgrade(req, {
         data: { kind: "dashboard" } as DashboardWSData,
       });
