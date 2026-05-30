@@ -15,6 +15,13 @@ export interface DockerState {
   available: boolean;
   polling: boolean;
   eventProc: ReturnType<typeof Bun.spawn> | null;
+  eventReader: ReadableStreamDefaultReader<Uint8Array> | null;
+  eventRestartTimer: ReturnType<typeof setTimeout> | null;
+  initialized: boolean;
+  shuttingDown: boolean;
+  pollTimer: ReturnType<typeof setInterval> | null;
+  logStatsTimer: ReturnType<typeof setInterval> | null;
+  reprobeTimer: ReturnType<typeof setInterval> | null;
   // Skip publish when unchanged
   lastContainersJson: string;
   lastLogStatsJson: string;
@@ -27,6 +34,13 @@ export function createDockerState(): DockerState {
     available: false,
     polling: false,
     eventProc: null,
+    eventReader: null,
+    eventRestartTimer: null,
+    initialized: false,
+    shuttingDown: false,
+    pollTimer: null,
+    logStatsTimer: null,
+    reprobeTimer: null,
     lastContainersJson: "",
     lastLogStatsJson: "",
   };
@@ -97,6 +111,17 @@ async function pollDockerContainers(ctx: BrokerContext, state: DockerState): Pro
   state.polling = true;
   try {
     const lsOut = await runDockerCommand(["compose", "ls", "--format", "json"]);
+    if (lsOut === null) {
+      // docker command failed — treat the daemon as gone. The periodic
+      // re-probe (docker version) will flip availability back on when it
+      // returns, which also restarts the event stream.
+      if (state.available) {
+        state.available = false;
+        log("Docker became unavailable — pausing container monitoring");
+      }
+      state.polling = false;
+      return;
+    }
     if (!lsOut) { state.polling = false; return; }
 
     let projects: DockerComposeProject[];
@@ -223,7 +248,13 @@ async function pollDockerLogStats(ctx: BrokerContext, state: DockerState): Promi
 }
 
 function startDockerEventStream(ctx: BrokerContext, state: DockerState): void {
-  if (!state.available || state.eventProc) return;
+  if (!state.available || state.eventProc || state.shuttingDown) return;
+
+  // Only one restart may be pending at a time.
+  if (state.eventRestartTimer) {
+    clearTimeout(state.eventRestartTimer);
+    state.eventRestartTimer = null;
+  }
 
   try {
     state.eventProc = Bun.spawn(
@@ -232,6 +263,7 @@ function startDockerEventStream(ctx: BrokerContext, state: DockerState): void {
     );
 
     const reader = state.eventProc.stdout.getReader();
+    state.eventReader = reader;
     const decoder = new TextDecoder();
     let buffer = "";
 
@@ -272,13 +304,20 @@ function startDockerEventStream(ctx: BrokerContext, state: DockerState): void {
       } catch (e) {
         log(`Docker event stream error: ${e}`);
       } finally {
+        state.eventReader = null;
         state.eventProc = null;
-        if (state.available) {
-          setTimeout(() => startDockerEventStream(ctx, state), 5000);
+        // Only schedule a retry while docker is believed available and we
+        // aren't shutting down; ensure at most one pending restart.
+        if (state.available && !state.shuttingDown && !state.eventRestartTimer) {
+          state.eventRestartTimer = setTimeout(() => {
+            state.eventRestartTimer = null;
+            startDockerEventStream(ctx, state);
+          }, 5000);
         }
       }
     })();
   } catch {
+    state.eventReader = null;
     state.eventProc = null;
   }
 }
@@ -290,6 +329,7 @@ class DockerLogTailer {
   private containerName: string;
   private onLines: (lines: LogLine[]) => void;
   private stopped = false;
+  private readers = new Set<ReadableStreamDefaultReader<Uint8Array>>();
 
   constructor(containerName: string, onLines: (lines: LogLine[]) => void) {
     this.containerName = containerName;
@@ -312,6 +352,7 @@ class DockerLogTailer {
 
   private async readStream(stream: ReadableStream<Uint8Array>) {
     const reader = stream.getReader();
+    this.readers.add(reader);
     const decoder = new TextDecoder();
     let buffer = "";
 
@@ -331,6 +372,8 @@ class DockerLogTailer {
       }
     } catch {
       // stream closed
+    } finally {
+      this.readers.delete(reader);
     }
   }
 
@@ -345,8 +388,24 @@ class DockerLogTailer {
 
   stop() {
     this.stopped = true;
-    this.proc?.kill();
+
+    // Cancel the stdout/stderr readers so the underlying FDs are released even
+    // if the process is slow to exit (prevents FD leaks across subscribe churn).
+    for (const reader of this.readers) {
+      try { reader.cancel(); } catch { /* already released */ }
+    }
+    this.readers.clear();
+
+    const proc = this.proc;
     this.proc = null;
+    if (!proc) return;
+
+    // SIGTERM first, then SIGKILL fallback if it doesn't reap promptly.
+    try { proc.kill("SIGTERM"); } catch { /* already exited */ }
+    const killTimer = setTimeout(() => {
+      try { proc.kill("SIGKILL"); } catch { /* already exited */ }
+    }, 2000);
+    proc.exited.then(() => clearTimeout(killTimer)).catch(() => clearTimeout(killTimer));
   }
 }
 
@@ -418,10 +477,34 @@ export function unsubscribeAllDockerLogs(
   }
 }
 
+async function reprobeDockerAvailability(ctx: BrokerContext, state: DockerState): Promise<void> {
+  if (state.available || state.shuttingDown) return;
+  const versionOut = await runDockerCommand(["version", "--format", "json"]);
+  if (!versionOut) return;
+  state.available = true;
+  log("Docker became available — resuming container monitoring");
+  await pollDockerContainers(ctx, state);
+  await pollDockerLogStats(ctx, state);
+  startDockerEventStream(ctx, state);
+}
+
 export async function initDockerMonitoring(ctx: BrokerContext, state: DockerState): Promise<void> {
+  // Guard against running twice: clear any existing timers/stream first so a
+  // re-init never doubles the polling intervals or leaks the event process.
+  if (state.initialized) {
+    log("Docker monitoring already initialized — restarting");
+    stopDockerMonitor(state);
+  }
+  state.initialized = true;
+  state.shuttingDown = false;
+
+  // Periodic re-probe so monitoring re-enables itself when docker returns
+  // after having flapped. Runs regardless of current availability.
+  state.reprobeTimer = setInterval(() => reprobeDockerAvailability(ctx, state), 15_000);
+
   const versionOut = await runDockerCommand(["version", "--format", "json"]);
   if (!versionOut) {
-    log("Docker not available — container monitoring disabled");
+    log("Docker not available — container monitoring disabled (will re-probe)");
     return;
   }
   state.available = true;
@@ -431,6 +514,31 @@ export async function initDockerMonitoring(ctx: BrokerContext, state: DockerStat
   await pollDockerLogStats(ctx, state);
   startDockerEventStream(ctx, state);
 
-  setInterval(() => pollDockerContainers(ctx, state), 10_000);
-  setInterval(() => pollDockerLogStats(ctx, state), 30_000);
+  state.pollTimer = setInterval(() => pollDockerContainers(ctx, state), 10_000);
+  state.logStatsTimer = setInterval(() => pollDockerLogStats(ctx, state), 30_000);
+}
+
+/**
+ * Stop all docker monitoring: clears polling/re-probe intervals, cancels the
+ * event-stream reader, kills the event process, and clears the restart timer.
+ * Safe to call multiple times.
+ */
+export function stopDockerMonitor(state: DockerState): void {
+  state.shuttingDown = true;
+  state.available = false;
+  state.initialized = false;
+
+  if (state.pollTimer) { clearInterval(state.pollTimer); state.pollTimer = null; }
+  if (state.logStatsTimer) { clearInterval(state.logStatsTimer); state.logStatsTimer = null; }
+  if (state.reprobeTimer) { clearInterval(state.reprobeTimer); state.reprobeTimer = null; }
+  if (state.eventRestartTimer) { clearTimeout(state.eventRestartTimer); state.eventRestartTimer = null; }
+
+  if (state.eventReader) {
+    try { state.eventReader.cancel(); } catch { /* already closed */ }
+    state.eventReader = null;
+  }
+  if (state.eventProc) {
+    try { state.eventProc.kill(); } catch { /* already exited */ }
+    state.eventProc = null;
+  }
 }
