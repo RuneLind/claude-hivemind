@@ -51,9 +51,12 @@ let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 // Cached so we can re-send them after a reconnect — otherwise the dashboard
 // silently loses this peer's summary and service health/log wiring.
 let lastSummary: string | null = null;
-let lastServicePayload:
-  | Extract<ClientMessage, { type: "register_service" }>
-  | null = null;
+// Keyed by service_name so an agent registering several services replays all of
+// them on reconnect, not just the most recent one.
+const lastServicePayloads = new Map<
+  string,
+  Extract<ClientMessage, { type: "register_service" }>
+>();
 
 const myAgentType: AgentType = (process.env.CLAUDE_HIVEMIND_AGENT_TYPE as AgentType) ?? "claude-code";
 const myOpenCodeUrl: string | null = process.env.OPENCODE_URL ?? null;
@@ -193,8 +196,8 @@ function connectToBroker(): void {
     if (lastSummary !== null) {
       ws!.send(JSON.stringify({ type: "set_summary", summary: lastSummary }));
     }
-    if (lastServicePayload) {
-      ws!.send(JSON.stringify(lastServicePayload));
+    for (const servicePayload of lastServicePayloads.values()) {
+      ws!.send(JSON.stringify(servicePayload));
     }
 
     startHeartbeat();
