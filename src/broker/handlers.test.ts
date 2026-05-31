@@ -172,7 +172,9 @@ describe("baseline branch (live broker)", () => {
   test("set_baseline publishes baseline_set and captures a log offset for a registered service", async () => {
     const ns = "baseline-ns";
 
-    // Write a log file so the handler can record a non-zero offset.
+    // Write a log file so the handler can record a non-zero offset. It must
+    // live within the peer's own cwd/git_root or register_service drops it
+    // (path-traversal containment, S3), so anchor the peer's cwd at tmpdir().
     const logPath = join(tmpdir(), `hivemind-baseline-log-${Date.now()}.log`);
     writeFileSync(logPath, "line one\nline two\n");
 
@@ -182,7 +184,7 @@ describe("baseline branch (live broker)", () => {
     peer.send(JSON.stringify({
       type: "register",
       pid: process.pid,
-      cwd: "/test/baseline-peer",
+      cwd: tmpdir(),
       git_root: null,
       git_branch: null,
       tty: null,
