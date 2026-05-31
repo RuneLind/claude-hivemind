@@ -51,7 +51,7 @@ let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 // Cached so we can re-send them after a reconnect — otherwise the dashboard
 // silently loses this peer's summary and service health/log wiring.
 let lastSummary: string | null = null;
-// Keyed by service_name so an agent registering several services replays all of
+// Keyed by port so an agent registering several services replays all of
 // them on reconnect, not just the most recent one.
 const lastServicePayloads = new Map<
   string,
@@ -569,8 +569,9 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       };
       const sent = wsSend(servicePayload);
       if (!sent) return textResult("Not connected to broker. Service not registered.", true);
-      // Cache so it can be re-sent after a reconnect.
-      lastServicePayload = servicePayload;
+      // Cache so it can be re-sent after a reconnect (keyed by port so an
+      // agent registering several services replays all of them, not just one).
+      lastServicePayloads.set(String(port), servicePayload);
       return textResult(`Service registered on port ${port} (health: ${resolvedHealthUrl})`);
     }
 
