@@ -345,6 +345,15 @@ export function handlePeerMessage(
             error: `Peer ${msg.to} not found`,
           } satisfies BrokerMessage)
         );
+        // Resolve the sender's pending send so the MCP tool reports a
+        // failure instead of hanging until timeout.
+        if (msg.send_id) {
+          ws.send(JSON.stringify({
+            type: "send_result",
+            send_id: msg.send_id,
+            status: "failed",
+          } satisfies BrokerMessage));
+        }
         return;
       }
 
