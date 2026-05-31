@@ -39,6 +39,7 @@ import {
   createDockerState,
   createDockerLogSubscriptionState,
   initDockerMonitoring,
+  stopDockerMonitor,
   runDockerCommand,
   unsubscribeAllDockerLogs,
 } from "./broker/docker.ts";
@@ -510,8 +511,8 @@ const dashboardDeps: DashboardDeps = {
 // --- Start background tasks ---
 
 cleanStalePeers(peerStmts, msgStmts, svcStmts, peerSockets);
-setInterval(() => cleanStalePeers(peerStmts, msgStmts, svcStmts, peerSockets), 30_000);
-setInterval(() => pollServiceHealth(ctx, peerStmts, svcStmts, servicePollState), 15_000);
+const staleCheckTimer = setInterval(() => cleanStalePeers(peerStmts, msgStmts, svcStmts, peerSockets), 30_000);
+const serviceHealthTimer = setInterval(() => pollServiceHealth(ctx, peerStmts, svcStmts, servicePollState), 15_000);
 
 // Background monitoring is fire-and-forget; attach .catch() so a rejection
 // here doesn't surface as an unhandled rejection (and is logged regardless of
@@ -524,8 +525,37 @@ pollCmuxStatus(ctx, cmuxState).then(() => {
   if (cmuxState.available) log("cmux detected — terminal orchestration enabled");
   else log("cmux not available — launch buttons disabled");
 }).catch((e) => log(`cmux status poll failed: ${e}`));
-setInterval(() => {
+const cmuxPollTimer = setInterval(() => {
   pollCmuxStatus(ctx, cmuxState).catch((e) => log(`cmux status poll failed: ${e}`));
 }, 15_000);
+
+// --- Graceful shutdown ---
+// Without this the broker leaks: background timers keep the loop alive, the
+// docker event process and log tailers stay spawned, and the WAL-mode SQLite
+// DB is never checkpointed/closed (risking an unmerged -wal on next start).
+let shuttingDown = false;
+function shutdown(signal: string): void {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  log(`Received ${signal} — shutting down`);
+
+  clearInterval(staleCheckTimer);
+  clearInterval(serviceHealthTimer);
+  clearInterval(cmuxPollTimer);
+
+  stopDockerMonitor(dockerState);
+
+  // Stop every active log tailer (service logs + docker logs) so their child
+  // processes and stream readers are released before exit.
+  for (const sub of logSubState.subscriptions.values()) sub.tailer.stop();
+  for (const sub of dockerLogSubs.subscriptions.values()) sub.tailer.stop();
+
+  server.stop();
+  db.close();
+  process.exit(0);
+}
+
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
 
 log(`Listening on 127.0.0.1:${PORT} (db: ${DB_PATH})`);
