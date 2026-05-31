@@ -67,6 +67,11 @@ let orientationSent = false;
 let pendingPeersResolve: ((peers: Peer[]) => void) | null = null;
 let pendingPeersReject: ((err: Error) => void) | null = null;
 
+// In-flight send_message calls awaiting a send_result from the broker, keyed
+// by the send_id minted on the outbound. Lets the tool report whether the
+// message was delivered live, queued (peer offline), or failed.
+const pendingSends = new Map<string, (status: "delivered" | "queued" | "failed") => void>();
+
 // Tracks inbound correlation tokens per peer so a reply auto-echoes the right
 // one (single-in-flight). See correlation-tracker.ts.
 const correlation = new CorrelationTracker();
@@ -126,26 +131,94 @@ async function isBrokerAlive(): Promise<boolean> {
   }
 }
 
+function brokerLockPath(): string {
+  const os = require("os");
+  return `${os.tmpdir()}/claude-hivemind-broker-${BROKER_PORT}.lock`;
+}
+
+// Try to claim the exclusive broker-spawn lock via an O_EXCL pidfile, so that
+// when many MCP servers race to start a missing broker only one spawns it.
+// Returns true if we own the lock. Stale locks (owner process gone) are
+// reclaimed. On unexpected errors we fail open (return true) rather than block.
+function acquireBrokerLock(): boolean {
+  const fs = require("fs");
+  const lockPath = brokerLockPath();
+  try {
+    const fd = fs.openSync(lockPath, "wx"); // O_CREAT | O_EXCL | O_WRONLY
+    fs.writeSync(fd, String(process.pid));
+    fs.closeSync(fd);
+    return true;
+  } catch (err: any) {
+    if (err && err.code === "EEXIST") {
+      try {
+        const raw = String(fs.readFileSync(lockPath, "utf8")).trim();
+        const pid = Number(raw);
+        if (pid > 0) {
+          try {
+            process.kill(pid, 0); // throws if the owner is gone
+            return false; // owner still alive
+          } catch {
+            // Stale lock — owner is gone; reclaim it.
+          }
+        }
+        fs.unlinkSync(lockPath);
+        return acquireBrokerLock();
+      } catch {
+        return false;
+      }
+    }
+    log(`Broker lock error: ${err}`);
+    return true; // fail open
+  }
+}
+
+function releaseBrokerLock(): void {
+  const fs = require("fs");
+  try {
+    fs.unlinkSync(brokerLockPath());
+  } catch {
+    // already gone
+  }
+}
+
 async function ensureBroker(): Promise<void> {
   if (await isBrokerAlive()) {
     log("Broker already running");
     return;
   }
 
-  log("Starting broker daemon...");
-  const proc = Bun.spawn(["bun", BROKER_SCRIPT], {
-    stdio: ["ignore", "ignore", "inherit"],
-  });
-  proc.unref();
-
-  for (let i = 0; i < 30; i++) {
-    await new Promise((r) => setTimeout(r, 200));
-    if (await isBrokerAlive()) {
-      log("Broker started");
-      return;
+  // Only one agent should spawn the broker; the rest just wait for it to bind.
+  if (!acquireBrokerLock()) {
+    log("Broker spawn already in progress by another agent; waiting...");
+    for (let i = 0; i < 30; i++) {
+      await new Promise((r) => setTimeout(r, 200));
+      if (await isBrokerAlive()) {
+        log("Broker started by another agent");
+        return;
+      }
     }
+    // The other spawn may have failed; fall through and try ourselves.
+    log("Broker did not come up; attempting spawn ourselves");
   }
-  throw new Error("Failed to start broker daemon after 6 seconds");
+
+  try {
+    log("Starting broker daemon...");
+    const proc = Bun.spawn(["bun", BROKER_SCRIPT], {
+      stdio: ["ignore", "ignore", "inherit"],
+    });
+    proc.unref();
+
+    for (let i = 0; i < 30; i++) {
+      await new Promise((r) => setTimeout(r, 200));
+      if (await isBrokerAlive()) {
+        log("Broker started");
+        return;
+      }
+    }
+    throw new Error("Failed to start broker daemon after 6 seconds");
+  } finally {
+    releaseBrokerLock();
+  }
 }
 
 function connectToBroker(): void {
@@ -246,10 +319,13 @@ function scheduleReconnect(): void {
   // event) must not start a parallel chain of timers/sockets.
   if (reconnectTimer) return;
 
-  const delay = Math.min(
+  const base = Math.min(
     1000 * Math.pow(2, reconnectAttempts),
     MAX_RECONNECT_DELAY
   );
+  // Full-jitter (up to +50%) so concurrent agents don't reconnect — and race
+  // to spawn the broker — in lockstep after a broker restart.
+  const delay = Math.round(base + Math.random() * base * 0.5);
   reconnectAttempts++;
   log(`Reconnecting in ${delay}ms (attempt ${reconnectAttempts})...`);
 
@@ -327,6 +403,15 @@ function handleBrokerMessage(msg: BrokerMessage): void {
       pendingPeersResolve = null;
       pendingPeersReject = null;
       break;
+
+    case "send_result": {
+      const resolve = pendingSends.get(msg.send_id);
+      if (resolve) {
+        pendingSends.delete(msg.send_id);
+        resolve(msg.status);
+      }
+      break;
+    }
 
     case "error":
       log(`Broker error: ${msg.error}`);
@@ -536,9 +621,34 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       // Echo an explicit in_reply_to, else auto-echo only when one inbound
       // token is in flight for this peer (omit when ambiguous → clean fallback).
       const correlation_id = correlation.resolveOutbound(to, in_reply_to);
-      const sent = wsSend({ type: "send_message", to, text: message, correlation_id });
-      if (!sent) return textResult("Not connected to broker. Message not sent.", true);
-      return textResult(`Message sent to peer ${to}`);
+      const send_id = crypto.randomUUID();
+      // Await the broker's send_result so we can report whether the message was
+      // delivered live, queued (peer offline), or failed — rather than always
+      // claiming success. Falls back to a neutral "sent" if no result arrives.
+      const statusPromise = new Promise<"delivered" | "queued" | "failed" | "unknown">((resolve) => {
+        pendingSends.set(send_id, resolve);
+        setTimeout(() => {
+          if (pendingSends.delete(send_id)) resolve("unknown");
+        }, 5000);
+      });
+      const sent = wsSend({ type: "send_message", to, text: message, correlation_id, send_id });
+      if (!sent) {
+        pendingSends.delete(send_id);
+        return textResult("Not connected to broker. Message not sent.", true);
+      }
+      const status = await statusPromise;
+      switch (status) {
+        case "delivered":
+          return textResult(`Message delivered to peer ${to}`);
+        case "queued":
+          return textResult(`Message queued for peer ${to} (peer offline). It will be delivered when they reconnect.`);
+        case "failed":
+          return textResult(`Delivery failed: could not deliver or queue the message for peer ${to}.`, true);
+        default:
+          // No confirmation from the broker within the timeout — message was
+          // handed off but its outcome is unknown.
+          return textResult(`Message sent to peer ${to}`);
+      }
     }
 
     case "set_summary": {

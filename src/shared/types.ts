@@ -63,7 +63,7 @@ export type ClientMessage =
       workspace_id?: string; // cmux workspace ID for rename on registration
     }
   | { type: "set_summary"; summary: string }
-  | { type: "send_message"; to: PeerId; text: string; correlation_id?: string }
+  | { type: "send_message"; to: PeerId; text: string; correlation_id?: string; send_id?: string }
   | { type: "list_peers"; scope: "namespace" | "machine" }
   | { type: "heartbeat" }
   | {
@@ -91,6 +91,9 @@ export type BrokerMessage =
       correlation_id?: string;
     }
   | { type: "peers"; peers: Peer[] }
+  // Reports the outcome of a send_message that carried a send_id, so the
+  // sender can tell delivered-now from queued (peer offline) from failed.
+  | { type: "send_result"; send_id: string; status: "delivered" | "queued" | "failed" }
   | { type: "error"; error: string }
   | { type: "peer_joined"; peer: Peer }
   | { type: "peer_left"; peer_id: PeerId }
@@ -127,6 +130,7 @@ export type DashboardMessage =
   | { type: "docker_event"; containerId: string; container: DockerContainer | null; event: string }
   | { type: "docker_log_lines"; containerId: string; lines: LogLine[] }
   | { type: "docker_log_stats"; logStats: DockerContainerLogStats[] }
+  | { type: "docker_action_result"; action: "stop"; containerId: string; name: string; ok: boolean; error?: string }
   | { type: "cmux_status"; available: boolean; workspaces: CmuxWorkspace[] }
   | { type: "cmux_launch_result"; ok: boolean; workspaceId?: string; error?: string }
   | { type: "scan_repos_result"; repos: ScannedRepo[] }
