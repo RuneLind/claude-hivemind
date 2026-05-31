@@ -166,7 +166,7 @@ export function peerCardScript(): string {
       html += '<span class="peer-id">' + escapeHtml(peer.id) + '</span>';
       var agentType = peer.agent_type || 'claude-code';
       var agentLabel = agentType === 'claude-code' ? 'Claude' : agentType === 'opencode' ? 'OpenCode' : agentType === 'copilot' ? 'Copilot' : agentType;
-      html += '<span class="agent-type-badge ' + agentType + '">' + agentLabel + '</span>';
+      html += '<span class="agent-type-badge ' + escapeHtml(agentType) + '">' + escapeHtml(agentLabel) + '</span>';
       if (total > 0) {
         html += '<button class="message-count-badge" onclick="openConversation(\\'' + escapeJs(peer.id) + '\\', null)" title="View messages">';
         html += total + ' msg' + (total !== 1 ? 's' : '');
