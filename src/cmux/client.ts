@@ -1,33 +1,65 @@
 /**
  * cmux client — JSON-RPC over Unix socket to control cmux terminal multiplexer.
  *
- * Socket path resolution: CMUX_SOCKET_PATH env > /tmp/cmux-last-socket-path file > default.
- * cmux writes its actual socket path to /tmp/cmux-last-socket-path on startup.
+ * Socket path resolution: CMUX_SOCKET_PATH env wins; otherwise we read every
+ * hint file and known default location and pick the first that is *currently a
+ * live socket*. cmux writes its live socket path to hint files on startup, but
+ * those files go stale across cmux upgrades (0.64.x moved the socket from
+ * ~/Library/Application Support/cmux to ~/.local/state/cmux), so we never trust
+ * a hint without verifying the socket actually exists. Resolution runs per RPC
+ * call so a cmux restart/upgrade mid-session is picked up automatically.
  */
 
 import { Socket } from "node:net";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 
-function resolveCmuxSocket(): string {
-  if (process.env.CMUX_SOCKET_PATH) return process.env.CMUX_SOCKET_PATH;
-  if (process.env.CMUX_SOCKET) return process.env.CMUX_SOCKET;
-
-  const stableHint = `${homedir()}/Library/Application Support/cmux/last-socket-path`;
-  const stableSocket = `${homedir()}/Library/Application Support/cmux/cmux.sock`;
-  const legacyHint = "/tmp/cmux-last-socket-path";
-  const legacySocket = "/tmp/cmux.sock";
-
-  for (const hint of [stableHint, legacyHint]) {
-    try {
-      const path = readFileSync(hint, "utf-8").trim();
-      if (path) return path;
-    } catch { /* try next */ }
+function isLiveSocket(path: string): boolean {
+  try {
+    return statSync(path).isSocket();
+  } catch {
+    return false;
   }
-  return stableSocket || legacySocket;
 }
 
-const CMUX_SOCKET = resolveCmuxSocket();
+function readHint(hint: string): string | null {
+  try {
+    const path = readFileSync(hint, "utf-8").trim();
+    return path || null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveCmuxSocket(): string {
+  const override = process.env.CMUX_SOCKET_PATH || process.env.CMUX_SOCKET;
+  if (override) return override;
+
+  const home = homedir();
+  // Candidate socket paths in priority order: hint files first (cmux writes its
+  // live path there), then known default locations across cmux versions.
+  const candidates: string[] = [];
+  for (const hint of [
+    `${home}/Library/Application Support/cmux/last-socket-path`,
+    `${home}/.local/state/cmux/last-socket-path`,
+    "/tmp/cmux-last-socket-path",
+  ]) {
+    const path = readHint(hint);
+    if (path) candidates.push(path);
+  }
+  candidates.push(
+    `${home}/.local/state/cmux/cmux.sock`,
+    `${home}/Library/Application Support/cmux/cmux.sock`,
+    "/tmp/cmux.sock",
+  );
+
+  // Skip stale hints: only return a path that is actually a live socket.
+  for (const path of candidates) {
+    if (isLiveSocket(path)) return path;
+  }
+  // Nothing validated — fall back to the first candidate so errors point somewhere.
+  return candidates[0] ?? `${home}/.local/state/cmux/cmux.sock`;
+}
 
 let requestId = 0;
 
@@ -76,7 +108,7 @@ function rpc(method: string, params: Record<string, unknown> = {}): Promise<Cmux
     });
 
     socket.setTimeout(5000);
-    socket.connect(CMUX_SOCKET, () => {
+    socket.connect(resolveCmuxSocket(), () => {
       socket.write(JSON.stringify({ id, method, params }) + "\n");
     });
   });
@@ -94,8 +126,9 @@ export async function isCmuxAvailable(): Promise<boolean> {
 export async function listWorkspaces(): Promise<{ id: string; name: string }[]> {
   const res = await rpc("workspace.list");
   assertOk(res, "list workspaces");
-  const result = res.result as { workspaces: { id: string; name: string }[] };
-  return result.workspaces ?? [];
+  // cmux 0.64.x renamed the workspace label field from `name` to `title`.
+  const result = res.result as { workspaces?: { id: string; name?: string; title?: string }[] };
+  return (result.workspaces ?? []).map((w) => ({ id: w.id, name: w.title ?? w.name ?? "" }));
 }
 
 export async function createWorkspace(name: string): Promise<string> {
