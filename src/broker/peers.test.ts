@@ -114,6 +114,29 @@ describe("generateId", () => {
     const id = generateId(stmts, peerSockets, "/c/melosys");
     expect(id).toBe("melosys-2");
   });
+
+  test("strips a colon so the id cannot invade the reserved http: namespace", () => {
+    // A basename with a colon (legal on unix) must not yield an id like
+    // "http:cli" that would collide with the `http:`-stamped HTTP-send origin.
+    const peerSockets = new Map<string, unknown>();
+    const id = generateId(stmts, peerSockets, "/tmp/http:cli");
+    expect(id).toBe("httpcli");
+    expect(id).not.toContain(":");
+  });
+
+  test("a basename equal to a reserved sender id falls back to a neutral base", () => {
+    // A peer registering from a `.../__dashboard__` cwd must not be handed the
+    // dashboard's reserved sender id.
+    const peerSockets = new Map<string, unknown>();
+    const id = generateId(stmts, peerSockets, "/tmp/__dashboard__");
+    expect(id).toBe("peer");
+  });
+
+  test("a basename that sanitizes to empty falls back to a neutral base", () => {
+    const peerSockets = new Map<string, unknown>();
+    const id = generateId(stmts, peerSockets, "/tmp/:::");
+    expect(id).toBe("peer");
+  });
 });
 
 // --- M13: OpenCode HTTP delivery via deliverOrQueue ---
