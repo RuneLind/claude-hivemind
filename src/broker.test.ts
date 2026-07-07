@@ -418,6 +418,112 @@ describe("broker", () => {
     });
   });
 
+  describe("HTTP send-message from_id stamping", () => {
+    // The POST /api/send-message handler must never trust the caller-supplied
+    // from_id: any local process could otherwise impersonate a connected peer.
+    // The broker stamps its own `http:`-prefixed origin instead.
+
+    /** POST to /api/send-message and return the parsed { ok } response. */
+    async function httpSend(body: {
+      from_id?: unknown;
+      to_id: string;
+      text: string;
+    }): Promise<{ ok: boolean; error?: string }> {
+      const res = await fetch(`http://127.0.0.1:${testPort}/api/send-message`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      return (await res.json()) as { ok: boolean; error?: string };
+    }
+
+    test("claimed from_id impersonating a registered peer is ignored", async () => {
+      // A "victim" peer whose id an attacker will try to impersonate, plus a
+      // receiver that inspects the from_id the broker actually delivers.
+      const victim = connectPeer(testPort, "stamp-ns");
+      const receiver = connectPeer(testPort, "stamp-ns");
+      const pidVictim = spawnSleeper();
+      const pidReceiver = spawnSleeper();
+
+      const regVictim = await registerPeer(victim, {
+        cwd: "/test/stamp-victim",
+        namespace: "stamp-ns",
+        pid: pidVictim,
+      });
+      const regReceiver = await registerPeer(receiver, {
+        cwd: "/test/stamp-receiver",
+        namespace: "stamp-ns",
+        pid: pidReceiver,
+      });
+
+      const messagePromise = waitForMessage<BrokerMessage & { type: "message" }>(
+        receiver,
+        "message"
+      );
+      const resp = await httpSend({
+        from_id: regVictim.id, // claim to be the victim
+        to_id: regReceiver.id,
+        text: "spoofed?",
+      });
+      expect(resp.ok).toBe(true);
+
+      const received = await messagePromise;
+      expect(received.text).toBe("spoofed?");
+      // The delivered from_id must be the stamped origin, NOT the victim's id.
+      expect(received.from_id).toBe(`http:${regVictim.id}`);
+      expect(received.from_id).not.toBe(regVictim.id);
+    });
+
+    test("CLI-style send (from_id 'cli') delivers as http:cli", async () => {
+      const receiver = connectPeer(testPort, "stamp-cli-ns");
+      const pid = spawnSleeper();
+      const reg = await registerPeer(receiver, {
+        cwd: "/test/stamp-cli-receiver",
+        namespace: "stamp-cli-ns",
+        pid,
+      });
+
+      const messagePromise = waitForMessage<BrokerMessage & { type: "message" }>(
+        receiver,
+        "message"
+      );
+      const resp = await httpSend({ from_id: "cli", to_id: reg.id, text: "from the cli" });
+      expect(resp.ok).toBe(true);
+
+      const received = await messagePromise;
+      expect(received.text).toBe("from the cli");
+      expect(received.from_id).toBe("http:cli");
+    });
+
+    test("missing or garbage from_id gets a sane http:anon stamp", async () => {
+      const receiver = connectPeer(testPort, "stamp-anon-ns");
+      const pid = spawnSleeper();
+      const reg = await registerPeer(receiver, {
+        cwd: "/test/stamp-anon-receiver",
+        namespace: "stamp-anon-ns",
+        pid,
+      });
+
+      // Missing from_id.
+      const missingPromise = waitForMessage<BrokerMessage & { type: "message" }>(
+        receiver,
+        "message"
+      );
+      await httpSend({ to_id: reg.id, text: "no sender" });
+      const missing = await missingPromise;
+      expect(missing.from_id).toBe("http:anon");
+
+      // Garbage from_id that sanitizes down to nothing (only unsafe chars).
+      const garbagePromise = waitForMessage<BrokerMessage & { type: "message" }>(
+        receiver,
+        "message"
+      );
+      await httpSend({ from_id: "!!!:::///", to_id: reg.id, text: "garbage sender" });
+      const garbage = await garbagePromise;
+      expect(garbage.from_id).toBe("http:anon");
+    });
+  });
+
   describe("list_peers", () => {
     test("scope 'namespace' only returns same-namespace peers", async () => {
       const ws1 = connectPeer(testPort, "list-ns-a");

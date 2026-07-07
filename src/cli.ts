@@ -131,7 +131,9 @@ switch (cmd) {
         }
       );
       if (result.ok) {
-        console.log(`Message sent to ${toId}`);
+        // The broker ignores our claimed from_id and stamps a namespaced
+        // `http:` origin, so the recipient sees this send as `http:cli`.
+        console.log(`Message sent to ${toId} (from http:cli)`);
       } else {
         console.error(`Failed: ${result.error}`);
       }
