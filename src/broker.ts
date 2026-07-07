@@ -82,6 +82,16 @@ const ALLOWED_ORIGINS = new Set([
   `http://127.0.0.1:${PORT}`,
 ]);
 
+// Normalize a caller-supplied HTTP sender label into a safe suffix for the
+// `http:` origin prefix. Anything outside [a-zA-Z0-9_-] is dropped (this
+// includes `:`, so the sanitized suffix can never reintroduce the prefix
+// separator), and the result is capped and defaulted so we always produce a
+// non-empty, bounded id like `http:cli` or `http:anon`.
+function sanitizeHttpSender(raw: unknown): string {
+  const cleaned = (typeof raw === "string" ? raw : "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 64);
+  return cleaned.length > 0 ? cleaned : "anon";
+}
+
 function isAllowedOrigin(req: Request): boolean {
   const origin = req.headers.get("origin");
   if (origin === null) return true; // non-browser caller (CLI, curl, same-process)
@@ -186,8 +196,17 @@ function startServer() {
           });
         }
 
+        // The caller-supplied `from_id` is untrusted: any local process can
+        // POST here and claim to be a currently-connected peer, bypassing the
+        // socket-stamped id (ws.data.peerId) that is the only trustworthy origin
+        // in the system. So we ignore the claimed value and stamp our own
+        // namespaced origin under the `http:` prefix. Registered peer ids come
+        // from generateId(), which only ever joins a cwd basename with `-` and
+        // digits and never emits a `:` — so an `http:`-prefixed id is
+        // structurally incapable of colliding with a real peer id.
+        const fromId = "http:" + sanitizeHttpSender(body.from_id);
         const now = new Date().toISOString();
-        deliverOrQueue(ctx, peerStmts, msgStmts, body.from_id, body.to_id, body.text, now, body.correlation_id ?? null);
+        deliverOrQueue(ctx, peerStmts, msgStmts, fromId, body.to_id, body.text, now, body.correlation_id ?? null);
         return Response.json({ ok: true });
       },
     },
