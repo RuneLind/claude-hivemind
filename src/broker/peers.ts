@@ -10,6 +10,7 @@ import type {
   PeerMessageStats,
   PairMessageStats,
 } from "../shared/types.ts";
+import { DASHBOARD_SENDER_ID } from "../shared/types.ts";
 import { WS_OPEN, type BrokerContext } from "./db.ts";
 import { sendText, sendKey } from "../cmux/client.ts";
 import { formatPeerPrompt } from "../shared/message-prompt.ts";
@@ -135,12 +136,27 @@ export function getAllPeers(stmts: PeerStatements): Peer[] {
   return stmts.selectAllPeers.all() as Peer[];
 }
 
+// Peer ids that would collide with a broker-stamped origin. A stamped id must
+// never be reachable from a cwd basename, or a registrant could impersonate
+// that origin (HTTP sends stamp `http:<x>`; the dashboard stamps
+// DASHBOARD_SENDER_ID). The `http:` family is excluded structurally by the
+// sanitizer below (it strips `:`), so only the colon-free reserved ids need an
+// explicit guard.
+const RESERVED_PEER_IDS = new Set<string>([DASHBOARD_SENDER_ID]);
+
 export function generateId(
   stmts: PeerStatements,
   peerSockets: Map<string, unknown>,
   cwd: string,
 ): string {
-  const base = cwd.split("/").pop() ?? "peer";
+  // Derive the id from the cwd basename, but sanitize to [a-zA-Z0-9_-] first.
+  // An unsanitized basename could contain a `:` (legal in unix dir names) and
+  // land the peer id inside the reserved `http:` origin namespace stamped on
+  // HTTP sends — making a registered id collide with the stamp. Stripping the
+  // colon (and everything outside the safe class) makes that structurally
+  // impossible; a reserved or emptied result falls back to a neutral base.
+  let base = (cwd.split("/").pop() ?? "").replace(/[^a-zA-Z0-9_-]/g, "");
+  if (base.length === 0 || RESERVED_PEER_IDS.has(base)) base = "peer";
   // peerSockets is authoritative for "actively connected" — PID checks lie
   // briefly during fast re-execs (zombie PID, or close handler not yet fired)
   // and would push us to <name>-2 even though the slot is effectively free.
