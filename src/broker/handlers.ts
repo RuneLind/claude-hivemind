@@ -217,6 +217,44 @@ export async function scanReposInDirectory(dir: string): Promise<ScannedRepo[]> 
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+// --- Registration collision detection (tier-1: audit only) ---
+//
+// Peer identity is self-asserted: generateId() derives a peer's id from the
+// basename of the sender-claimed cwd. When the real holder of an id (e.g.
+// "huginn") disconnects, its DB row persists (marked disconnected), and any
+// local process that registers with a matching cwd basename inherits that
+// established id — consumers' allowlists would then trust the impostor.
+// Cryptographic registration (tier 2) is deferred, so we cannot block this yet;
+// this only leaves a prominent broker-side audit trail.
+//
+// We warn ONLY when the registrant looks like a *different* identity than the
+// previous holder — a different cwd. The overwhelmingly common case is the SAME
+// agent reconnecting (broker restart, agent restart, fast re-exec): it keeps
+// its cwd even though its pid changes, so keying the check on cwd (not pid)
+// keeps legitimate reconnects quiet while still catching a foreign process that
+// grabbed the vacated id from a different directory.
+const REGISTRATION_COLLISION_WINDOW_MS = 15 * 60_000; // 15 minutes
+
+export function detectRegistrationCollision(
+  prior: Peer,
+  registrant: { pid: number; cwd: string },
+  nowMs: number,
+): void {
+  // A still-connected prior row isn't a vacated slot (and generateId wouldn't
+  // have handed us its id anyway); only a disconnected holder is a collision.
+  if (prior.connected) return;
+  // Same working directory => same identity reclaiming its own id. No warning.
+  if (prior.cwd === registrant.cwd) return;
+  const ageMs = nowMs - Date.parse(prior.last_seen);
+  if (!Number.isFinite(ageMs) || ageMs < 0 || ageMs > REGISTRATION_COLLISION_WINDOW_MS) return;
+  const ageMin = Math.round(ageMs / 60_000);
+  log(
+    `⚠ Peer registration collision: "${prior.id}" was held by a peer disconnected ${ageMin}m ago ` +
+    `(pid ${prior.pid}, cwd ${prior.cwd}); new registrant pid ${registrant.pid}, cwd ${registrant.cwd}. ` +
+    `Identity is unverified (tier-2 signing not yet implemented).`
+  );
+}
+
 // --- Peer message handler ---
 
 export function handlePeerMessage(
@@ -238,7 +276,11 @@ export function handlePeerMessage(
       // may still match a stale row whose close handler hasn't fired yet.
       // Clear it (and its service entry) so the upcoming INSERT doesn't
       // collide on the PRIMARY KEY.
-      if (peerStmts.selectPeerById.get(id)) {
+      const prior = peerStmts.selectPeerById.get(id) as Peer | null;
+      if (prior) {
+        // Tier-1 audit: flag when a foreign process inherits a recently
+        // vacated id (identity is self-asserted, tier-2 signing not yet built).
+        detectRegistrationCollision(prior, { pid: msg.pid, cwd: msg.cwd }, Date.now());
         svcStmts.deleteServiceByPeer.run(id);
         peerStmts.deletePeerStmt.run(id);
       }

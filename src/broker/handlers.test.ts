@@ -16,8 +16,107 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { unlinkSync, writeFileSync } from "fs";
 import type { DashboardMessage } from "../shared/types.ts";
+import type { Peer } from "../shared/types.ts";
 import { initDatabase } from "./db.ts";
-import { createProfileStatements, getAllProfiles } from "./handlers.ts";
+import { createProfileStatements, getAllProfiles, detectRegistrationCollision } from "./handlers.ts";
+
+// --- Tier-1: registration collision detection (detection only, no blocking) ---
+
+describe("detectRegistrationCollision", () => {
+  // Capture the broker's log() output (which writes to console.error).
+  let logged: string[];
+  let originalError: typeof console.error;
+
+  beforeEach(() => {
+    logged = [];
+    originalError = console.error;
+    console.error = (...args: unknown[]) => { logged.push(args.join(" ")); };
+  });
+
+  afterEach(() => {
+    console.error = originalError;
+  });
+
+  function priorPeer(overrides: Partial<Peer> = {}): Peer {
+    const now = new Date().toISOString();
+    return {
+      id: "huginn",
+      pid: 1001,
+      cwd: "/src/huginn",
+      git_root: null,
+      git_branch: null,
+      tty: null,
+      summary: "",
+      namespace: "default",
+      agent_type: "claude-code",
+      opencode_url: null,
+      surface_id: null,
+      registered_at: now,
+      last_seen: now,
+      connected: 0,
+      ...overrides,
+    };
+  }
+
+  test("warns when a different process/cwd inherits a recently vacated id", () => {
+    const now = Date.now();
+    const prior = priorPeer({
+      pid: 1001,
+      cwd: "/src/huginn",
+      last_seen: new Date(now - 3 * 60_000).toISOString(), // 3m ago
+    });
+
+    detectRegistrationCollision(prior, { pid: 2002, cwd: "/tmp/impostor" }, now);
+
+    expect(logged.length).toBe(1);
+    expect(logged[0]).toContain("registration collision");
+    expect(logged[0]).toContain('"huginn"');
+    expect(logged[0]).toContain("3m ago");
+    expect(logged[0]).toContain("pid 1001");
+    expect(logged[0]).toContain("/src/huginn");
+    expect(logged[0]).toContain("pid 2002");
+    expect(logged[0]).toContain("/tmp/impostor");
+  });
+
+  test("does NOT warn when the same peer (same cwd) reconnects", () => {
+    const now = Date.now();
+    // Same cwd, different pid (agent restarted / broker restarted).
+    const prior = priorPeer({
+      pid: 1001,
+      cwd: "/src/huginn",
+      last_seen: new Date(now - 1 * 60_000).toISOString(),
+    });
+
+    detectRegistrationCollision(prior, { pid: 9999, cwd: "/src/huginn" }, now);
+
+    expect(logged.length).toBe(0);
+  });
+
+  test("does NOT warn when the prior holder disconnected outside the window", () => {
+    const now = Date.now();
+    const prior = priorPeer({
+      cwd: "/src/huginn",
+      last_seen: new Date(now - 20 * 60_000).toISOString(), // 20m ago > 15m window
+    });
+
+    detectRegistrationCollision(prior, { pid: 2002, cwd: "/tmp/impostor" }, now);
+
+    expect(logged.length).toBe(0);
+  });
+
+  test("does NOT warn when the prior holder is still connected", () => {
+    const now = Date.now();
+    const prior = priorPeer({
+      cwd: "/src/huginn",
+      connected: 1,
+      last_seen: new Date(now - 1 * 60_000).toISOString(),
+    });
+
+    detectRegistrationCollision(prior, { pid: 2002, cwd: "/tmp/impostor" }, now);
+
+    expect(logged.length).toBe(0);
+  });
+});
 
 // --- M16a: profile statements (direct, in-memory) ---
 
