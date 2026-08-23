@@ -262,7 +262,7 @@ function startDockerEventStream(ctx: BrokerContext, state: DockerState): void {
       { stdout: "pipe", stderr: "pipe" }
     );
 
-    const reader = state.eventProc.stdout.getReader();
+    const reader = (state.eventProc.stdout as ReadableStream<Uint8Array>).getReader() as any;
     state.eventReader = reader;
     const decoder = new TextDecoder();
     let buffer = "";
@@ -343,15 +343,15 @@ class DockerLogTailer {
         ["docker", "logs", "--follow", "--tail", "200", "--timestamps", this.containerName],
         { stdout: "pipe", stderr: "pipe" }
       );
-      this.readStream(this.proc.stdout);
-      this.readStream(this.proc.stderr);
+      this.readStream(this.proc.stdout as ReadableStream<Uint8Array>);
+      this.readStream(this.proc.stderr as ReadableStream<Uint8Array>);
     } catch (e) {
       log(`DockerLogTailer start error for ${this.containerName}: ${e}`);
     }
   }
 
   private async readStream(stream: ReadableStream<Uint8Array>) {
-    const reader = stream.getReader();
+    const reader = stream.getReader() as any;
     this.readers.add(reader);
     const decoder = new TextDecoder();
     let buffer = "";
@@ -380,9 +380,9 @@ class DockerLogTailer {
   private parseDockerLine(raw: string): LogLine {
     const clean = raw.replace(ANSI_RE, "");
     const tsMatch = clean.match(DOCKER_TS_RE);
-    const message = tsMatch ? tsMatch[2] : clean;
+    const message = tsMatch ? tsMatch[2]! : clean;
     const result = parseLogLine(message, "auto");
-    if (tsMatch) result.timestamp = tsMatch[1];
+    if (tsMatch) result.timestamp = tsMatch[1]!;
     return result;
   }
 

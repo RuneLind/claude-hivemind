@@ -136,7 +136,7 @@ const servicePollState = createServicePollState();
 
 // --- HTTP + WebSocket server ---
 
-function startServer() {
+function startServer(): ReturnType<typeof Bun.serve<WSData>> {
   return Bun.serve<WSData>({
   port: PORT,
   hostname: "127.0.0.1",
@@ -157,7 +157,7 @@ function startServer() {
     },
 
     "/api/list-peers": {
-      async POST(req) {
+      async POST(req: Request) {
         const body = (await req.json()) as {
           scope: string;
           namespace?: string;
@@ -180,7 +180,7 @@ function startServer() {
     },
 
     "/api/send-message": {
-      async POST(req) {
+      async POST(req: Request) {
         if (!isAllowedOrigin(req)) return new Response("Forbidden origin", { status: 403 });
         const body = (await req.json()) as {
           from_id: string;
@@ -217,7 +217,7 @@ function startServer() {
     },
 
     "/api/messages": {
-      GET(req) {
+      GET(req: Request) {
         const url = new URL(req.url);
         const peer1 = url.searchParams.get("peer1");
         const peer2 = url.searchParams.get("peer2");
@@ -235,7 +235,7 @@ function startServer() {
     },
 
     "/api/logs": {
-      async GET(req) {
+      async GET(req: Request) {
         const url = new URL(req.url);
         const peerId = url.searchParams.get("peer_id");
         if (!peerId) return Response.json({ error: "peer_id required" }, { status: 400 });
@@ -258,7 +258,7 @@ function startServer() {
     },
 
     "/api/log-stats": {
-      async GET(req) {
+      async GET(req: Request) {
         const url = new URL(req.url);
         const peerId = url.searchParams.get("peer_id");
         if (!peerId) return Response.json({ error: "peer_id required" }, { status: 400 });
@@ -288,7 +288,7 @@ function startServer() {
     },
 
     "/api/messages/clear": {
-      POST(req) {
+      POST(req: Request) {
         if (!isAllowedOrigin(req)) return new Response("Forbidden origin", { status: 403 });
         msgStmts.deleteAllMessages.run();
         server.publish(
@@ -306,7 +306,7 @@ function startServer() {
     },
 
     "/api/docker/log-stats": {
-      GET(req) {
+      GET(req: Request) {
         const url = new URL(req.url);
         const containerId = url.searchParams.get("container_id");
         if (containerId) {
@@ -322,7 +322,7 @@ function startServer() {
     },
 
     "/api/docker/start": {
-      async POST(req) {
+      async POST(req: Request) {
         if (!isAllowedOrigin(req)) return new Response("Forbidden origin", { status: 403 });
         const url = new URL(req.url);
         const name = url.searchParams.get("name");
@@ -344,7 +344,7 @@ function startServer() {
     },
 
     "/api/scan-repos": {
-      async GET(req) {
+      async GET(req: Request) {
         const url = new URL(req.url);
         const dir = url.searchParams.get("dir");
         if (!dir) return Response.json({ error: "dir required" }, { status: 400 });

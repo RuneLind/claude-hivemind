@@ -141,10 +141,10 @@ describe("launch profiles", () => {
     save("alpha", "/src/alpha", ["repo-a", "repo-b"], "do work");
     const profiles = getAllProfiles(stmts);
     expect(profiles.length).toBe(1);
-    expect(profiles[0].name).toBe("alpha");
-    expect(profiles[0].directory).toBe("/src/alpha");
-    expect(profiles[0].repos).toEqual(["repo-a", "repo-b"]);
-    expect(profiles[0].prompt).toBe("do work");
+    expect(profiles[0]!.name).toBe("alpha");
+    expect(profiles[0]!.directory).toBe("/src/alpha");
+    expect(profiles[0]!.repos).toEqual(["repo-a", "repo-b"]);
+    expect(profiles[0]!.prompt).toBe("do work");
   });
 
   test("upsert by name updates in place instead of duplicating", () => {
@@ -153,9 +153,9 @@ describe("launch profiles", () => {
 
     const profiles = getAllProfiles(stmts);
     expect(profiles.length).toBe(1);
-    expect(profiles[0].directory).toBe("/src/v2");
-    expect(profiles[0].repos).toEqual(["y", "z"]);
-    expect(profiles[0].prompt).toBe("updated");
+    expect(profiles[0]!.directory).toBe("/src/v2");
+    expect(profiles[0]!.repos).toEqual(["y", "z"]);
+    expect(profiles[0]!.prompt).toBe("updated");
     // The ON CONFLICT(name) path keeps the original id.
     expect(second.id).toBe(first.id);
   });
@@ -184,7 +184,7 @@ const activeSockets: WebSocket[] = [];
 
 async function findFreePort(): Promise<number> {
   const s = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("") });
-  const port = s.port;
+  const port = s.port!;
   s.stop(true);
   return port;
 }

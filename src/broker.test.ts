@@ -24,7 +24,7 @@ function spawnSleeper(): number {
 /** Find a free port by briefly listening on 0. */
 async function findFreePort(): Promise<number> {
   const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("") });
-  const port = server.port;
+  const port = server.port!;
   server.stop(true);
   return port;
 }

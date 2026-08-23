@@ -203,11 +203,11 @@ export async function scanReposInDirectory(dir: string): Promise<ScannedRepo[]> 
     try {
       if (!gitStat.isDirectory()) {
         const m = (await Bun.file(gitDir).text()).trim().match(/^gitdir:\s*(.+)$/);
-        if (m) gitDir = m[1];
+        if (m) gitDir = m[1]!;
       }
       const head = (await Bun.file(`${gitDir}/HEAD`).text()).trim();
       const match = head.match(/^ref: refs\/heads\/(.+)$/);
-      branch = match ? match[1] : head.slice(0, 8);
+      branch = match ? match[1]! : head.slice(0, 8);
     } catch { /* no branch info */ }
     return { name: entry.name, path: entryPath, branch };
   }));
@@ -657,14 +657,14 @@ export function handleDashboardMessage(
       }
       const dirs = msg.type === "launch_claude_instances"
         ? msg.directories
-        : [{ directory: msg.directory, name: msg.name }];
+        : [{ directory: msg.directory!, name: msg.name }];
       const sharedPrompt = msg.prompt;
       const agentType = msg.agent_type ?? "claude-code";
       const launcher = agentType === "opencode" ? launchOpenCodeInstance : launchClaudeInstance;
       log(`Launching ${dirs.length} ${agentType} instance(s) via cmux`);
       (async () => {
         for (let i = 0; i < dirs.length; i++) {
-          const { directory, name } = dirs[i];
+          const { directory, name } = dirs[i]!;
           // Stagger launches to reduce CPU/IO contention during startup
           if (i > 0) await new Promise(r => setTimeout(r, 1500));
           try {

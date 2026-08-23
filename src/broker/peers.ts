@@ -231,7 +231,7 @@ async function resolveOpenCodeSession(baseUrl: string, peerId: string): Promise<
     }
     const sessionId = sessions.slice().sort((a: any, b: any) =>
       (b.updatedAt ?? "").localeCompare(a.updatedAt ?? "")
-    )[0].id;
+    )[0]!.id;
     opencodeSessionCache.set(baseUrl, { sessionId, cachedAt: Date.now() });
     return sessionId;
   } catch (e) {

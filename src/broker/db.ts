@@ -11,7 +11,7 @@ export type DashboardWSData = { kind: "dashboard" };
 export type WSData = PeerWSData | DashboardWSData;
 
 export interface BrokerContext {
-  server: import("bun").Server;
+  server: import("bun").Server<WSData>;
   peerSockets: Map<string, import("bun").ServerWebSocket<WSData>>;
 }
 

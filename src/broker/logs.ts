@@ -31,7 +31,7 @@ export function parseLogLine(raw: string, format: ServiceInfo["log_format"] | "a
   if (format === "spring" || format === "auto") {
     const m = clean.match(SPRING_LOG_RE);
     if (m) {
-      return { timestamp: m[1], level: m[2] as LogLevel, message: m[3], raw: clean };
+      return { timestamp: m[1]!, level: m[2]! as LogLevel, message: m[3]!, raw: clean };
     }
   }
 
