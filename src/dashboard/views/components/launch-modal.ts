@@ -51,7 +51,7 @@ export function launchModalStyles(): string {
       white-space: nowrap;
     }
     .scan-btn:hover { border-color: var(--accent); color: var(--accent); }
-    .scan-btn:disabled { opacity: 0.5; cursor: default; }
+    .scan-btn:disabled { opacity: var(--dim-opacity); cursor: default; }
     .repo-list {
       margin-top: 8px; max-height: 300px; overflow-y: auto;
       border: 1px solid var(--border-primary); border-radius: 6px;
@@ -69,7 +69,7 @@ export function launchModalStyles(): string {
     .repo-list-header button:hover { text-decoration: underline; }
     .repo-item {
       display: flex; align-items: center; gap: 8px;
-      padding: 6px 10px; border-bottom: 1px solid var(--bg-panel);
+      padding: 6px 10px; border-bottom: 1px solid var(--border-primary);
       font-size: 12px; transition: background 0.1s;
     }
     .repo-item:last-child { border-bottom: none; }
@@ -102,15 +102,15 @@ export function launchModalStyles(): string {
     }
     .launch-cancel:hover { border-color: var(--text-muted); color: var(--text-bright); }
     .launch-submit {
-      background: var(--btn-success-bg); border-color: var(--btn-success-bg); color: #fff;
+      background: var(--btn-success-bg); border-color: var(--btn-success-bg); color: var(--btn-success-text);
     }
     .launch-submit:hover { background: var(--btn-success-hover); }
-    .launch-submit:disabled { opacity: 0.5; cursor: default; }
+    .launch-submit:disabled { opacity: var(--dim-opacity); cursor: default; }
     .launch-error {
       display: none; color: var(--status-error); font-size: 12px; margin-top: 8px;
     }
     .launch-hint {
-      font-size: 11px; color: var(--text-dim); margin-top: 4px;
+      font-size: 11px; color: var(--text-faint); margin-top: 4px;
     }
     .agent-type-selector {
       display: flex; gap: 8px; margin-top: 4px;
@@ -128,7 +128,7 @@ export function launchModalStyles(): string {
     .agent-type-dot {
       width: 8px; height: 8px; border-radius: 50%;
     }
-    .agent-type-option .agent-type-dot { background: var(--text-dim); }
+    .agent-type-option .agent-type-dot { background: var(--text-faint); }
     .agent-type-option.selected .agent-type-dot { background: var(--accent); }
     .agent-type-option.selected.opencode .agent-type-dot { background: var(--accent-purple); }
     .launch-btn {
@@ -144,7 +144,7 @@ export function launchModalStyles(): string {
       min-height: 28px; align-items: center;
     }
     .profile-bar-label {
-      font-size: 11px; color: var(--text-dim); margin-right: 4px;
+      font-size: 11px; color: var(--text-faint); margin-right: 4px;
       white-space: nowrap;
     }
     .profile-pill {
@@ -159,7 +159,7 @@ export function launchModalStyles(): string {
     .profile-pill .profile-delete {
       display: inline-flex; align-items: center; justify-content: center;
       width: 14px; height: 14px; border-radius: 50%;
-      font-size: 10px; line-height: 1; color: var(--text-dim);
+      font-size: 10px; line-height: 1; color: var(--text-muted);
       cursor: pointer; transition: all 0.15s;
     }
     .profile-pill .profile-delete:hover { color: var(--status-error); background: var(--tint-error); }
@@ -172,7 +172,7 @@ export function launchModalStyles(): string {
       border-radius: 6px; cursor: pointer; transition: all 0.15s;
     }
     .save-profile-btn:hover { border-color: var(--accent); color: var(--accent); }
-    .save-profile-btn:disabled { opacity: 0.5; cursor: default; }
+    .save-profile-btn:disabled { opacity: var(--dim-opacity); cursor: default; }
     .save-profile-row {
       display: none; align-items: center; gap: 8px; margin-top: 8px;
     }
@@ -184,13 +184,13 @@ export function launchModalStyles(): string {
     }
     .save-profile-row input:focus { border-color: var(--accent); }
     .save-profile-confirm {
-      background: var(--btn-success-bg); border: 1px solid var(--btn-success-bg); color: #fff;
+      background: var(--btn-success-bg); border: 1px solid var(--btn-success-bg); color: var(--btn-success-text);
       font-family: inherit; font-size: 12px; padding: 6px 14px;
       border-radius: 6px; cursor: pointer; transition: all 0.15s;
       white-space: nowrap;
     }
     .save-profile-confirm:hover { background: var(--btn-success-hover); }
-    .save-profile-confirm:disabled { opacity: 0.5; cursor: default; }
+    .save-profile-confirm:disabled { opacity: var(--dim-opacity); cursor: default; }
   `;
 }
 
@@ -299,7 +299,7 @@ export function launchModalScript(): string {
 
       if (repos.length === 0) {
         pendingProfileLoad = null;
-        $('repoListContainer').innerHTML = '<div style="padding:12px;color:var(--text-dim);font-size:12px;text-align:center">No git repos found in this directory</div>';
+        $('repoListContainer').innerHTML = '<div style="padding:12px;color:var(--text-faint);font-size:12px;text-align:center">No git repos found in this directory</div>';
         updateSelectedCount();
         return;
       }

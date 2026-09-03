@@ -11,7 +11,7 @@ import { activityLogStyles, activityLogScript, activityLogHtml } from "./compone
 import { containerCardStyles, containerCardScript } from "./components/container-card.ts";
 import { launchModalStyles, launchModalHtml, launchModalScript } from "./components/launch-modal.ts";
 import { rendererScript } from "./components/renderer.ts";
-import { themeStyles, themeInitScript, themeToggleHtml, themeToggleScript } from "./theme.ts";
+import { themeStyles, themeInitScript, themeToggleHtml, themeToggleScript } from "./components/theme.ts";
 
 function baseStyles(): string {
   return `
@@ -84,16 +84,16 @@ function baseStyles(): string {
     .baseline-btn.active:hover { border-color: var(--status-error); color: var(--status-error); }
     .ns-badge { margin-left: auto; font-size: 11px; color: var(--text-muted); font-weight: 400; }
     .collapse-toggle {
-      background: none; border: none; color: var(--text-dim);
+      background: none; border: none; color: var(--text-faint);
       font-size: 12px; cursor: pointer; padding: 0 4px;
       transition: transform 0.2s, color 0.15s; line-height: 1;
     }
     .collapse-toggle:hover { color: var(--text-muted); }
     .collapse-toggle.collapsed { transform: rotate(-90deg); }
     .section-body.collapsed { display: none; }
-    .empty { text-align: center; padding: 60px 20px; color: var(--text-dim); font-size: 14px; }
+    .empty { text-align: center; padding: 60px 20px; color: var(--text-muted); font-size: 14px; }
     .modal-loading, .modal-empty {
-      color: var(--text-dim); text-align: center; padding: 24px; font-size: 13px;
+      color: var(--text-faint); text-align: center; padding: 24px; font-size: 13px;
     }
     .modal-close {
       background: none; border: none; color: var(--text-muted);

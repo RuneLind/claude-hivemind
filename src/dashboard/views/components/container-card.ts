@@ -32,7 +32,7 @@ export function containerCardStyles(): string {
       transition: border-color 0.2s;
     }
     .container-card:hover { border-color: var(--border-secondary); }
-    .container-card.stopped { opacity: 0.5; }
+    .container-card.stopped { opacity: var(--dim-opacity); }
     .container-header {
       display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
     }
@@ -44,10 +44,10 @@ export function containerCardStyles(): string {
     .container-state-dot.paused { background: var(--status-warning); }
     .container-state-dot.restarting { background: var(--status-warning); animation: container-pulse 1s infinite; }
     .container-state-dot.dead { background: var(--status-error); }
-    .container-state-dot.created { background: var(--text-dim); }
+    .container-state-dot.created { background: var(--text-faint); }
     .container-name { font-weight: 600; color: var(--status-cyan); font-size: 13px; }
     .container-status { color: var(--text-muted); font-size: 11px; margin-bottom: 6px; }
-    .container-image { color: var(--text-dim); font-size: 11px; margin-bottom: 4px; word-break: break-all; }
+    .container-image { color: var(--text-faint); font-size: 11px; margin-bottom: 4px; word-break: break-all; }
     .container-resources {
       display: flex; gap: 12px; font-size: 11px; color: var(--text-muted); margin-bottom: 6px;
     }
@@ -206,7 +206,7 @@ export function containerCardScript(): string {
         html += '<div class="container-log-stats" onclick="openDockerLogViewer(\\'' + escapeJs(c.id) + '\\', \\'' + escapeJs(c.service || c.name) + '\\')">';
         if (logStats.errorCount > 0) html += '<span style="color:var(--status-error);font-weight:600">' + logStats.errorCount + ' errors</span>';
         if (logStats.warnCount > 0) html += '<span style="color:var(--status-warning);font-weight:500">' + logStats.warnCount + ' warn</span>';
-        html += '<span style="color:var(--text-dim)">' + logStats.totalLines + ' lines</span>';
+        html += '<span style="color:var(--text-faint)">' + logStats.totalLines + ' lines</span>';
         html += '</div>';
       }
 

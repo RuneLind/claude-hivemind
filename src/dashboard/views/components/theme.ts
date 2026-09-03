@@ -1,6 +1,11 @@
 /**
- * Light/dark/system theme for the dashboard — ported from muninn's
- * `src/dashboard/views/components/theme.ts` so the two surfaces behave the same.
+ * Light/dark/system theme for the dashboard. The mechanism — storage key, init
+ * script, toggle button and its cycle script — is ported near-verbatim from
+ * muninn's `src/dashboard/views/components/theme.ts`, so the two surfaces behave
+ * the same. The palettes below are NOT muninn's: its tokens live in a different
+ * file (`views/shared-styles.ts`) and use a partly different vocabulary, so these
+ * are this dashboard's own, derived from the colors it already shipped.
+ *
  * Three modes:
  *
  *   - `system` (default) — no `data-theme` attribute on <html>; the
@@ -33,12 +38,13 @@ const DARK_TOKENS = `
       --border-secondary: #30363d;
       --border-subtle: #21262d0a;
 
-      /* Text */
+      /* Text — ordered brightest to faintest; the tiers rank the same way in both
+         palettes and in muninn's, so a rule copied either direction keeps its weight. */
       --text-bright: #e6edf3;
       --text-primary: #c9d1d9;
       --text-muted: #8b949e;
-      --text-dim: #484f58;
-      --text-faint: #6e7681;
+      --text-dim: #6e7681;
+      --text-faint: #484f58;
 
       /* Accents and status */
       --accent: #58a6ff;
@@ -54,6 +60,7 @@ const DARK_TOKENS = `
       /* Primary (green) button */
       --btn-success-bg: #238636;
       --btn-success-hover: #2ea043;
+      --btn-success-text: #ffffff;
 
       /* Agent-type badges */
       --badge-blue-bg: #0d1f3c;
@@ -66,6 +73,7 @@ const DARK_TOKENS = `
       /* Tints, overlays, glows */
       --tint-error: rgba(248, 81, 73, 0.1);
       --tint-warning: rgba(210, 153, 34, 0.06);
+      --dim-opacity: 0.5;
       --overlay: rgba(0, 0, 0, 0.7);
       --overlay-soft: rgba(0, 0, 0, 0.6);
       --shadow-modal: rgba(0, 0, 0, 0.5);
@@ -85,10 +93,15 @@ const DARK_TOKENS = `
 
 /**
  * Light palette — applied under `@media (prefers-color-scheme: light)` (system
- * follow) and forced under `html[data-theme="light"]`. Values track the GitHub
- * light ramp, the light half of the GitHub dark palette this dashboard was built
- * on: panels go white against a grey page (the dark theme's inverse), and every
- * accent/status hue is darkened so it stays legible on light fills.
+ * follow) and forced under `html[data-theme="light"]`. The neutrals and most
+ * accents come from GitHub's Primer light ramp, the counterpart of the Primer dark
+ * values this dashboard already shipped: panels go white against a grey page (the
+ * dark theme's inverse). The accent and status hues are then darkened past Primer's
+ * own values until each clears 4.5:1 on all three surface backgrounds — Primer's
+ * `#0969da` measures 4.45:1 on `--bg-surface`, close enough to read as fine and
+ * measurably under AA. `theme.test.ts` pins that floor. A few values (`--status-cyan`,
+ * `--ns-7`, the `--bg-subtle*` tints) have no Primer counterpart and were picked to
+ * match the ramp.
  */
 const LIGHT_TOKENS = `
       color-scheme: light;
@@ -105,29 +118,30 @@ const LIGHT_TOKENS = `
       /* Borders */
       --border-primary: #d8dee4;
       --border-secondary: #d0d7de;
-      --border-subtle: #d8dee4;
+      --border-subtle: #8c959f1a;
 
       /* Text */
       --text-bright: #1f2328;
       --text-primary: #24292f;
       --text-muted: #57606a;
-      --text-dim: #8c959f;
-      --text-faint: #6e7781;
+      --text-dim: #6e7781;
+      --text-faint: #8c959f;
 
       /* Accents and status */
-      --accent: #0969da;
+      --accent: #0860c9;
       --accent-bright: #0550ae;
-      --accent-purple: #8250df;
-      --accent-orange: #bc4c00;
-      --status-success: #1a7f37;
+      --accent-purple: #7a2fd6;
+      --accent-orange: #a84400;
+      --status-success: #16702f;
       --status-error: #cf222e;
-      --status-warning: #9a6700;
-      --status-green: #1a7f37;
+      --status-warning: #8a5c00;
+      --status-green: #197a34;
       --status-cyan: #0e7490;
 
       /* Primary (green) button */
       --btn-success-bg: #1f883d;
       --btn-success-hover: #1a7f37;
+      --btn-success-text: #ffffff;
 
       /* Agent-type badges */
       --badge-blue-bg: #ddf4ff;
@@ -140,6 +154,7 @@ const LIGHT_TOKENS = `
       /* Tints, overlays, glows */
       --tint-error: #ffebe9;
       --tint-warning: #fff8c5;
+      --dim-opacity: 0.8;
       --overlay: rgba(27, 31, 36, 0.4);
       --overlay-soft: rgba(27, 31, 36, 0.35);
       --shadow-modal: rgba(27, 31, 36, 0.2);
@@ -231,7 +246,11 @@ export function themeToggleScript(): string {
       if (mode === 'system') { delete root.dataset.theme; try { localStorage.removeItem(KEY); } catch (e) {} }
       else { root.dataset.theme = mode; try { localStorage.setItem(KEY, mode); } catch (e) {} }
       var btn = document.getElementById('themeToggle');
-      if (btn) { btn.textContent = ICONS[mode]; btn.title = 'Theme: ' + LABELS[mode] + ' (t to cycle)'; }
+      if (btn) {
+        btn.textContent = ICONS[mode];
+        btn.title = 'Theme: ' + LABELS[mode] + ' (t to cycle)';
+        btn.setAttribute('aria-label', 'Theme: ' + LABELS[mode] + '. Click to cycle system, light, dark.');
+      }
     }
     function cycle() {
       var c = current();
@@ -241,9 +260,10 @@ export function themeToggleScript(): string {
     var btn = document.getElementById('themeToggle');
     if (btn) btn.addEventListener('click', cycle);
     document.addEventListener('keydown', function(e) {
-      if (e.key === 't' && !e.ctrlKey && !e.metaKey && !e.altKey &&
-          !['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName) &&
-          !e.target.isContentEditable) {
+      var el = e.target;
+      if (e.key === 't' && !e.ctrlKey && !e.metaKey && !e.altKey && el && el.tagName &&
+          !['INPUT','TEXTAREA','SELECT','BUTTON','A'].includes(el.tagName) &&
+          !el.isContentEditable) {
         cycle();
       }
     });

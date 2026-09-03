@@ -34,9 +34,9 @@ export function conversationModalStyles(): string {
       font-size: 11px; color: var(--text-muted); margin-bottom: 6px;
     }
     .message-from { color: var(--accent); font-weight: 500; }
-    .message-arrow { color: var(--text-dim); }
+    .message-arrow { color: var(--text-faint); }
     .message-to { color: var(--status-green); font-weight: 500; }
-    .message-time { margin-left: auto; color: var(--text-dim); }
+    .message-time { margin-left: auto; color: var(--text-faint); }
     .message-text {
       font-size: 12px; color: var(--text-primary);
       white-space: pre-wrap; word-break: break-word;

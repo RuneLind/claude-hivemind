@@ -16,7 +16,7 @@ export function peerCardStyles(): string {
       overflow: hidden;
     }
     .peer-card:hover { border-color: var(--border-secondary); }
-    .peer-card.disconnected { opacity: 0.5; }
+    .peer-card.disconnected { opacity: var(--dim-opacity); }
     .peer-toolbar {
       display: flex; align-items: center; gap: 6px;
       padding: 6px 12px;
@@ -27,7 +27,7 @@ export function peerCardStyles(): string {
     .peer-toolbar .connection-dot {
       width: 6px; height: 6px; border-radius: 50%; background: var(--status-success); flex-shrink: 0;
     }
-    .peer-card.disconnected .peer-toolbar .connection-dot { background: var(--text-dim); }
+    .peer-card.disconnected .peer-toolbar .connection-dot { background: var(--text-faint); }
     .peer-toolbar .status-text { color: var(--text-muted); }
     .peer-toolbar .service-badge {
       display: inline-flex; align-items: center; gap: 4px;
@@ -35,7 +35,7 @@ export function peerCardStyles(): string {
       font-size: 11px; cursor: default;
     }
     .peer-toolbar .service-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
-    .peer-toolbar .service-check { color: var(--text-dim); font-size: 10px; }
+    .peer-toolbar .service-check { color: var(--text-faint); font-size: 10px; }
     .peer-toolbar .toolbar-actions {
       display: flex; gap: 4px; margin-left: auto;
     }
@@ -46,7 +46,7 @@ export function peerCardStyles(): string {
       cursor: pointer; transition: all 0.15s;
     }
     .toolbar-btn:hover { border-color: var(--text-muted); color: var(--text-bright); }
-    .toolbar-btn.start { color: var(--text-dim); border-color: transparent; font-size: 12px; padding: 0 4px; }
+    .toolbar-btn.start { color: var(--text-faint); border-color: transparent; font-size: 12px; padding: 0 4px; }
     .toolbar-btn.start:hover { color: var(--accent); background: var(--bg-subtle); border-color: var(--accent); }
     .toolbar-btn.stop:hover { border-color: var(--status-error); color: var(--status-error); }
     .toolbar-btn.docker { color: var(--status-cyan); }
@@ -91,7 +91,7 @@ export function peerCardStyles(): string {
       margin-bottom: 6px;
     }
     .peer-summary { color: var(--text-primary); font-size: 12px; margin-bottom: 8px; font-style: italic; }
-    .peer-meta { display: flex; gap: 12px; font-size: 11px; color: var(--text-dim); }
+    .peer-meta { display: flex; gap: 12px; font-size: 11px; color: var(--text-faint); }
     .peer-log-stats {
       display: flex; gap: 8px; margin-top: 8px; font-size: 11px;
       padding: 4px 8px; margin-left: -8px; margin-right: -8px;
@@ -191,8 +191,8 @@ export function peerCardScript(): string {
           + (hasLogFile ? ' onclick="openLogViewer(\\'' + escapeJs(peer.id) + '\\')"' : '') + '>';
         if (logStats.ERROR > 0) html += '<span style="color:var(--status-error);font-weight:600">' + logStats.ERROR + ' errors</span>';
         if (logStats.WARN > 0) html += '<span style="color:var(--status-warning);font-weight:500">' + logStats.WARN + ' warn</span>';
-        html += '<span style="color:var(--text-dim)">' + logStats.INFO + ' info</span>';
-        html += '<span style="color:var(--text-dim)">' + logStats.total + ' lines</span>';
+        html += '<span style="color:var(--text-faint)">' + logStats.INFO + ' info</span>';
+        html += '<span style="color:var(--text-faint)">' + logStats.total + ' lines</span>';
         html += '</div>';
       }
 

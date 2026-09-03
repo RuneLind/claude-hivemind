@@ -15,7 +15,7 @@ export function activityLogStyles(): string {
       padding: 4px 0;
       border-bottom: 1px solid var(--border-subtle);
     }
-    .activity-item .time { color: var(--text-dim); margin-right: 8px; }
+    .activity-item .time { color: var(--text-faint); margin-right: 8px; }
   `;
 }
 

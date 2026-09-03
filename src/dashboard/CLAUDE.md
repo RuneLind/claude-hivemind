@@ -13,11 +13,17 @@ These are assembled by `views/page.ts` into a single `renderDashboardPage()` ret
 
 ## Theming
 
-`views/theme.ts` owns the palette: one set of CSS custom properties defined three
-times — `:root` (dark default), `@media (prefers-color-scheme: light)`, and
-`html[data-theme="light"|"dark"]` for the header toggle's explicit override
-(cycles system → light → dark, persisted in `localStorage`, also bound to `t`).
-Ported from muninn's `src/dashboard/views/components/theme.ts`.
+`views/components/theme.ts` owns the palette: two palettes (dark, light) emitted at
+four selectors — `:root` (dark default), `@media (prefers-color-scheme: light)`, and
+`html[data-theme="dark"]` / `html[data-theme="light"]` for the header toggle's explicit
+override (cycles system → light → dark, persisted in `localStorage`, also bound to `t`).
+The toggle mechanism is ported from muninn's `views/components/theme.ts`; the palettes
+are this dashboard's own (muninn keeps its in `views/shared-styles.ts`, with a partly
+different token vocabulary).
+
+`theme.test.ts` pins the contract: the two palettes define identical token sets, every
+`var(--x)` used anywhere resolves in both, no view module carries a color literal, and
+the accent/status ramp clears 4.5:1 on every surface background in both themes.
 
 **Never write a raw hex color in a component.** Use the tokens (`--bg-panel`,
 `--text-muted`, `--accent`, `--status-error`, …) so both themes stay in sync; a
@@ -40,7 +46,7 @@ paints via CSS classes instead.
 | `namespace-graph.ts` | Per-namespace collapsible sections |
 | `conversation-modal.ts` | Peer-to-peer message dialog |
 | `activity-log.ts` | Real-time event feed |
-| `../theme.ts` | Light/dark/system tokens + header toggle |
+| `theme.ts` | Light/dark/system tokens + header toggle |
 
 ## Data flow
 

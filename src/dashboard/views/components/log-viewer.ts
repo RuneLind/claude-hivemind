@@ -27,7 +27,7 @@ export function logViewerStyles(): string {
     }
     .log-filters { display: flex; gap: 4px; }
     .log-level-btn {
-      background: transparent; border: 1px solid var(--border-secondary); color: var(--text-dim);
+      background: transparent; border: 1px solid var(--border-secondary); color: var(--text-faint);
       font-family: inherit; font-size: 10px; padding: 2px 8px;
       border-radius: 4px; cursor: pointer; transition: all 0.15s;
     }
@@ -36,7 +36,7 @@ export function logViewerStyles(): string {
     .log-level-btn.warn.active { color: var(--status-warning); border-color: var(--status-warning); }
     .log-level-btn.info.active { color: var(--accent); border-color: var(--accent); }
     .log-level-btn.debug.active { color: var(--text-muted); border-color: var(--text-muted); }
-    .log-level-btn.trace.active { color: var(--text-faint); border-color: var(--text-faint); }
+    .log-level-btn.trace.active { color: var(--text-dim); border-color: var(--text-dim); }
     .log-search {
       background: var(--bg-inset); border: 1px solid var(--border-secondary); color: var(--text-primary);
       font-family: inherit; font-size: 12px; padding: 4px 10px;
@@ -60,9 +60,9 @@ export function logViewerStyles(): string {
     .log-line.warn .log-level-tag { color: var(--status-warning); }
     .log-line.info .log-level-tag { color: var(--accent); }
     .log-line.debug .log-level-tag { color: var(--text-muted); }
-    .log-line.trace .log-level-tag { color: var(--text-faint); }
+    .log-line.trace .log-level-tag { color: var(--text-dim); }
     .log-message { color: var(--text-primary); }
-    .log-line-count { color: var(--text-dim); font-size: 11px; }
+    .log-line-count { color: var(--text-faint); font-size: 11px; }
   `;
 }
 

@@ -20,7 +20,7 @@ export function namespaceGraphStyles(): string {
     .graph-arrow-rev { fill: var(--status-green); }
     .graph-edge-fwd { stroke: var(--accent); }
     .graph-edge-rev { stroke: var(--status-green); }
-    .graph-node { fill: var(--bg-panel); stroke: var(--text-dim); }
+    .graph-node { fill: var(--bg-panel); stroke: var(--text-faint); }
     .graph-node.connected { stroke: var(--status-success); }
     .graph-text { fill: var(--text-primary); }
     .edge-label { cursor: pointer; }
