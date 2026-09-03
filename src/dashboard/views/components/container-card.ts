@@ -5,14 +5,14 @@ export function containerCardStyles(): string {
     .docker-section { margin-bottom: 28px; }
     .docker-section h2 {
       display: flex; align-items: center; gap: 10px;
-      font-size: 15px; font-weight: 500; color: #e6edf3;
+      font-size: 15px; font-weight: 500; color: var(--text-bright);
       margin-bottom: 12px; padding: 8px 12px;
-      background: #161b22; border-radius: 6px;
-      border-left: 3px solid #56d4dd;
+      background: var(--bg-panel); border-radius: 6px;
+      border-left: 3px solid var(--status-cyan);
     }
-    .docker-project-name { color: #56d4dd; }
+    .docker-project-name { color: var(--status-cyan); }
     .docker-count {
-      background: #21262d; color: #8b949e;
+      background: var(--bg-surface); color: var(--text-muted);
       font-size: 11px; padding: 2px 8px;
       border-radius: 10px; font-weight: 400;
     }
@@ -25,13 +25,13 @@ export function containerCardStyles(): string {
       gap: 12px;
     }
     .container-card {
-      background: #161b22;
-      border: 1px solid #21262d;
+      background: var(--bg-panel);
+      border: 1px solid var(--border-primary);
       border-radius: 8px;
       padding: 14px 16px;
       transition: border-color 0.2s;
     }
-    .container-card:hover { border-color: #30363d; }
+    .container-card:hover { border-color: var(--border-secondary); }
     .container-card.stopped { opacity: 0.5; }
     .container-header {
       display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
@@ -39,45 +39,45 @@ export function containerCardStyles(): string {
     .container-state-dot {
       width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
     }
-    .container-state-dot.running { background: #3fb950; }
-    .container-state-dot.exited { background: #f85149; }
-    .container-state-dot.paused { background: #d29922; }
-    .container-state-dot.restarting { background: #d29922; animation: container-pulse 1s infinite; }
-    .container-state-dot.dead { background: #f85149; }
-    .container-state-dot.created { background: #484f58; }
-    .container-name { font-weight: 600; color: #56d4dd; font-size: 13px; }
-    .container-status { color: #8b949e; font-size: 11px; margin-bottom: 6px; }
-    .container-image { color: #484f58; font-size: 11px; margin-bottom: 4px; word-break: break-all; }
+    .container-state-dot.running { background: var(--status-success); }
+    .container-state-dot.exited { background: var(--status-error); }
+    .container-state-dot.paused { background: var(--status-warning); }
+    .container-state-dot.restarting { background: var(--status-warning); animation: container-pulse 1s infinite; }
+    .container-state-dot.dead { background: var(--status-error); }
+    .container-state-dot.created { background: var(--text-dim); }
+    .container-name { font-weight: 600; color: var(--status-cyan); font-size: 13px; }
+    .container-status { color: var(--text-muted); font-size: 11px; margin-bottom: 6px; }
+    .container-image { color: var(--text-dim); font-size: 11px; margin-bottom: 4px; word-break: break-all; }
     .container-resources {
-      display: flex; gap: 12px; font-size: 11px; color: #8b949e; margin-bottom: 6px;
+      display: flex; gap: 12px; font-size: 11px; color: var(--text-muted); margin-bottom: 6px;
     }
     .container-resources span { white-space: nowrap; }
     .container-ports {
-      font-size: 11px; color: #8b949e;
-      background: #1f2a37; padding: 2px 8px;
+      font-size: 11px; color: var(--text-muted);
+      background: var(--bg-subtle); padding: 2px 8px;
       border-radius: 4px; display: inline-block; margin-bottom: 6px;
     }
     .container-actions {
       display: flex; gap: 6px; margin-left: auto;
     }
     .container-btn {
-      background: none; border: 1px solid #30363d; color: #8b949e;
+      background: none; border: 1px solid var(--border-secondary); color: var(--text-muted);
       font-family: inherit; font-size: 11px;
       padding: 2px 10px; border-radius: 4px;
       cursor: pointer; transition: all 0.15s;
     }
-    .container-btn.stop:hover { border-color: #f85149; color: #f85149; }
-    .container-btn.logs:hover { border-color: #56d4dd; color: #56d4dd; }
-    .container-btn.agent { color: #58a6ff; border-color: #58a6ff; }
-    .container-btn.agent:hover { color: #79c0ff; border-color: #79c0ff; background: #1f2a37; }
+    .container-btn.stop:hover { border-color: var(--status-error); color: var(--status-error); }
+    .container-btn.logs:hover { border-color: var(--status-cyan); color: var(--status-cyan); }
+    .container-btn.agent { color: var(--accent); border-color: var(--accent); }
+    .container-btn.agent:hover { color: var(--accent-bright); border-color: var(--accent-bright); background: var(--bg-subtle); }
     .container-log-stats {
       display: flex; gap: 8px; margin-top: 8px; font-size: 11px;
       padding: 4px 8px; margin-left: -8px; margin-right: -8px;
       border-radius: 4px; cursor: pointer; transition: all 0.15s;
     }
     .container-log-stats:hover {
-      background: #1f2a37;
-      box-shadow: 0 0 8px rgba(86, 212, 221, 0.15);
+      background: var(--bg-subtle);
+      box-shadow: 0 0 8px var(--glow-cyan);
     }
     @keyframes container-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
   `;
@@ -138,9 +138,9 @@ export function containerCardScript(): string {
         html += '<span class="docker-project-name">' + escapeHtml(project) + '</span>';
         html += '<span class="docker-count">' + running + '/' + containers.length + ' running</span>';
         if (totalErrors > 0) {
-          html += '<span class="docker-error-summary" style="color:#f85149">' + totalErrors + ' error' + (totalErrors !== 1 ? 's' : '') + '</span>';
+          html += '<span class="docker-error-summary" style="color:var(--status-error)">' + totalErrors + ' error' + (totalErrors !== 1 ? 's' : '') + '</span>';
         } else if (totalWarns > 0) {
-          html += '<span class="docker-error-summary" style="color:#d29922">' + totalWarns + ' warn</span>';
+          html += '<span class="docker-error-summary" style="color:var(--status-warning)">' + totalWarns + ' warn</span>';
         }
         html += '</h2>';
         html += '<div class="container-grid section-body' + (dCollapsed ? ' collapsed' : '') + '">';
@@ -204,9 +204,9 @@ export function containerCardScript(): string {
       // Log stats
       if (logStats && logStats.totalLines > 0) {
         html += '<div class="container-log-stats" onclick="openDockerLogViewer(\\'' + escapeJs(c.id) + '\\', \\'' + escapeJs(c.service || c.name) + '\\')">';
-        if (logStats.errorCount > 0) html += '<span style="color:#f85149;font-weight:600">' + logStats.errorCount + ' errors</span>';
-        if (logStats.warnCount > 0) html += '<span style="color:#d29922;font-weight:500">' + logStats.warnCount + ' warn</span>';
-        html += '<span style="color:#484f58">' + logStats.totalLines + ' lines</span>';
+        if (logStats.errorCount > 0) html += '<span style="color:var(--status-error);font-weight:600">' + logStats.errorCount + ' errors</span>';
+        if (logStats.warnCount > 0) html += '<span style="color:var(--status-warning);font-weight:500">' + logStats.warnCount + ' warn</span>';
+        html += '<span style="color:var(--text-dim)">' + logStats.totalLines + ' lines</span>';
         html += '</div>';
       }
 

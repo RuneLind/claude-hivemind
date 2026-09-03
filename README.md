@@ -155,6 +155,10 @@ bun dashboard
 # or open http://127.0.0.1:7899/
 ```
 
+The dashboard follows your OS light/dark setting. The button in the top-right corner
+(or the `t` key) cycles system → light → dark; an explicit choice is remembered in
+`localStorage`.
+
 ## Environment variables
 
 | Variable | Default | Description |

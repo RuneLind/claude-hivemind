@@ -4,13 +4,13 @@ export function conversationModalStyles(): string {
   return `
     .modal-overlay {
       position: fixed; inset: 0;
-      background: rgba(0, 0, 0, 0.7);
+      background: var(--overlay);
       display: flex; align-items: center; justify-content: center;
       z-index: 100;
     }
     .modal {
-      background: #161b22;
-      border: 1px solid #30363d;
+      background: var(--bg-panel);
+      border: 1px solid var(--border-secondary);
       border-radius: 10px;
       width: 700px; max-width: 90vw; max-height: 80vh;
       display: flex; flex-direction: column;
@@ -18,27 +18,27 @@ export function conversationModalStyles(): string {
     .modal-header {
       display: flex; align-items: center; justify-content: space-between;
       padding: 14px 18px;
-      border-bottom: 1px solid #21262d;
+      border-bottom: 1px solid var(--border-primary);
     }
-    .modal-header h3 { font-size: 14px; font-weight: 500; color: #e6edf3; }
+    .modal-header h3 { font-size: 14px; font-weight: 500; color: var(--text-bright); }
     .modal-body { padding: 14px 18px; overflow-y: auto; flex: 1; }
     .message-item {
       padding: 10px 12px; margin-bottom: 8px;
-      border-radius: 6px; background: #0d1117;
-      border: 1px solid #21262d;
+      border-radius: 6px; background: var(--bg-inset);
+      border: 1px solid var(--border-primary);
     }
-    .message-item.sent { border-left: 3px solid #58a6ff; }
-    .message-item.received { border-left: 3px solid #7ee787; }
+    .message-item.sent { border-left: 3px solid var(--accent); }
+    .message-item.received { border-left: 3px solid var(--status-green); }
     .message-meta {
       display: flex; align-items: center; gap: 6px;
-      font-size: 11px; color: #8b949e; margin-bottom: 6px;
+      font-size: 11px; color: var(--text-muted); margin-bottom: 6px;
     }
-    .message-from { color: #58a6ff; font-weight: 500; }
-    .message-arrow { color: #484f58; }
-    .message-to { color: #7ee787; font-weight: 500; }
-    .message-time { margin-left: auto; color: #484f58; }
+    .message-from { color: var(--accent); font-weight: 500; }
+    .message-arrow { color: var(--text-dim); }
+    .message-to { color: var(--status-green); font-weight: 500; }
+    .message-time { margin-left: auto; color: var(--text-dim); }
     .message-text {
-      font-size: 12px; color: #c9d1d9;
+      font-size: 12px; color: var(--text-primary);
       white-space: pre-wrap; word-break: break-word;
     }
   `;

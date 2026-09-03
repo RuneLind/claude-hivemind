@@ -8,70 +8,70 @@ export function peerCardStyles(): string {
       gap: 12px;
     }
     .peer-card {
-      background: #161b22;
-      border: 1px solid #21262d;
+      background: var(--bg-panel);
+      border: 1px solid var(--border-primary);
       border-radius: 8px;
       padding: 0;
       transition: border-color 0.2s;
       overflow: hidden;
     }
-    .peer-card:hover { border-color: #30363d; }
+    .peer-card:hover { border-color: var(--border-secondary); }
     .peer-card.disconnected { opacity: 0.5; }
     .peer-toolbar {
       display: flex; align-items: center; gap: 6px;
       padding: 6px 12px;
-      background: #0d1117;
-      border-bottom: 1px solid #21262d;
+      background: var(--bg-inset);
+      border-bottom: 1px solid var(--border-primary);
       font-size: 11px;
     }
     .peer-toolbar .connection-dot {
-      width: 6px; height: 6px; border-radius: 50%; background: #3fb950; flex-shrink: 0;
+      width: 6px; height: 6px; border-radius: 50%; background: var(--status-success); flex-shrink: 0;
     }
-    .peer-card.disconnected .peer-toolbar .connection-dot { background: #484f58; }
-    .peer-toolbar .status-text { color: #8b949e; }
+    .peer-card.disconnected .peer-toolbar .connection-dot { background: var(--text-dim); }
+    .peer-toolbar .status-text { color: var(--text-muted); }
     .peer-toolbar .service-badge {
       display: inline-flex; align-items: center; gap: 4px;
       padding: 1px 8px; border-radius: 10px; border: 1px solid;
       font-size: 11px; cursor: default;
     }
     .peer-toolbar .service-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
-    .peer-toolbar .service-check { color: #484f58; font-size: 10px; }
+    .peer-toolbar .service-check { color: var(--text-dim); font-size: 10px; }
     .peer-toolbar .toolbar-actions {
       display: flex; gap: 4px; margin-left: auto;
     }
     .toolbar-btn {
-      background: none; border: 1px solid #30363d; color: #8b949e;
+      background: none; border: 1px solid var(--border-secondary); color: var(--text-muted);
       font-family: inherit; font-size: 10px;
       padding: 2px 8px; border-radius: 4px;
       cursor: pointer; transition: all 0.15s;
     }
-    .toolbar-btn:hover { border-color: #8b949e; color: #e6edf3; }
-    .toolbar-btn.start { color: #484f58; border-color: transparent; font-size: 12px; padding: 0 4px; }
-    .toolbar-btn.start:hover { color: #58a6ff; background: #1f2a37; border-color: #58a6ff; }
-    .toolbar-btn.stop:hover { border-color: #f85149; color: #f85149; }
-    .toolbar-btn.docker { color: #56d4dd; }
-    .toolbar-btn.docker:hover { border-color: #56d4dd; }
+    .toolbar-btn:hover { border-color: var(--text-muted); color: var(--text-bright); }
+    .toolbar-btn.start { color: var(--text-dim); border-color: transparent; font-size: 12px; padding: 0 4px; }
+    .toolbar-btn.start:hover { color: var(--accent); background: var(--bg-subtle); border-color: var(--accent); }
+    .toolbar-btn.stop:hover { border-color: var(--status-error); color: var(--status-error); }
+    .toolbar-btn.docker { color: var(--status-cyan); }
+    .toolbar-btn.docker:hover { border-color: var(--status-cyan); }
     .peer-body {
       padding: 10px 12px;
     }
     .peer-header {
       display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
     }
-    .peer-id { font-weight: 600; color: #58a6ff; font-size: 13px; }
+    .peer-id { font-weight: 600; color: var(--accent); font-size: 13px; }
     .agent-type-badge {
       display: inline-block;
       font-size: 10px; font-weight: 500;
       padding: 1px 6px; border-radius: 4px;
       border: 1px solid;
     }
-    .agent-type-badge.claude-code { color: #58a6ff; border-color: #1f3a5f; background: #0d1f3c; }
-    .agent-type-badge.opencode { color: #d2a8ff; border-color: #3d2860; background: #1c1030; }
-    .agent-type-badge.copilot { color: #f0883e; border-color: #5a3520; background: #2a1a10; }
+    .agent-type-badge.claude-code { color: var(--accent); border-color: var(--badge-blue-border); background: var(--badge-blue-bg); }
+    .agent-type-badge.opencode { color: var(--accent-purple); border-color: var(--badge-purple-border); background: var(--badge-purple-bg); }
+    .agent-type-badge.copilot { color: var(--accent-orange); border-color: var(--badge-orange-border); background: var(--badge-orange-bg); }
     .message-count-badge {
       margin-left: auto;
-      background: #1f2a37;
-      border: 1px solid #30363d;
-      color: #58a6ff;
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-secondary);
+      color: var(--accent);
       font-family: inherit;
       font-size: 11px;
       padding: 2px 8px;
@@ -79,19 +79,19 @@ export function peerCardStyles(): string {
       cursor: pointer;
       transition: all 0.15s;
     }
-    .message-count-badge:hover { background: #263545; border-color: #58a6ff; }
-    .peer-cwd { color: #8b949e; font-size: 12px; margin-bottom: 4px; word-break: break-all; }
+    .message-count-badge:hover { background: var(--bg-subtle-hover); border-color: var(--accent); }
+    .peer-cwd { color: var(--text-muted); font-size: 12px; margin-bottom: 4px; word-break: break-all; }
     .peer-branch {
       display: inline-block;
-      background: #1f2a37;
-      color: #7ee787;
+      background: var(--bg-subtle);
+      color: var(--status-green);
       font-size: 11px;
       padding: 1px 8px;
       border-radius: 4px;
       margin-bottom: 6px;
     }
-    .peer-summary { color: #c9d1d9; font-size: 12px; margin-bottom: 8px; font-style: italic; }
-    .peer-meta { display: flex; gap: 12px; font-size: 11px; color: #484f58; }
+    .peer-summary { color: var(--text-primary); font-size: 12px; margin-bottom: 8px; font-style: italic; }
+    .peer-meta { display: flex; gap: 12px; font-size: 11px; color: var(--text-dim); }
     .peer-log-stats {
       display: flex; gap: 8px; margin-top: 8px; font-size: 11px;
       padding: 4px 8px; margin-left: -8px; margin-right: -8px;
@@ -99,8 +99,8 @@ export function peerCardStyles(): string {
     }
     .peer-log-stats.clickable { cursor: pointer; }
     .peer-log-stats.clickable:hover {
-      background: #1f2a37;
-      box-shadow: 0 0 8px rgba(88, 166, 255, 0.15);
+      background: var(--bg-subtle);
+      box-shadow: 0 0 8px var(--glow-accent);
     }
   `;
 }
@@ -123,7 +123,7 @@ export function peerCardScript(): string {
 
       // Service port badge
       if (svc) {
-        var color = svc.status === 'up' ? '#3fb950' : svc.status === 'down' ? '#f85149' : '#848d97';
+        var color = svc.status === 'up' ? 'var(--status-success)' : svc.status === 'down' ? 'var(--status-error)' : 'var(--text-muted)';
         html += '<span class="service-badge" style="border-color:' + color + '">';
         html += '<span class="service-dot" style="background:' + color + '"></span>';
         html += ':' + svc.port;
@@ -189,10 +189,10 @@ export function peerCardScript(): string {
         var hasLogFile = svc && svc.log_file;
         html += '<div class="peer-log-stats' + (hasLogFile ? ' clickable' : '') + '"'
           + (hasLogFile ? ' onclick="openLogViewer(\\'' + escapeJs(peer.id) + '\\')"' : '') + '>';
-        if (logStats.ERROR > 0) html += '<span style="color:#f85149;font-weight:600">' + logStats.ERROR + ' errors</span>';
-        if (logStats.WARN > 0) html += '<span style="color:#d29922;font-weight:500">' + logStats.WARN + ' warn</span>';
-        html += '<span style="color:#484f58">' + logStats.INFO + ' info</span>';
-        html += '<span style="color:#484f58">' + logStats.total + ' lines</span>';
+        if (logStats.ERROR > 0) html += '<span style="color:var(--status-error);font-weight:600">' + logStats.ERROR + ' errors</span>';
+        if (logStats.WARN > 0) html += '<span style="color:var(--status-warning);font-weight:500">' + logStats.WARN + ' warn</span>';
+        html += '<span style="color:var(--text-dim)">' + logStats.INFO + ' info</span>';
+        html += '<span style="color:var(--text-dim)">' + logStats.total + ' lines</span>';
         html += '</div>';
       }
 

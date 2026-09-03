@@ -4,13 +4,13 @@ export function logViewerStyles(): string {
   return `
     .log-viewer-overlay {
       position: fixed; inset: 0;
-      background: rgba(0, 0, 0, 0.7);
+      background: var(--overlay);
       display: flex; align-items: stretch; justify-content: center;
       z-index: 100; padding: 40px;
     }
     .log-viewer {
-      background: #0d1117;
-      border: 1px solid #30363d;
+      background: var(--bg-inset);
+      border: 1px solid var(--border-secondary);
       border-radius: 10px;
       width: 100%; max-width: 1100px;
       display: flex; flex-direction: column; overflow: hidden;
@@ -18,31 +18,31 @@ export function logViewerStyles(): string {
     .log-header {
       display: flex; align-items: center; gap: 10px;
       padding: 10px 16px;
-      border-bottom: 1px solid #21262d;
-      background: #161b22; flex-shrink: 0; flex-wrap: wrap;
+      border-bottom: 1px solid var(--border-primary);
+      background: var(--bg-panel); flex-shrink: 0; flex-wrap: wrap;
     }
     .log-header h3 {
-      font-size: 13px; font-weight: 500; color: #e6edf3;
+      font-size: 13px; font-weight: 500; color: var(--text-bright);
       white-space: nowrap; margin: 0;
     }
     .log-filters { display: flex; gap: 4px; }
     .log-level-btn {
-      background: transparent; border: 1px solid #30363d; color: #484f58;
+      background: transparent; border: 1px solid var(--border-secondary); color: var(--text-dim);
       font-family: inherit; font-size: 10px; padding: 2px 8px;
       border-radius: 4px; cursor: pointer; transition: all 0.15s;
     }
-    .log-level-btn.active { background: #21262d; }
-    .log-level-btn.error.active { color: #f85149; border-color: #f85149; }
-    .log-level-btn.warn.active { color: #d29922; border-color: #d29922; }
-    .log-level-btn.info.active { color: #58a6ff; border-color: #58a6ff; }
-    .log-level-btn.debug.active { color: #8b949e; border-color: #8b949e; }
-    .log-level-btn.trace.active { color: #6e7681; border-color: #6e7681; }
+    .log-level-btn.active { background: var(--bg-surface); }
+    .log-level-btn.error.active { color: var(--status-error); border-color: var(--status-error); }
+    .log-level-btn.warn.active { color: var(--status-warning); border-color: var(--status-warning); }
+    .log-level-btn.info.active { color: var(--accent); border-color: var(--accent); }
+    .log-level-btn.debug.active { color: var(--text-muted); border-color: var(--text-muted); }
+    .log-level-btn.trace.active { color: var(--text-faint); border-color: var(--text-faint); }
     .log-search {
-      background: #0d1117; border: 1px solid #30363d; color: #c9d1d9;
+      background: var(--bg-inset); border: 1px solid var(--border-secondary); color: var(--text-primary);
       font-family: inherit; font-size: 12px; padding: 4px 10px;
       border-radius: 4px; width: 160px; margin-left: auto;
     }
-    .log-search:focus { outline: none; border-color: #58a6ff; }
+    .log-search:focus { outline: none; border-color: var(--accent); }
     .log-body {
       flex: 1; min-height: 0; overflow-y: auto;
       padding: 8px 0; font-size: 12px; line-height: 1.6;
@@ -51,18 +51,18 @@ export function logViewerStyles(): string {
       padding: 0 16px; white-space: pre-wrap; word-break: break-all;
       font-family: "SF Mono", "Fira Code", monospace;
     }
-    .log-line.error { background: rgba(248, 81, 73, 0.1); }
-    .log-line.warn { background: rgba(210, 153, 34, 0.06); }
+    .log-line.error { background: var(--tint-error); }
+    .log-line.warn { background: var(--tint-warning); }
     .log-level-tag {
       display: inline-block; width: 50px; flex-shrink: 0; font-weight: 600;
     }
-    .log-line.error .log-level-tag { color: #f85149; }
-    .log-line.warn .log-level-tag { color: #d29922; }
-    .log-line.info .log-level-tag { color: #58a6ff; }
-    .log-line.debug .log-level-tag { color: #8b949e; }
-    .log-line.trace .log-level-tag { color: #6e7681; }
-    .log-message { color: #c9d1d9; }
-    .log-line-count { color: #484f58; font-size: 11px; }
+    .log-line.error .log-level-tag { color: var(--status-error); }
+    .log-line.warn .log-level-tag { color: var(--status-warning); }
+    .log-line.info .log-level-tag { color: var(--accent); }
+    .log-line.debug .log-level-tag { color: var(--text-muted); }
+    .log-line.trace .log-level-tag { color: var(--text-faint); }
+    .log-message { color: var(--text-primary); }
+    .log-line-count { color: var(--text-dim); font-size: 11px; }
   `;
 }
 

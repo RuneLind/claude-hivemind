@@ -11,6 +11,20 @@ Each file in `views/components/` exports one or more of:
 
 These are assembled by `views/page.ts` into a single `renderDashboardPage()` return value served at `/`.
 
+## Theming
+
+`views/theme.ts` owns the palette: one set of CSS custom properties defined three
+times — `:root` (dark default), `@media (prefers-color-scheme: light)`, and
+`html[data-theme="light"|"dark"]` for the header toggle's explicit override
+(cycles system → light → dark, persisted in `localStorage`, also bound to `t`).
+Ported from muninn's `src/dashboard/views/components/theme.ts`.
+
+**Never write a raw hex color in a component.** Use the tokens (`--bg-panel`,
+`--text-muted`, `--accent`, `--status-error`, …) so both themes stay in sync; a
+hardcoded color silently breaks light mode only. SVG is a special case: presentation
+attributes (`fill="…"`) are not a reliable place for `var()`, so `namespace-graph.ts`
+paints via CSS classes instead.
+
 ## Key components
 
 | File | Role |
@@ -26,6 +40,7 @@ These are assembled by `views/page.ts` into a single `renderDashboardPage()` ret
 | `namespace-graph.ts` | Per-namespace collapsible sections |
 | `conversation-modal.ts` | Peer-to-peer message dialog |
 | `activity-log.ts` | Real-time event feed |
+| `../theme.ts` | Light/dark/system tokens + header toggle |
 
 ## Data flow
 
