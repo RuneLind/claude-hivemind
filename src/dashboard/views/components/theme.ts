@@ -36,7 +36,7 @@ const DARK_TOKENS = `
       /* Borders */
       --border-primary: #21262d;
       --border-secondary: #30363d;
-      --border-subtle: #21262d0a;
+      --border-subtle: #8b949e1f;
 
       /* Text — ordered brightest to faintest; the tiers rank the same way in both
          palettes and in muninn's, so a rule copied either direction keeps its weight. */
@@ -74,6 +74,7 @@ const DARK_TOKENS = `
       --tint-error: rgba(248, 81, 73, 0.1);
       --tint-warning: rgba(210, 153, 34, 0.06);
       --dim-opacity: 0.5;
+      --disabled-opacity: 0.5;
       --overlay: rgba(0, 0, 0, 0.7);
       --overlay-soft: rgba(0, 0, 0, 0.6);
       --shadow-modal: rgba(0, 0, 0, 0.5);
@@ -118,7 +119,7 @@ const LIGHT_TOKENS = `
       /* Borders */
       --border-primary: #d8dee4;
       --border-secondary: #d0d7de;
-      --border-subtle: #8c959f1a;
+      --border-subtle: #8c959f30;
 
       /* Text */
       --text-bright: #1f2328;
@@ -155,6 +156,7 @@ const LIGHT_TOKENS = `
       --tint-error: #ffebe9;
       --tint-warning: #fff8c5;
       --dim-opacity: 0.8;
+      --disabled-opacity: 0.5;
       --overlay: rgba(27, 31, 36, 0.4);
       --overlay-soft: rgba(27, 31, 36, 0.35);
       --shadow-modal: rgba(27, 31, 36, 0.2);
@@ -259,13 +261,21 @@ export function themeToggleScript(): string {
     apply(current()); // sync the button glyph on load
     var btn = document.getElementById('themeToggle');
     if (btn) btn.addEventListener('click', cycle);
+    // Which input modality put focus where it is. Capture phase so it is already
+    // current by the time the 't' handler below runs.
+    var kbNav = false;
+    document.addEventListener('mousedown', function() { kbNav = false; }, true);
+    document.addEventListener('keydown', function(e) { if (e.key === 'Tab') kbNav = true; }, true);
     document.addEventListener('keydown', function(e) {
       var el = e.target;
-      if (e.key === 't' && !e.ctrlKey && !e.metaKey && !e.altKey && el && el.tagName &&
-          !['INPUT','TEXTAREA','SELECT','BUTTON','A'].includes(el.tagName) &&
-          !el.isContentEditable) {
-        cycle();
-      }
+      if (e.key !== 't' || e.ctrlKey || e.metaKey || e.altKey || !el || !el.tagName) return;
+      if (['INPUT','TEXTAREA','SELECT'].includes(el.tagName) || el.isContentEditable) return;
+      // A button or link swallows 't' only when the user tabbed to it — someone
+      // navigating by keyboard is mid-task. After a mouse click the button still holds
+      // focus but the next 't' means "cycle", so the modality flag decides, not focus.
+      // (':focus-visible' cannot: any keydown on a focused button promotes it to true.)
+      if (kbNav && (el.tagName === 'BUTTON' || el.tagName === 'A')) return;
+      cycle();
     });
   })();`;
 }

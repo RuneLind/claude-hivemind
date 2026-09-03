@@ -33,17 +33,22 @@ function definedTokens(css: string, selector: string): Set<string> {
 
 const page = renderDashboardPage();
 
+// Anchor on the forced-override selectors: they are unique, while ":root {" appears
+// twice (dark default, then again inside the light media query).
+const DARK_SELECTOR = 'html[data-theme="dark"] {';
+const LIGHT_SELECTOR = 'html[data-theme="light"] {';
+
 test("light and dark palettes define exactly the same tokens", () => {
-  const dark = definedTokens(page, ":root {");
-  const light = definedTokens(page, 'html[data-theme="light"] {');
+  const dark = definedTokens(page, DARK_SELECTOR);
+  const light = definedTokens(page, LIGHT_SELECTOR);
   expect(dark.size).toBeGreaterThan(30);
   expect([...light].filter((t) => !dark.has(t))).toEqual([]);
   expect([...dark].filter((t) => !light.has(t))).toEqual([]);
 });
 
 test("every token the dashboard references is defined in both palettes", () => {
-  const dark = definedTokens(page, ":root {");
-  const light = definedTokens(page, 'html[data-theme="light"] {');
+  const dark = definedTokens(page, DARK_SELECTOR);
+  const light = definedTokens(page, LIGHT_SELECTOR);
   // --ns-color is set per namespace as an inline style, not by the palette.
   const used = new Set(
     [...page.matchAll(/var\((--[\w-]+)/g)].map((m) => m[1]!).filter((t) => t !== "--ns-color"),
@@ -96,7 +101,7 @@ test("accent and status colors clear AA on every surface they sit on, in both th
   ];
   const BACKGROUNDS = ["--bg-page", "--bg-panel", "--bg-surface"];
   const failures: string[] = [];
-  for (const [theme, selector] of [["dark", ":root {"], ["light", 'html[data-theme="light"] {']] as const) {
+  for (const [theme, selector] of [["dark", DARK_SELECTOR], ["light", LIGHT_SELECTOR]] as const) {
     const tokens = tokenValues(page, selector);
     for (const fg of FOREGROUNDS) {
       for (const bg of BACKGROUNDS) {
@@ -106,4 +111,53 @@ test("accent and status colors clear AA on every surface they sit on, in both th
     }
   }
   expect(failures).toEqual([]);
+});
+
+test("the dark and light palettes are actually different palettes", () => {
+  // Cheap canary for the anchor above: if both selectors ever resolved to the same
+  // block, every other test in this file would pass vacuously.
+  const dark = tokenValues(page, DARK_SELECTOR);
+  const light = tokenValues(page, LIGHT_SELECTOR);
+  expect(dark["--bg-page"]).not.toBe(light["--bg-page"]);
+  expect(dark["--text-bright"]).not.toBe(light["--text-bright"]);
+});
+
+/** Composite an #rrggbbaa token over an opaque background. */
+function flatten(token: string, bg: string): string {
+  const hex = token.slice(1);
+  if (hex.length !== 8) return token;
+  const a = parseInt(hex.slice(6, 8), 16) / 255;
+  const mix = (i: number) =>
+    Math.round(parseInt(hex.slice(i, i + 2), 16) * a + parseInt(bg.slice(i + 1, i + 3), 16) * (1 - a));
+  return "#" + [0, 2, 4].map((i) => mix(i).toString(16).padStart(2, "0")).join("");
+}
+
+test("--border-subtle carries the same visual weight in both themes", () => {
+  // Alpha does not transfer between themes: the same 4% grey that is a faint rule on
+  // white is literally invisible on the dark panel, so matching the alpha value gives
+  // one theme a divider and the other none. Match the rendered contrast instead.
+  const weights = (["dark", "light"] as const).map((theme) => {
+    const t = tokenValues(page, theme === "dark" ? DARK_SELECTOR : LIGHT_SELECTOR);
+    const panel = t["--bg-panel"]!;
+    return contrast(flatten(t["--border-subtle"]!, panel), panel);
+  });
+  expect(Math.abs(weights[0]! - weights[1]!)).toBeLessThan(0.05);
+  // …and it must actually be a divider in both, not an invisible one in either.
+  expect(Math.min(...weights)).toBeGreaterThan(1.05);
+});
+
+test("disabled controls are dimmed hard enough to read as disabled in both themes", () => {
+  // --dim-opacity (0.8 in light, so stale-but-readable cards stay legible) is the wrong
+  // strength for a disabled control, which has to be obviously unavailable.
+  const disabledRule = /:disabled\s*\{[^}]*opacity:\s*var\((--[\w-]+)\)/;
+  const used = new Set<string>();
+  for (const { source } of viewModules()) {
+    for (const m of source.matchAll(new RegExp(disabledRule, "g"))) used.add(m[1]!);
+  }
+  expect(used.size).toBeGreaterThan(0);
+  for (const token of used) {
+    for (const selector of [DARK_SELECTOR, LIGHT_SELECTOR]) {
+      expect(Number(tokenValues(page, selector)[token])).toBeLessThanOrEqual(0.6);
+    }
+  }
 });

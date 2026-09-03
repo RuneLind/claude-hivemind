@@ -21,9 +21,12 @@ The toggle mechanism is ported from muninn's `views/components/theme.ts`; the pa
 are this dashboard's own (muninn keeps its in `views/shared-styles.ts`, with a partly
 different token vocabulary).
 
-`theme.test.ts` pins the contract: the two palettes define identical token sets, every
-`var(--x)` used anywhere resolves in both, no view module carries a color literal, and
-the accent/status ramp clears 4.5:1 on every surface background in both themes.
+`theme.test.ts` pins the contract: the two palettes define identical token sets and are
+actually distinct from each other, every `var(--x)` used anywhere resolves in both, no
+view module carries a color literal, the accent/status ramp clears 4.5:1 against the
+three backgrounds it sits on (`--bg-page`, `--bg-panel`, `--bg-surface`), `--border-subtle`
+renders at the same weight in both themes, and `:disabled` controls dim far enough to read
+as disabled in both.
 
 **Never write a raw hex color in a component.** Use the tokens (`--bg-panel`,
 `--text-muted`, `--accent`, `--status-error`, …) so both themes stay in sync; a

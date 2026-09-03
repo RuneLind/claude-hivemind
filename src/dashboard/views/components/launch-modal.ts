@@ -51,7 +51,7 @@ export function launchModalStyles(): string {
       white-space: nowrap;
     }
     .scan-btn:hover { border-color: var(--accent); color: var(--accent); }
-    .scan-btn:disabled { opacity: var(--dim-opacity); cursor: default; }
+    .scan-btn:disabled { opacity: var(--disabled-opacity); cursor: default; }
     .repo-list {
       margin-top: 8px; max-height: 300px; overflow-y: auto;
       border: 1px solid var(--border-primary); border-radius: 6px;
@@ -105,7 +105,7 @@ export function launchModalStyles(): string {
       background: var(--btn-success-bg); border-color: var(--btn-success-bg); color: var(--btn-success-text);
     }
     .launch-submit:hover { background: var(--btn-success-hover); }
-    .launch-submit:disabled { opacity: var(--dim-opacity); cursor: default; }
+    .launch-submit:disabled { opacity: var(--disabled-opacity); cursor: default; }
     .launch-error {
       display: none; color: var(--status-error); font-size: 12px; margin-top: 8px;
     }
@@ -172,7 +172,7 @@ export function launchModalStyles(): string {
       border-radius: 6px; cursor: pointer; transition: all 0.15s;
     }
     .save-profile-btn:hover { border-color: var(--accent); color: var(--accent); }
-    .save-profile-btn:disabled { opacity: var(--dim-opacity); cursor: default; }
+    .save-profile-btn:disabled { opacity: var(--disabled-opacity); cursor: default; }
     .save-profile-row {
       display: none; align-items: center; gap: 8px; margin-top: 8px;
     }
@@ -190,7 +190,7 @@ export function launchModalStyles(): string {
       white-space: nowrap;
     }
     .save-profile-confirm:hover { background: var(--btn-success-hover); }
-    .save-profile-confirm:disabled { opacity: var(--dim-opacity); cursor: default; }
+    .save-profile-confirm:disabled { opacity: var(--disabled-opacity); cursor: default; }
   `;
 }
 
