@@ -262,14 +262,16 @@ export function themeToggleScript(): string {
     var btn = document.getElementById('themeToggle');
     if (btn) btn.addEventListener('click', cycle);
     document.addEventListener('keydown', function(e) {
-      // 't' is suppressed for exactly the elements that CONSUME the keystroke — text
-      // inputs and contenteditable. Two earlier attempts keyed on which control had
-      // focus instead: excluding any focused button killed the shortcut after a mouse
-      // click (the click leaves focus there), and a modality flag then covered only two
-      // of the five ways focus can arrive (Tab, pointer, programmatic .focus(),
-      // autofocus, browser restore) — a button focused programmatically still swallowed
-      // it. Consumption is enumerable; focus provenance is not. A button ignores 't'
-      // anyway, so cycling from one costs the user nothing.
+      // 't' is suppressed for text-entry controls — INPUT, TEXTAREA, SELECT,
+      // contenteditable — plus a target with no tagName at all (this dashboard's own
+      // addition; muninn has no such guard). The list is by ELEMENT KIND, not by which
+      // control holds focus: two earlier attempts keyed on focus instead, and excluding
+      // any focused button killed the shortcut after a mouse click, while the modality
+      // flag that replaced it covered only two of the five ways focus can arrive (Tab,
+      // pointer, programmatic .focus(), autofocus, browser restore). Element kind is
+      // enumerable from the event; focus provenance is not. It over-suppresses on a
+      // checkbox, radio, range or button INPUT, which consume nothing — the same
+      // trade muninn makes, and a button ignores 't' anyway.
       var el = e.target;
       if (e.key !== 't' || e.ctrlKey || e.metaKey || e.altKey || !el || !el.tagName) return;
       if (['INPUT','TEXTAREA','SELECT'].includes(el.tagName) || el.isContentEditable) return;

@@ -6,7 +6,7 @@ import { test, expect } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { renderDashboardPage } from "../page.ts";
-import { themeToggleScript } from "./theme.ts";
+import { themeToggleScript, themeToggleHtml, themeInitScript } from "./theme.ts";
 
 const COMPONENTS_DIR = import.meta.dir;
 const VIEWS_DIR = join(COMPONENTS_DIR, "..");
@@ -180,17 +180,18 @@ test("disabled controls are dimmed hard enough to read as disabled in both theme
  * `document.documentElement.dataset`, `localStorage` and `window`, so a stub of those
  * five is enough to exercise the real emitted source rather than a paraphrase of it.
  */
-function runToggleScript() {
+function runToggleScript(sharedWindow?: any) {
+  const buttonId = themeToggleHtml().match(/id="([^"]+)"/)?.[1];
   const listeners: ((e: any) => void)[] = [];
   const store = new Map<string, string>();
   const button = { textContent: "", title: "", attrs: {} as Record<string, string>,
     setAttribute(k: string, v: string) { this.attrs[k] = v; },
     addEventListener(_: string, fn: () => void) { this.click = fn; }, click: () => {} };
   const documentElement = { dataset: {} as Record<string, string | undefined> };
-  const fakeWindow: any = {};
+  const fakeWindow: any = sharedWindow ?? {};
   const fakeDocument = {
     documentElement,
-    getElementById: (id: string) => (id === "themeToggle" ? button : null),
+    getElementById: (id: string) => (id === buttonId ? button : null),
     addEventListener: (type: string, fn: (e: any) => void) => { if (type === "keydown") listeners.push(fn); },
   };
   const fakeStorage = {
@@ -201,14 +202,14 @@ function runToggleScript() {
   new Function("window", "document", "localStorage", themeToggleScript())(fakeWindow, fakeDocument, fakeStorage);
   return {
     theme: () => documentElement.dataset.theme ?? "system",
-    press: (key: string, target: any = { tagName: "BODY" }) =>
-      listeners.forEach((fn) => fn({ key, target, ctrlKey: false, metaKey: false, altKey: false })),
+    press: (key: string, target: any = { tagName: "BODY" }, modifiers: Record<string, boolean> = {}) =>
+      listeners.forEach((fn) => fn({ key, target, ctrlKey: false, metaKey: false, altKey: false, ...modifiers })),
     clickToggle: () => button.click(),
     button,
   };
 }
 
-test("the t shortcut cycles from anywhere except an element that consumes the keystroke", () => {
+test("the t shortcut cycles from anywhere except a text-entry control", () => {
   // Focus provenance (tabbed to / clicked / focused programmatically) must not matter:
   // keying on it is what broke this guard twice. Only consumption matters.
   const CYCLES = [
@@ -255,4 +256,48 @@ test("the toggle cycles system to light to dark and reports the mode to assistiv
   t.clickToggle();
   expect(t.button.attrs["aria-label"]).toContain("light");
   expect(t.button.title).toContain("light");
+});
+
+test("the toggle markup and the toggle script agree on the button id", () => {
+  // Split across two functions in the same module, so nothing but this test notices
+  // when one is renamed: the page renders a button that no handler ever finds.
+  const id = themeToggleHtml().match(/id="([^"]+)"/)?.[1];
+  expect(id).toBeTruthy();
+  expect(themeToggleScript()).toContain(`getElementById('${id}')`);
+});
+
+test("both theme scripts reach the rendered page", () => {
+  // The stub exercises the emitted source; these assert the page actually carries it.
+  // Deleting either interpolation from page.ts leaves every other test green.
+  expect(page).toContain("window.__themeToggle");        // toggle script
+  expect(page).toContain(themeInitScript().trim());       // pre-paint init, no-FOUC
+  expect(page.indexOf(themeInitScript().trim())).toBeLessThan(page.indexOf("<div class=\"dashboard\""));
+});
+
+test("a modified t is left to the browser", () => {
+  // Cmd+T and Ctrl+T open a tab; the page must not also flip theme underneath.
+  for (const mod of ["ctrlKey", "metaKey", "altKey"] as const) {
+    const t = runToggleScript();
+    const before = t.theme();
+    t.press("t", { tagName: "BODY" }, { [mod]: true });
+    expect({ mod, theme: t.theme() }).toEqual({ mod, theme: before });
+  }
+});
+
+test("the toggle wires itself once even if the script runs twice", () => {
+  const shared: any = {};
+  const first = runToggleScript(shared);
+  const second = runToggleScript(shared);   // re-entry: must no-op
+  const before = first.theme();
+  second.press("t");                        // second run registered no listener
+  expect(second.theme()).toBe("system");
+  expect(first.theme()).toBe(before);
+});
+
+test("the activity log renders on the page background", () => {
+  // --border-subtle's weight is measured against --bg-page above; that is only the
+  // right backdrop while .activity-log has no background of its own.
+  const css = page.slice(0, page.indexOf("</style>"));
+  const block = css.slice(css.indexOf(".activity-log {"));
+  expect(block.slice(0, block.indexOf("}"))).not.toContain("background");
 });
