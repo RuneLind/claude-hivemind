@@ -4,18 +4,18 @@ export function activityLogStyles(): string {
   return `
     .activity-log {
       margin-top: 32px;
-      border-top: 1px solid #21262d;
+      border-top: 1px solid var(--border-primary);
       padding-top: 16px;
     }
     .activity-log h3 {
-      font-size: 14px; font-weight: 500; color: #8b949e; margin-bottom: 12px;
+      font-size: 14px; font-weight: 500; color: var(--text-muted); margin-bottom: 12px;
     }
     .activity-item {
-      font-size: 12px; color: #8b949e;
+      font-size: 12px; color: var(--text-muted);
       padding: 4px 0;
-      border-bottom: 1px solid #21262d0a;
+      border-bottom: 1px solid var(--border-subtle);
     }
-    .activity-item .time { color: #484f58; margin-right: 8px; }
+    .activity-item .time { color: var(--text-faint); margin-right: 8px; }
   `;
 }
 

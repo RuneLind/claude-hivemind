@@ -28,7 +28,9 @@ export function helpersScript(): string {
     }
 
     function namespaceColor(name) {
-      var colors = ['#58a6ff','#7ee787','#d2a8ff','#f0883e','#ff7b72','#79c0ff','#ffa657','#a5d6ff'];
+      // Eight-hue ramp; each --ns-N is defined per theme in theme.ts, so the
+      // same hash lands on a dark-legible or light-legible value automatically.
+      var colors = ['var(--ns-0)','var(--ns-1)','var(--ns-2)','var(--ns-3)','var(--ns-4)','var(--ns-5)','var(--ns-6)','var(--ns-7)'];
       var hash = 0;
       for (var i = 0; i < name.length; i++) {
         hash = name.charCodeAt(i) + ((hash << 5) - hash);

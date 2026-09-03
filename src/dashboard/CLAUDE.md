@@ -11,6 +11,32 @@ Each file in `views/components/` exports one or more of:
 
 These are assembled by `views/page.ts` into a single `renderDashboardPage()` return value served at `/`.
 
+## Theming
+
+`views/components/theme.ts` owns the palette: two palettes (dark, light) emitted at
+four selectors — `:root` (dark default), `@media (prefers-color-scheme: light)`, and
+`html[data-theme="dark"]` / `html[data-theme="light"]` for the header toggle's explicit
+override (cycles system → light → dark, persisted in `localStorage`, also bound to `t`).
+The toggle mechanism is ported from muninn's `views/components/theme.ts`; the palettes
+are this dashboard's own (muninn keeps its in `views/shared-styles.ts`, with a partly
+different token vocabulary).
+
+`theme.test.ts` pins the contract: the two palettes define identical token sets and are
+actually distinct from each other, every `var(--x)` used anywhere resolves in both, no
+view module carries a color literal, the accent/status ramp clears 4.5:1 against the
+three backgrounds it sits on (`--bg-page`, `--bg-panel`, `--bg-surface`), `--border-subtle`
+renders at the same weight in both themes, `:disabled` controls dim far enough to read as
+disabled in both, and the `t` shortcut cycles from every element except text-entry
+controls (`INPUT`, `TEXTAREA`, `SELECT`, contenteditable). The toggle script is exercised
+against a small in-process DOM stub, so its guard has real coverage rather than only
+browser spot-checks.
+
+**Never write a raw hex color in a component.** Use the tokens (`--bg-panel`,
+`--text-muted`, `--accent`, `--status-error`, …) so both themes stay in sync; a
+hardcoded color silently breaks light mode only. SVG is a special case: presentation
+attributes (`fill="…"`) are not a reliable place for `var()`, so `namespace-graph.ts`
+paints via CSS classes instead.
+
 ## Key components
 
 | File | Role |
@@ -26,6 +52,7 @@ These are assembled by `views/page.ts` into a single `renderDashboardPage()` ret
 | `namespace-graph.ts` | Per-namespace collapsible sections |
 | `conversation-modal.ts` | Peer-to-peer message dialog |
 | `activity-log.ts` | Real-time event feed |
+| `theme.ts` | Light/dark/system tokens + header toggle |
 
 ## Data flow
 

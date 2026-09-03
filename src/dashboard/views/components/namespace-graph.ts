@@ -3,8 +3,8 @@
 export function namespaceGraphStyles(): string {
   return `
     .graph-view {
-      background: #161b22;
-      border: 1px solid #21262d;
+      background: var(--bg-panel);
+      border: 1px solid var(--border-primary);
       border-radius: 8px;
       overflow: hidden;
       display: flex;
@@ -13,8 +13,19 @@ export function namespaceGraphStyles(): string {
       padding: 12px;
     }
     .graph-svg { width: 100%; max-height: 500px; }
+    /* SVG paints from these classes rather than fill="#…" presentation
+       attributes: a presentation attribute is not a reliable place for var(),
+       so themed colors have to come through CSS. */
+    .graph-arrow-fwd { fill: var(--accent); }
+    .graph-arrow-rev { fill: var(--status-green); }
+    .graph-edge-fwd { stroke: var(--accent); }
+    .graph-edge-rev { stroke: var(--status-green); }
+    .graph-node { fill: var(--bg-panel); stroke: var(--text-faint); }
+    .graph-node.connected { stroke: var(--status-success); }
+    .graph-text { fill: var(--text-primary); }
     .edge-label { cursor: pointer; }
-    .edge-label:hover rect { fill: #30363d; stroke: #58a6ff; }
+    .edge-label rect { fill: var(--bg-surface); stroke: var(--border-secondary); }
+    .edge-label:hover rect { fill: var(--border-secondary); stroke: var(--accent); }
   `;
 }
 
@@ -78,10 +89,10 @@ export function namespaceGraphScript(): string {
       // Arrow markers
       svg += '<defs>';
       svg += '<marker id="arrow-fwd" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">';
-      svg += '<polygon points="0 0, 8 3, 0 6" fill="#58a6ff"/>';
+      svg += '<polygon points="0 0, 8 3, 0 6" class="graph-arrow-fwd"/>';
       svg += '</marker>';
       svg += '<marker id="arrow-rev" markerWidth="8" markerHeight="6" refX="0" refY="3" orient="auto">';
-      svg += '<polygon points="8 0, 0 3, 8 6" fill="#7ee787"/>';
+      svg += '<polygon points="8 0, 0 3, 8 6" class="graph-arrow-rev"/>';
       svg += '</marker>';
       svg += '</defs>';
 
@@ -121,17 +132,17 @@ export function namespaceGraphScript(): string {
 
         if (edge.fwdCount > 0) {
           svg += '<line x1="' + x1 + '" y1="' + y1 + '" x2="' + x2 + '" y2="' + y2
-            + '" stroke="#58a6ff" stroke-width="1.5" opacity="0.6" marker-end="url(#arrow-fwd)"/>';
+            + '" class="graph-edge-fwd" stroke-width="1.5" opacity="0.6" marker-end="url(#arrow-fwd)"/>';
         }
         if (edge.revCount > 0) {
           svg += '<line x1="' + (x2 + px * 0.3) + '" y1="' + (y2 + py * 0.3)
             + '" x2="' + (x1 + px * 0.3) + '" y2="' + (y1 + py * 0.3)
-            + '" stroke="#7ee787" stroke-width="1.5" opacity="0.6" marker-end="url(#arrow-rev)"/>';
+            + '" class="graph-edge-rev" stroke-width="1.5" opacity="0.6" marker-end="url(#arrow-rev)"/>';
         }
 
         svg += '<g class="edge-label" onclick="openConversation(\\'' + escapeJs(edge.from) + '\\',\\'' + escapeJs(edge.to) + '\\')">';
-        svg += '<rect x="' + (midX - 18) + '" y="' + (midY - 12) + '" width="36" height="24" rx="4" fill="#21262d" stroke="#30363d" stroke-width="1"/>';
-        svg += '<text x="' + midX + '" y="' + (midY + 4) + '" text-anchor="middle" fill="#c9d1d9" font-size="14" font-family="monospace">' + total + '</text>';
+        svg += '<rect x="' + (midX - 18) + '" y="' + (midY - 12) + '" width="36" height="24" rx="4" stroke-width="1"/>';
+        svg += '<text x="' + midX + '" y="' + (midY + 4) + '" text-anchor="middle" class="graph-text" font-size="14" font-family="monospace">' + total + '</text>';
         svg += '</g>';
       });
 
@@ -141,8 +152,8 @@ export function namespaceGraphScript(): string {
         if (!pos) return;
         var w = nodeWidths[peer.id] || 60;
         svg += '<rect x="' + (pos.x - w / 2) + '" y="' + (pos.y - NODE_H / 2) + '" width="' + w + '" height="' + NODE_H
-          + '" rx="' + (NODE_H / 2) + '" fill="#161b22" stroke="' + (peer.connected ? '#3fb950' : '#484f58') + '" stroke-width="2"/>';
-        svg += '<text x="' + pos.x + '" y="' + (pos.y + 4) + '" text-anchor="middle" fill="#c9d1d9" font-size="15" font-family="monospace">'
+          + '" rx="' + (NODE_H / 2) + '" class="graph-node' + (peer.connected ? ' connected' : '') + '" stroke-width="2"/>';
+        svg += '<text x="' + pos.x + '" y="' + (pos.y + 4) + '" text-anchor="middle" class="graph-text" font-size="15" font-family="monospace">'
           + escapeHtml(peer.id) + '</text>';
       });
 
