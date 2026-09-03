@@ -175,10 +175,11 @@ test("disabled controls are dimmed hard enough to read as disabled in both theme
 });
 
 /**
- * A DOM small enough to run `themeToggleScript()` against in-process. The script only
- * reaches for `document.getElementById`, `document.addEventListener`,
- * `document.documentElement.dataset`, `localStorage` and `window`, so a stub of those
- * five is enough to exercise the real emitted source rather than a paraphrase of it.
+ * A DOM small enough to run `themeToggleScript()` against in-process. The script reaches
+ * for seven methods — `document.getElementById`, `document.addEventListener`, the
+ * button's `addEventListener` and `setAttribute`, and `localStorage` get/set/remove —
+ * plus `document.documentElement.dataset` and `window`, so stubbing those exercises the
+ * real emitted source rather than a paraphrase of it.
  */
 function runToggleScript(sharedWindow?: any) {
   const buttonId = themeToggleHtml().match(/id="([^"]+)"/)?.[1];
@@ -211,7 +212,7 @@ function runToggleScript(sharedWindow?: any) {
 
 test("the t shortcut cycles from anywhere except a text-entry control", () => {
   // Focus provenance (tabbed to / clicked / focused programmatically) must not matter:
-  // keying on it is what broke this guard twice. Only consumption matters.
+  // keying on it is what broke this guard twice. Only the element's KIND matters.
   const CYCLES = [
     { tagName: "BODY" },
     { tagName: "BUTTON" },                                  // clicked, or tabbed to — same rule
@@ -260,7 +261,9 @@ test("the toggle cycles system to light to dark and reports the mode to assistiv
 
 test("the toggle markup and the toggle script agree on the button id", () => {
   // Split across two functions in the same module, so nothing but this test notices
-  // when one is renamed: the page renders a button that no handler ever finds.
+  // when one is renamed: the page renders a button that no handler ever finds. This is
+  // a source match — rewriting the lookup (different quotes, a cached element) reds it
+  // without any behavior change; re-point it at the new lookup rather than deleting it.
   const id = themeToggleHtml().match(/id="([^"]+)"/)?.[1];
   expect(id).toBeTruthy();
   expect(themeToggleScript()).toContain(`getElementById('${id}')`);
@@ -296,8 +299,13 @@ test("the toggle wires itself once even if the script runs twice", () => {
 
 test("the activity log renders on the page background", () => {
   // --border-subtle's weight is measured against --bg-page above; that is only the
-  // right backdrop while .activity-log has no background of its own.
+  // right backdrop while .activity-log has no background of its own. Scan EVERY rule
+  // whose selector list mentions it — a second rule, a grouped selector or a missing
+  // space all hide a background from a single indexOf, and a miss here reads as a pass.
   const css = page.slice(0, page.indexOf("</style>"));
-  const block = css.slice(css.indexOf(".activity-log {"));
-  expect(block.slice(0, block.indexOf("}"))).not.toContain("background");
+  const blocks = [...css.matchAll(/([^{}]*)\{([^}]*)\}/g)]
+    .filter(([, selector]) => /(^|,)\s*\.activity-log\s*(,|$)/.test(selector!.trim()))
+    .map(([, , body]) => body!);
+  expect(blocks.length).toBeGreaterThan(0); // the rule must exist, or this pins nothing
+  for (const body of blocks) expect(body).not.toContain("background");
 });

@@ -27,8 +27,9 @@ view module carries a color literal, the accent/status ramp clears 4.5:1 against
 three backgrounds it sits on (`--bg-page`, `--bg-panel`, `--bg-surface`), `--border-subtle`
 renders at the same weight in both themes, `:disabled` controls dim far enough to read as
 disabled in both, and the `t` shortcut cycles from every element except text-entry
-controls (`INPUT`, `TEXTAREA`, `SELECT`, contenteditable). The toggle script is exercised against a small in-process DOM stub,
-so its guard has real coverage rather than only browser spot-checks.
+controls (`INPUT`, `TEXTAREA`, `SELECT`, contenteditable). The toggle script is exercised
+against a small in-process DOM stub, so its guard has real coverage rather than only
+browser spot-checks.
 
 **Never write a raw hex color in a component.** Use the tokens (`--bg-panel`,
 `--text-muted`, `--accent`, `--status-error`, …) so both themes stay in sync; a
