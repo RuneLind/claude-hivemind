@@ -261,20 +261,18 @@ export function themeToggleScript(): string {
     apply(current()); // sync the button glyph on load
     var btn = document.getElementById('themeToggle');
     if (btn) btn.addEventListener('click', cycle);
-    // Which input modality put focus where it is. Capture phase so it is already
-    // current by the time the 't' handler below runs.
-    var kbNav = false;
-    document.addEventListener('mousedown', function() { kbNav = false; }, true);
-    document.addEventListener('keydown', function(e) { if (e.key === 'Tab') kbNav = true; }, true);
     document.addEventListener('keydown', function(e) {
+      // 't' is suppressed for exactly the elements that CONSUME the keystroke — text
+      // inputs and contenteditable. Two earlier attempts keyed on which control had
+      // focus instead: excluding any focused button killed the shortcut after a mouse
+      // click (the click leaves focus there), and a modality flag then covered only two
+      // of the five ways focus can arrive (Tab, pointer, programmatic .focus(),
+      // autofocus, browser restore) — a button focused programmatically still swallowed
+      // it. Consumption is enumerable; focus provenance is not. A button ignores 't'
+      // anyway, so cycling from one costs the user nothing.
       var el = e.target;
       if (e.key !== 't' || e.ctrlKey || e.metaKey || e.altKey || !el || !el.tagName) return;
       if (['INPUT','TEXTAREA','SELECT'].includes(el.tagName) || el.isContentEditable) return;
-      // A button or link swallows 't' only when the user tabbed to it — someone
-      // navigating by keyboard is mid-task. After a mouse click the button still holds
-      // focus but the next 't' means "cycle", so the modality flag decides, not focus.
-      // (':focus-visible' cannot: any keydown on a focused button promotes it to true.)
-      if (kbNav && (el.tagName === 'BUTTON' || el.tagName === 'A')) return;
       cycle();
     });
   })();`;

@@ -6,6 +6,7 @@ import { test, expect } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { renderDashboardPage } from "../page.ts";
+import { themeToggleScript } from "./theme.ts";
 
 const COMPONENTS_DIR = import.meta.dir;
 const VIEWS_DIR = join(COMPONENTS_DIR, "..");
@@ -118,6 +119,10 @@ test("the dark and light palettes are actually different palettes", () => {
   // block, every other test in this file would pass vacuously.
   const dark = tokenValues(page, DARK_SELECTOR);
   const light = tokenValues(page, LIGHT_SELECTOR);
+  expect(page.split(DARK_SELECTOR).length - 1).toBe(1); // the anchor must match exactly one block
+  expect(page.split(LIGHT_SELECTOR).length - 1).toBe(1);
+  const differing = Object.keys(dark).filter((k) => dark[k] !== light[k]);
+  expect(differing.length).toBeGreaterThan(30);
   expect(dark["--bg-page"]).not.toBe(light["--bg-page"]);
   expect(dark["--text-bright"]).not.toBe(light["--text-bright"]);
 });
@@ -138,8 +143,9 @@ test("--border-subtle carries the same visual weight in both themes", () => {
   // one theme a divider and the other none. Match the rendered contrast instead.
   const weights = (["dark", "light"] as const).map((theme) => {
     const t = tokenValues(page, theme === "dark" ? DARK_SELECTOR : LIGHT_SELECTOR);
-    const panel = t["--bg-panel"]!;
-    return contrast(flatten(t["--border-subtle"]!, panel), panel);
+    // .activity-item renders directly on the page background, not on a panel.
+    const backdrop = t["--bg-page"]!;
+    return contrast(flatten(t["--border-subtle"]!, backdrop), backdrop);
   });
   expect(Math.abs(weights[0]! - weights[1]!)).toBeLessThan(0.05);
   // …and it must actually be a divider in both, not an invisible one in either.
@@ -149,15 +155,104 @@ test("--border-subtle carries the same visual weight in both themes", () => {
 test("disabled controls are dimmed hard enough to read as disabled in both themes", () => {
   // --dim-opacity (0.8 in light, so stale-but-readable cards stay legible) is the wrong
   // strength for a disabled control, which has to be obviously unavailable.
-  const disabledRule = /:disabled\s*\{[^}]*opacity:\s*var\((--[\w-]+)\)/;
   const used = new Set<string>();
-  for (const { source } of viewModules()) {
-    for (const m of source.matchAll(new RegExp(disabledRule, "g"))) used.add(m[1]!);
+  const literals: string[] = [];
+  for (const { path, source } of viewModules()) {
+    for (const m of source.matchAll(/:disabled\s*\{[^}]*opacity:\s*([^;}]+)/g)) {
+      const value = m[1]!.trim();
+      const token = value.match(/^var\((--[\w-]+)\)$/);
+      if (token) used.add(token[1]!);
+      else literals.push(`${path}: opacity: ${value}`);
+    }
   }
+  expect(literals).toEqual([]); // a literal here escapes both this check and theming
   expect(used.size).toBeGreaterThan(0);
   for (const token of used) {
     for (const selector of [DARK_SELECTOR, LIGHT_SELECTOR]) {
       expect(Number(tokenValues(page, selector)[token])).toBeLessThanOrEqual(0.6);
     }
   }
+});
+
+/**
+ * A DOM small enough to run `themeToggleScript()` against in-process. The script only
+ * reaches for `document.getElementById`, `document.addEventListener`,
+ * `document.documentElement.dataset`, `localStorage` and `window`, so a stub of those
+ * five is enough to exercise the real emitted source rather than a paraphrase of it.
+ */
+function runToggleScript() {
+  const listeners: ((e: any) => void)[] = [];
+  const store = new Map<string, string>();
+  const button = { textContent: "", title: "", attrs: {} as Record<string, string>,
+    setAttribute(k: string, v: string) { this.attrs[k] = v; },
+    addEventListener(_: string, fn: () => void) { this.click = fn; }, click: () => {} };
+  const documentElement = { dataset: {} as Record<string, string | undefined> };
+  const fakeWindow: any = {};
+  const fakeDocument = {
+    documentElement,
+    getElementById: (id: string) => (id === "themeToggle" ? button : null),
+    addEventListener: (type: string, fn: (e: any) => void) => { if (type === "keydown") listeners.push(fn); },
+  };
+  const fakeStorage = {
+    getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
+    setItem: (k: string, v: string) => { store.set(k, v); },
+    removeItem: (k: string) => { store.delete(k); },
+  };
+  new Function("window", "document", "localStorage", themeToggleScript())(fakeWindow, fakeDocument, fakeStorage);
+  return {
+    theme: () => documentElement.dataset.theme ?? "system",
+    press: (key: string, target: any = { tagName: "BODY" }) =>
+      listeners.forEach((fn) => fn({ key, target, ctrlKey: false, metaKey: false, altKey: false })),
+    clickToggle: () => button.click(),
+    button,
+  };
+}
+
+test("the t shortcut cycles from anywhere except an element that consumes the keystroke", () => {
+  // Focus provenance (tabbed to / clicked / focused programmatically) must not matter:
+  // keying on it is what broke this guard twice. Only consumption matters.
+  const CYCLES = [
+    { tagName: "BODY" },
+    { tagName: "BUTTON" },                                  // clicked, or tabbed to — same rule
+    { tagName: "A" },
+    { tagName: "DIV", isContentEditable: false },
+    { tagName: "LABEL" },
+  ];
+  for (const target of CYCLES) {
+    const t = runToggleScript();
+    const before = t.theme();
+    t.press("t", target);
+    expect({ target: target.tagName, theme: t.theme() }).not.toEqual({ target: target.tagName, theme: before });
+  }
+
+  // The case both earlier guards got wrong, from opposite directions: a button the user
+  // reached with the keyboard. It does not consume 't', so it must cycle like any other.
+  const tabbed = runToggleScript();
+  const beforeTab = tabbed.theme();
+  tabbed.press("Tab", { tagName: "BUTTON" });
+  tabbed.press("t", { tagName: "BUTTON" });
+  expect(tabbed.theme()).not.toBe(beforeTab);
+
+  const SUPPRESSES = [
+    { tagName: "INPUT" }, { tagName: "TEXTAREA" }, { tagName: "SELECT" },
+    { tagName: "DIV", isContentEditable: true },
+    {},           // a non-element target (document) has no tagName at all
+    null,         // …and may be absent entirely
+  ];
+  for (const target of SUPPRESSES) {
+    const t = runToggleScript();
+    const before = t.theme();
+    t.press("t", target);
+    expect({ target: JSON.stringify(target), theme: t.theme() }).toEqual({ target: JSON.stringify(target), theme: before });
+  }
+});
+
+test("the toggle cycles system to light to dark and reports the mode to assistive tech", () => {
+  const t = runToggleScript();
+  const seen = [t.theme()];
+  for (let i = 0; i < 3; i++) { t.clickToggle(); seen.push(t.theme()); }
+  expect(seen).toEqual(["system", "light", "dark", "system"]);
+  t.clickToggle();
+  expect(t.button.attrs["aria-label"]).toContain("light");
+  expect(t.button.title).toContain("light");
 });
