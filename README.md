@@ -132,6 +132,8 @@ CLAUDE_HIVEMIND=1 opencode
 
 The plugin needs a running broker (`bun start`, or any Claude Code peer starts one). Messages that arrive before the first prompt in a fresh TUI wait until a session exists. OpenCode 2 runs plugins differently and is not supported yet.
 
+**Migrating from the MCP route:** older dashboard launches wrote a project `opencode.json` with a `claude-hivemind` MCP entry and a fixed `CMUX_SURFACE_ID`. With the plugin installed, such a project registers twice: once through the plugin and once as a legacy MCP peer whose messages are typed into a cmux surface that may no longer exist. Remove the `claude-hivemind` entry from those files (`grep -l claude-hivemind ~/source/*/*/opencode.json`).
+
 The `CLAUDE_HIVEMIND=1` env var activates the broker connection. Without it, the MCP server and the OpenCode plugin stay dormant and the instance won't register — so regular agent sessions are unaffected.
 
 Tip: create an alias for convenience:

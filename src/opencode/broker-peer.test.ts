@@ -115,6 +115,20 @@ describe("BrokerPeer", () => {
     expect(broker.received.find((m) => m.type === "list_peers")).toEqual({ type: "list_peers", scope: "machine" });
   });
 
+  test("a broker error reply (for a send) does not reject a pending listPeers", async () => {
+    broker = fakeBroker((msg, ws) => {
+      if (msg.type === "send_message") ws.send(JSON.stringify({ type: "error", error: `Peer ${msg.to} not found` }));
+      if (msg.type === "list_peers") setTimeout(() => ws.send(JSON.stringify({ type: "peers", peers: [{ id: "huginn" }] })), 30);
+    });
+    peer = new BrokerPeer({ port: broker.server.port!, namespace: "default", register, onMessage: () => {}, requestTimeoutMs: 500 });
+    peer.start();
+    await until(() => peer!.connected);
+    const list = peer.listPeers("machine");
+    void peer.sendMessage("nosuchpeer", "x");
+    const peers = await list;
+    expect(peers.map((p) => p.id)).toEqual(["huginn"]);
+  });
+
   test("reconnects after the broker drops it and replays summary and services", async () => {
     broker = fakeBroker();
     peer = new BrokerPeer({ port: broker.server.port!, namespace: "default", register, onMessage: () => {} });

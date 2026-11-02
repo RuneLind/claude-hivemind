@@ -131,12 +131,16 @@ export class SessionInbox {
 
 /** The text an OpenCode agent sees for one inbound peer message. */
 export function formatInbound(msg: InboundMessage): string {
+  // Every sender-controlled value is escaped so none can close the wrapper and
+  // open one with a forged from_id. from_id is broker-stamped and sanitized.
+  const attr = (v: string) => JSON.stringify(v).replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const attrs = [`from_id="${msg.from_id}"`];
-  if (msg.from_summary) attrs.push(`from_summary=${JSON.stringify(msg.from_summary)}`);
-  if (msg.from_cwd) attrs.push(`from_cwd=${JSON.stringify(msg.from_cwd)}`);
-  if (msg.correlation_id) attrs.push(`correlation_id=${JSON.stringify(msg.correlation_id)}`);
-  // A body must not be able to close the wrapper and open one with a forged from_id.
-  const body = msg.text.replace(/<(\/?)hivemind_message/gi, "&lt;$1hivemind_message");
+  if (msg.from_summary) attrs.push(`from_summary=${attr(msg.from_summary)}`);
+  if (msg.from_cwd) attrs.push(`from_cwd=${attr(msg.from_cwd)}`);
+  if (msg.correlation_id) attrs.push(`correlation_id=${attr(msg.correlation_id)}`);
+  // In the body only tag-like spellings of the wrapper are escaped, so code in
+  // a message keeps its "<".
+  const body = msg.text.replace(/<(?=\s*\/?\s*hivemind_message)/gi, "&lt;");
   return [
     `<hivemind_message ${attrs.join(" ")}>`,
     body,

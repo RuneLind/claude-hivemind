@@ -158,8 +158,10 @@ export class BrokerPeer {
         break;
       }
       case "error":
+        // The broker sends "error" for a send_message to an unknown peer, never
+        // for list_peers, and the send already resolves through send_result. A
+        // list_peers waiter must not take it.
         this.log(`broker error: ${msg.error}`);
-        this.peerWaiters.shift()?.reject(new Error(msg.error));
         break;
       default:
         break;
