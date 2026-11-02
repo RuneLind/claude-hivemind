@@ -4,6 +4,7 @@
 
 import type { Database } from "bun:sqlite";
 import type {
+  Message,
   Peer,
   BrokerMessage,
   NamespaceInfo,
@@ -65,15 +66,18 @@ export function createMessageStatements(db: Database) {
       INSERT INTO messages (from_id, to_id, text, sent_at, delivered, correlation_id)
       VALUES (?, ?, ?, ?, ?, ?)
     `),
-    selectUndelivered: db.prepare(
-      `SELECT * FROM messages WHERE to_id = ? AND delivered = 0 ORDER BY sent_at ASC`
-    ),
     markDelivered: db.prepare(
       `UPDATE messages SET delivered = 1 WHERE id = ?`
     ),
-    // For acks: a peer may only mark its own messages delivered.
-    markDeliveredTo: db.prepare(
-      `UPDATE messages SET delivered = 1 WHERE id = ? AND to_id = ?`
+    // For acks: only the process holding a message may mark it delivered.
+    markDeliveredBy: db.prepare(
+      `UPDATE messages SET delivered = 1 WHERE id = ? AND to_pid = ?`
+    ),
+    claimMessage: db.prepare(
+      `UPDATE messages SET to_pid = ? WHERE id = ?`
+    ),
+    selectUndeliveredForPeer: db.prepare(
+      `SELECT * FROM messages WHERE delivered = 0 AND (to_id = ? OR to_pid = ?) ORDER BY sent_at ASC, id ASC`
     ),
     deleteOldDeliveredMessages: db.prepare(
       `DELETE FROM messages WHERE delivered = 1 AND sent_at < ?`
@@ -264,8 +268,11 @@ export function deliverOrQueue(
   // can hand it to a session. The row stays undelivered until the ack, so a
   // message lost with the process is replayed when the peer registers again.
   if (targetWs && targetWs.readyState === WS_OPEN && (targetWs.data as { acks?: boolean } | undefined)?.acks) {
+    let messageId: number | undefined;
     try {
       const result = msgStmts.insertMessage.run(fromId, toId, text, now, 0, correlationId);
+      messageId = Number(result.lastInsertRowid);
+      if (target) msgStmts.claimMessage.run(target.pid, messageId);
       targetWs.send(JSON.stringify({
         type: "message",
         from_id: fromId,
@@ -274,12 +281,13 @@ export function deliverOrQueue(
         text,
         sent_at: now,
         correlation_id: correlationId ?? undefined,
-        message_id: Number(result.lastInsertRowid),
+        message_id: messageId,
       } satisfies BrokerMessage));
       return target && isPeerLive(target, ctx.peerSockets) ? "delivered" : "queued";
     } catch (e) {
+      // If the row was stored it is replayed on the next register.
       log(`Failed to send to acking peer ${toId}: ${e}`);
-      return "failed";
+      return messageId === undefined ? "failed" : "queued";
     }
   }
   if (targetWs && targetWs.readyState === WS_OPEN) {
@@ -301,7 +309,7 @@ export function deliverOrQueue(
       // catches a dead process, but NOT a half-open socket whose process is
       // still running — a true receipt check would need last_seen/heartbeat
       // tracking (follow-up). When the peer isn't live we persist as
-      // undelivered so the reconnect redelivery queue (selectUndelivered)
+      // undelivered so the reconnect redelivery queue (undeliveredFor)
       // re-sends it, and report "queued" rather than "delivered".
       const live = target ? isPeerLive(target, ctx.peerSockets) : false;
       msgStmts.insertMessage.run(fromId, toId, text, now, live ? 1 : 0, correlationId);
@@ -318,6 +326,22 @@ export function deliverOrQueue(
     log(`Failed to queue message for ${toId}: ${e}`);
     return "failed";
   }
+}
+
+/**
+ * The undelivered messages a registering peer should get. A message held by
+ * another live acking process (to_pid) stays with that process, which gets it
+ * back under whatever id it registers with; once the holder is dead the next
+ * registrant with the message's to_id gets it.
+ */
+export function undeliveredFor(
+  msgStmts: MessageStatements,
+  peerId: string,
+  pid: number,
+): Message[] {
+  // A row held by another pid was selected through to_id = peerId.
+  const rows = msgStmts.selectUndeliveredForPeer.all(peerId, pid) as Message[];
+  return rows.filter((m) => m.to_pid == null || m.to_pid === pid || !isProcessAlive(m.to_pid));
 }
 
 export function cleanStalePeers(

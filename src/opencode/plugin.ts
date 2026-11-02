@@ -22,7 +22,7 @@ import type { Hooks, Plugin } from "@opencode-ai/plugin";
 // OpenCode's tool args are typed against.
 import { tool } from "@opencode-ai/plugin/tool";
 import { BrokerPeer } from "./broker-peer.ts";
-import { SessionInbox, formatInbound, type SessionClient } from "./session-inbox.ts";
+import { RecentIds, SessionInbox, formatInbound, type SessionClient } from "./session-inbox.ts";
 import { CorrelationTracker } from "../correlation-tracker.ts";
 import { loadNamespaceConfig, resolveNamespace } from "../shared/namespace.ts";
 import { DEFAULT_HEALTH_URL } from "../shared/types.ts";
@@ -59,10 +59,10 @@ const HivemindPlugin: Plugin = async ({ client, directory }): Promise<Hooks> => 
   const correlation = new CorrelationTracker();
   const inbox = new SessionInbox(client as unknown as SessionClient, log);
   // Broker message ids this process holds (pending) or has handed to a
-  // session (delivered). The broker replays unacked ids on every register,
-  // so a reconnect must not queue a message twice.
+  // session (delivered, the most recent 1000). The broker replays unacked
+  // ids on every register, so a reconnect must not queue a message twice.
   const pendingIds = new Set<number>();
-  const deliveredIds = new Set<number>();
+  const deliveredIds = new RecentIds(1000);
 
   const peer = new BrokerPeer({
     port: parseInt(process.env.CLAUDE_HIVEMIND_PORT ?? "7899", 10),

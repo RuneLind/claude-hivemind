@@ -29,6 +29,7 @@ export interface Message {
   sent_at: string; // ISO timestamp
   delivered: number; // 0 or 1
   correlation_id?: string | null; // opaque token, persisted for queued redelivery
+  to_pid?: number | null; // acking holder process of an unacked message
 }
 
 export const DEFAULT_HEALTH_URL = "/health";

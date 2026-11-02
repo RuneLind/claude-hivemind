@@ -157,6 +157,23 @@ export class SessionInbox {
   }
 }
 
+/** A set of the most recent `limit` ids; adding past the limit forgets the oldest. */
+export class RecentIds {
+  private ids = new Set<number>();
+  constructor(private limit = 1000) {}
+  get size(): number {
+    return this.ids.size;
+  }
+  has(id: number): boolean {
+    return this.ids.has(id);
+  }
+  add(id: number): void {
+    this.ids.delete(id);
+    this.ids.add(id);
+    if (this.ids.size > this.limit) this.ids.delete(this.ids.values().next().value!);
+  }
+}
+
 /** The text an OpenCode agent sees for one inbound peer message. */
 export function formatInbound(msg: InboundMessage): string {
   // Every sender-controlled value is escaped so none can close the wrapper and

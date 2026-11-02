@@ -30,6 +30,7 @@ import {
   isPeerLive,
   getMessageStats,
   deliverOrQueue,
+  undeliveredFor,
   log,
   type PeerStatements,
   type MessageStatements,
@@ -311,6 +312,7 @@ export function handlePeerMessage(
       ws.data.peerId = id;
       ws.data.namespace = namespace;
       ws.data.acks = msg.acks === true;
+      ws.data.pid = msg.pid;
 
       ws.subscribe(`ns:${namespace}`);
       ws.subscribe(`peer:${id}`);
@@ -324,8 +326,10 @@ export function handlePeerMessage(
       };
       ws.send(JSON.stringify(reply));
 
-      const queued = msgStmts.selectUndelivered.all(id) as import("../shared/types.ts").Message[];
+      const queued = undeliveredFor(msgStmts, id, msg.pid);
       for (const m of queued) {
+        // An acking peer now holds it; its ack is matched on this pid.
+        if (ws.data.acks) msgStmts.claimMessage.run(msg.pid, m.id);
         const sender = getPeer(peerStmts, m.from_id);
         const deliverMsg: BrokerMessage = {
           type: "message",
@@ -451,7 +455,7 @@ export function handlePeerMessage(
 
     case "ack": {
       if (!ws.data.peerId) return;
-      msgStmts.markDeliveredTo.run(msg.message_id, ws.data.peerId);
+      if (ws.data.pid !== undefined) msgStmts.markDeliveredBy.run(msg.message_id, ws.data.pid);
       break;
     }
 

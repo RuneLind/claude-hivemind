@@ -6,7 +6,7 @@ import { Database } from "bun:sqlite";
 
 export const WS_OPEN = 1;
 
-export type PeerWSData = { kind: "peer"; peerId: string | null; namespace: string; acks?: boolean };
+export type PeerWSData = { kind: "peer"; peerId: string | null; namespace: string; acks?: boolean; pid?: number };
 export type DashboardWSData = { kind: "dashboard" };
 export type WSData = PeerWSData | DashboardWSData;
 
@@ -72,6 +72,9 @@ export function initDatabase(dbPath: string): Database {
   // sender attaches to a message; persisted so a queued (offline-peer) message
   // still carries it on redelivery.
   try { db.run(`ALTER TABLE messages ADD COLUMN correlation_id TEXT`); } catch {}
+  // pid of the acking peer process holding an unacked message (null otherwise).
+  // Replay follows the holder, whose peer id can change when it reconnects.
+  try { db.run(`ALTER TABLE messages ADD COLUMN to_pid INTEGER`); } catch {}
 
   db.run(`
     CREATE TABLE IF NOT EXISTS services (

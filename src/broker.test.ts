@@ -440,6 +440,97 @@ describe("broker", () => {
       expect(await none).toBe("none");
     });
 
+    test("an unacked message goes back to the process that held it, not to a new registrant with its old id", async () => {
+      const ns = "ack-holder-ns";
+      const sender = connectPeer(testPort, ns);
+      await registerPeer(sender, { cwd: "/test/ackh-sender", namespace: ns, pid: spawnSleeper() });
+      const pidA = spawnSleeper();
+      const pidB = spawnSleeper();
+      const a1 = connectPeer(testPort, ns);
+      const regA = await registerPeer(a1, { cwd: "/test/ackh/xholder", namespace: ns, pid: pidA, acks: true });
+      const first = waitForMessage<BrokerMessage & { type: "message" }>(a1, "message");
+      sendMessage(sender, { type: "send_message", to: regA.id, text: "for A" });
+      const got = await first;
+
+      // A's socket drops (as on a broker restart); B, alive in the same cwd, takes the id first.
+      await closeSocket(a1);
+      removeFromActive(a1);
+      await Bun.sleep(200);
+      const b = connectPeer(testPort, ns);
+      const bGot = waitForMessage(b, "message", 600).then(() => "got", () => "none");
+      const regB = await registerPeer(b, { cwd: "/test/ackh/xholder", namespace: ns, pid: pidB, acks: true });
+      expect(regB.id).toBe(regA.id);
+      expect(await bGot).toBe("none");
+
+      // A comes back under a new id and gets its message; its ack from that id counts.
+      const a2 = connectPeer(testPort, ns);
+      const replay = waitForMessage<BrokerMessage & { type: "message" }>(a2, "message", 2000);
+      const regA2 = await registerPeer(a2, { cwd: "/test/ackh/xholder", namespace: ns, pid: pidA, acks: true });
+      expect(regA2.id).not.toBe(regA.id);
+      const again = await replay;
+      expect(again.text).toBe("for A");
+      sendMessage(a2, { type: "ack", message_id: (again as any).message_id } as any);
+      await Bun.sleep(150);
+      await closeSocket(a2);
+      removeFromActive(a2);
+      await Bun.sleep(200);
+      const a3 = connectPeer(testPort, ns);
+      const none = waitForMessage(a3, "message", 600).then(() => "got", () => "none");
+      await registerPeer(a3, { cwd: "/test/ackh/xholder", namespace: ns, pid: pidA, acks: true });
+      expect(await none).toBe("none");
+      expect((got as any).message_id).toBe((again as any).message_id);
+    });
+
+    test("an unacked message whose holder process died goes to the next registrant with that id", async () => {
+      const ns = "ack-dead-ns";
+      const sender = connectPeer(testPort, ns);
+      await registerPeer(sender, { cwd: "/test/ackd-sender", namespace: ns, pid: spawnSleeper() });
+      const holder = Bun.spawn(["sleep", "300"], { stdout: "ignore", stderr: "ignore" });
+      const a = connectPeer(testPort, ns);
+      const regA = await registerPeer(a, { cwd: "/test/ackd/xdead", namespace: ns, pid: holder.pid, acks: true });
+      const first = waitForMessage<BrokerMessage & { type: "message" }>(a, "message");
+      sendMessage(sender, { type: "send_message", to: regA.id, text: "orphan" });
+      await first;
+      await closeSocket(a);
+      removeFromActive(a);
+      holder.kill();
+      await holder.exited;
+      await Bun.sleep(200);
+      const b = connectPeer(testPort, ns);
+      const replay = waitForMessage<BrokerMessage & { type: "message" }>(b, "message", 2000);
+      await registerPeer(b, { cwd: "/test/ackd/xdead", namespace: ns, pid: spawnSleeper(), acks: true });
+      expect((await replay).text).toBe("orphan");
+    });
+
+    test("a message queued while an acking peer was offline is acked after its replay", async () => {
+      const ns = "ack-offline-ns";
+      const sender = connectPeer(testPort, ns);
+      await registerPeer(sender, { cwd: "/test/acko2-sender", namespace: ns, pid: spawnSleeper() });
+      const pid = spawnSleeper();
+      const r1 = connectPeer(testPort, ns);
+      const reg = await registerPeer(r1, { cwd: "/test/ackoffline", namespace: ns, pid, acks: true });
+      await closeSocket(r1);
+      removeFromActive(r1);
+      await Bun.sleep(200);
+      sendMessage(sender, { type: "send_message", to: reg.id, text: "while away" });
+      await Bun.sleep(100);
+
+      const r2 = connectPeer(testPort, ns);
+      const replay = waitForMessage<BrokerMessage & { type: "message" }>(r2, "message", 2000);
+      await registerPeer(r2, { cwd: "/test/ackoffline", namespace: ns, pid, acks: true });
+      const got = await replay;
+      expect(got.text).toBe("while away");
+      sendMessage(r2, { type: "ack", message_id: (got as any).message_id } as any);
+      await Bun.sleep(150);
+      await closeSocket(r2);
+      removeFromActive(r2);
+      await Bun.sleep(200);
+      const r3 = connectPeer(testPort, ns);
+      const none = waitForMessage(r3, "message", 600).then(() => "got", () => "none");
+      await registerPeer(r3, { cwd: "/test/ackoffline", namespace: ns, pid, acks: true });
+      expect(await none).toBe("none");
+    });
+
     test("an ack for a message addressed to another peer is ignored", async () => {
       const ns = "ack-other-ns";
       const sender = connectPeer(testPort, ns);

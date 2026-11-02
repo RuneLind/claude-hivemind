@@ -197,6 +197,25 @@ describe("OpenCode delivery routing", () => {
     expect(cmuxCalls.some((c) => c.kind === "key" && c.arg === "enter")).toBe(true);
   });
 
+  test("a send to an acking peer that throws after the row is stored reports queued", () => {
+    insertPeer(peerStmts, { id: "oc-throw", agent_type: "opencode" });
+    ctx.peerSockets.set("oc-throw", {
+      readyState: 1,
+      data: { acks: true },
+      send: () => {
+        throw new Error("socket gone");
+      },
+    });
+    try {
+      const status = deliverOrQueue(ctx, peerStmts, msgStmts, "sender", "oc-throw", "hi", new Date().toISOString());
+      expect(status).toBe("queued");
+      const rows = db.query(`SELECT delivered FROM messages WHERE to_id = ?`).all("oc-throw") as { delivered: number }[];
+      expect(rows).toEqual([{ delivered: 0 }]);
+    } finally {
+      ctx.peerSockets.delete("oc-throw");
+    }
+  });
+
   test("an opencode peer without surface_id (the plugin) gets the message on its WebSocket, undelivered until it acks", () => {
     insertPeer(peerStmts, { id: "oc-plugin", agent_type: "opencode" });
     const sent: string[] = [];
