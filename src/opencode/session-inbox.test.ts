@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { SessionInbox, RecentIds, formatInbound, type SessionClient } from "./session-inbox.ts";
+import { SessionInbox, formatInbound, type SessionClient } from "./session-inbox.ts";
 
 type Call = { id: string; text: string; agent?: string; model?: unknown; variant?: string };
 
@@ -292,17 +292,3 @@ describe("formatInbound", () => {
   });
 });
 
-describe("RecentIds", () => {
-  test("remembers ids up to its limit, forgetting the oldest first", () => {
-    const ids = new RecentIds(3);
-    for (const id of [1, 2, 3, 4]) ids.add(id);
-    expect([1, 2, 3, 4].map((id) => ids.has(id))).toEqual([false, true, true, true]);
-    expect(ids.size).toBe(3);
-    ids.add(3); // re-adding does not grow it
-    expect(ids.size).toBe(3);
-    // Re-adding makes an id the newest: after 3 and 2 are re-added, 4 is the oldest.
-    ids.add(2);
-    ids.add(5);
-    expect([2, 3, 4, 5].map((id) => ids.has(id))).toEqual([true, true, false, true]);
-  });
-});

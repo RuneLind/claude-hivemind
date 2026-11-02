@@ -30,7 +30,6 @@ import {
   isPeerLive,
   getMessageStats,
   deliverOrQueue,
-  undeliveredFor,
   log,
   type PeerStatements,
   type MessageStatements,
@@ -311,8 +310,6 @@ export function handlePeerMessage(
 
       ws.data.peerId = id;
       ws.data.namespace = namespace;
-      ws.data.acks = msg.acks === true;
-      ws.data.pid = msg.pid;
 
       ws.subscribe(`ns:${namespace}`);
       ws.subscribe(`peer:${id}`);
@@ -326,10 +323,8 @@ export function handlePeerMessage(
       };
       ws.send(JSON.stringify(reply));
 
-      const queued = undeliveredFor(msgStmts, id, msg.pid);
+      const queued = msgStmts.selectUndelivered.all(id) as import("../shared/types.ts").Message[];
       for (const m of queued) {
-        // An acking peer now holds it; its ack is matched on this pid.
-        if (ws.data.acks) msgStmts.claimMessage.run(msg.pid, m.id);
         const sender = getPeer(peerStmts, m.from_id);
         const deliverMsg: BrokerMessage = {
           type: "message",
@@ -339,11 +334,9 @@ export function handlePeerMessage(
           text: m.text,
           sent_at: m.sent_at,
           correlation_id: m.correlation_id ?? undefined,
-          ...(ws.data.acks ? { message_id: m.id } : {}),
         };
         ws.send(JSON.stringify(deliverMsg));
-        // An acking peer marks it delivered itself, with "ack".
-        if (!ws.data.acks) msgStmts.markDelivered.run(m.id);
+        msgStmts.markDelivered.run(m.id);
       }
 
       const peer = getPeer(peerStmts, id)!;
@@ -450,12 +443,6 @@ export function handlePeerMessage(
         .filter((p) => isPeerLive(p, ctx.peerSockets));
 
       ws.send(JSON.stringify({ type: "peers", peers } satisfies BrokerMessage));
-      break;
-    }
-
-    case "ack": {
-      if (!ws.data.peerId) return;
-      if (ws.data.pid !== undefined) msgStmts.markDeliveredBy.run(msg.message_id, ws.data.pid);
       break;
     }
 

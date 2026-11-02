@@ -8,8 +8,7 @@
  *
  * It registers WITHOUT surface_id: the broker then routes messages for this
  * peer over the WebSocket (peers.ts deliverOrQueue), and the plugin injects
- * them into the OpenCode session itself. It registers WITH `acks`: the broker
- * keeps each message undelivered until ack() and replays it on re-register.
+ * them into the OpenCode session itself.
  */
 
 import type { BrokerMessage, ClientMessage, Peer, PeerId } from "../shared/types.ts";
@@ -81,7 +80,7 @@ export class BrokerPeer {
     ws.addEventListener("open", () => {
       if (this.ws !== ws) return;
       this.attempts = 0;
-      this.raw({ type: "register", namespace: this.opts.namespace, summary: "", ...this.opts.register, acks: true });
+      this.raw({ type: "register", namespace: this.opts.namespace, summary: "", ...this.opts.register });
       // Replay state the broker lost with the previous socket.
       if (this.lastSummary !== null) this.raw({ type: "set_summary", summary: this.lastSummary });
       for (const svc of this.services.values()) this.raw(svc);
@@ -203,11 +202,6 @@ export class BrokerPeer {
       }, this.timeoutMs);
       this.raw({ type: "send_message", to, text, correlation_id: correlationId, send_id });
     });
-  }
-
-  /** Tell the broker a message reached the session. False when disconnected. */
-  ack(messageId: number): boolean {
-    return this.raw({ type: "ack", message_id: messageId });
   }
 
   setSummary(summary: string): boolean {
