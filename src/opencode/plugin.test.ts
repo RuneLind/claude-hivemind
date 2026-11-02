@@ -161,8 +161,12 @@ describe("opencode plugin message target", () => {
     try {
       await hooks["chat.message"]!({ sessionID: "ses_a", agent: "build" } as any, {} as any);
       await hooks["chat.message"]!({ sessionID: "ses_b", agent: "plan" } as any, {} as any);
-      // A turn still running in ses_a calls a hivemind tool.
-      await hooks.tool!.hivemind_set_summary!.execute({ summary: "x" } as any, { sessionID: "ses_a" } as any);
+      // A turn still running in ses_a calls every hivemind tool.
+      const ctx = { sessionID: "ses_a" } as any;
+      await hooks.tool!.hivemind_set_summary!.execute({ summary: "x" } as any, ctx);
+      await hooks.tool!.hivemind_register_service!.execute({ port: 8080 } as any, ctx);
+      await hooks.tool!.hivemind_send_message!.execute({ to: "huginn", message: "hi" } as any, ctx);
+      await hooks.tool!.hivemind_list_peers!.execute({} as any, ctx).catch(() => {});
       await Bun.sleep(20);
       const deadline = Date.now() + 2000;
       while (!peerWs && Date.now() < deadline) await Bun.sleep(5);

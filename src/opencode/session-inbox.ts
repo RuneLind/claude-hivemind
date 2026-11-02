@@ -148,9 +148,10 @@ export class SessionInbox {
         }
         continue;
       }
-      // prompt_async fails only for a missing or unreachable session (OpenCode
-      // 1.19 answers 204 for any body, even an unknown agent or model), so the
-      // message is kept for the next prompted session, never dropped.
+      // For the well-formed bodies sent here, prompt_async fails only for a
+      // missing or unreachable session (OpenCode 1.19 answers 204 even for an
+      // unknown agent or model), so the message is kept for the next prompted
+      // session, never dropped.
       if (this.active === target) this.active = null;
       return;
     }

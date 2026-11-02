@@ -443,7 +443,7 @@ async function requestPeerList(
     setTimeout(() => {
       if (pendingPeersResolve === resolve) {
         pendingPeersResolve = null;
-          reject(new Error("list_peers timeout"));
+        reject(new Error("list_peers timeout"));
       }
     }, 5000);
   });

@@ -73,7 +73,7 @@ describe("SessionInbox", () => {
     const { client, calls } = fakeClient({ parents: { a: undefined } });
     const inbox = new SessionInbox(client);
     inbox.created({ id: "a" });
-    await inbox.touch("a"); // a tool call carries no agent
+    await inbox.touch("a"); // no prompt prefs known for "a"
     inbox.deliver("hi");
     await inbox.idle();
     expect(calls).toHaveLength(0);
