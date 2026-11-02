@@ -289,7 +289,6 @@ export function handlePeerMessage(
       const summary = msg.summary || saved?.summary || "";
 
       const agentType = normalizeAgentType(msg.agent_type);
-      const opencodeUrl = msg.opencode_url ?? null;
       const surfaceId = msg.surface_id ?? null;
 
       peerStmts.insertPeer.run(
@@ -302,7 +301,7 @@ export function handlePeerMessage(
         summary,
         namespace,
         agentType,
-        opencodeUrl,
+        null, // opencode_url: unused, see Peer.opencode_url
         surfaceId,
         now,
         now,

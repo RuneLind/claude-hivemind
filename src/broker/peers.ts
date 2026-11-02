@@ -26,12 +26,6 @@ const DAY_MS = 24 * 3_600_000;
 const DELIVERED_RETENTION_MS = 7 * DAY_MS;
 const UNDELIVERED_RETENTION_MS = 30 * DAY_MS;
 
-// Resolving the active OpenCode session takes a 1–3s round-trip; chatty pairs
-// would pay it on every send. Cached per base URL with a short TTL so the
-// next message reuses the session without re-fetching.
-const OPENCODE_SESSION_TTL_MS = 30_000;
-const opencodeSessionCache = new Map<string, { sessionId: string; cachedAt: number }>();
-
 export function createPeerStatements(db: Database) {
   return {
     insertPeer: db.prepare(`
@@ -215,73 +209,11 @@ async function deliverViaCmux(
   }
 }
 
-async function resolveOpenCodeSession(baseUrl: string, peerId: string): Promise<string | null> {
-  const cached = opencodeSessionCache.get(baseUrl);
-  if (cached && Date.now() - cached.cachedAt < OPENCODE_SESSION_TTL_MS) {
-    return cached.sessionId;
-  }
-  try {
-    const res = await fetch(`${baseUrl}/session`, { signal: AbortSignal.timeout(3000) });
-    if (!res.ok) return null;
-    const data = await res.json() as { sessions?: { id: string; updatedAt?: string }[] } | { id: string }[];
-    const sessions = Array.isArray(data) ? data : (data.sessions ?? []);
-    if (sessions.length === 0) {
-      log(`No active OpenCode session at ${baseUrl} for peer ${peerId}`);
-      return null;
-    }
-    const sessionId = sessions.slice().sort((a: any, b: any) =>
-      (b.updatedAt ?? "").localeCompare(a.updatedAt ?? "")
-    )[0].id;
-    opencodeSessionCache.set(baseUrl, { sessionId, cachedAt: Date.now() });
-    return sessionId;
-  } catch (e) {
-    log(`Failed to resolve OpenCode session at ${baseUrl}: ${e}`);
-    return null;
-  }
-}
-
-async function deliverViaOpenCodeHttp(
-  target: Peer,
-  fromId: string,
-  fromSummary: string | null,
-  text: string,
-): Promise<boolean> {
-  const baseUrl = target.opencode_url;
-  if (!baseUrl) return false;
-
-  const sessionId = await resolveOpenCodeSession(baseUrl, target.id);
-  if (!sessionId) return false;
-
-  const prompt = `[hivemind from ${fromId}${fromSummary ? ` — ${fromSummary}` : ""}] ${text}`;
-  try {
-    const res = await fetch(`${baseUrl}/session/${sessionId}/prompt_async`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt }),
-      signal: AbortSignal.timeout(5000),
-    });
-    if (res.ok || res.status === 204) {
-      log(`Delivered message to OpenCode peer ${target.id} via HTTP`);
-      return true;
-    }
-    // Cached session is stale (deleted/expired on the OpenCode side); drop it
-    // so the next message re-resolves against the live /session listing.
-    if (res.status === 404 || res.status === 410) {
-      opencodeSessionCache.delete(baseUrl);
-    }
-    log(`OpenCode prompt_async returned ${res.status} for peer ${target.id}`);
-    return false;
-  } catch (e) {
-    log(`Failed to deliver to OpenCode peer ${target.id}: ${e}`);
-    return false;
-  }
-}
-
 // Outcome of a deliverOrQueue call, surfaced back to the sender:
-// - "delivered": pushed to a live, open WebSocket (claude-code / copilot).
-// - "queued":   persisted for later delivery (peer offline), or handed to an
-//               async text-injection transport (OpenCode HTTP / cmux) whose
-//               outcome is not known synchronously.
+// - "delivered": pushed to a live, open WebSocket (MCP server or the OpenCode
+//               plugin).
+// - "queued":   persisted for later delivery (peer offline), or handed to
+//               cmux text injection, whose outcome is not known synchronously.
 // - "failed":   neither delivery nor queueing succeeded.
 export type DeliveryStatus = "delivered" | "queued" | "failed";
 
@@ -301,19 +233,17 @@ export function deliverOrQueue(
   const sender = getPeer(stmts, fromId);
   const fromSummary = sender?.summary ?? null;
 
-  // Async delivery for OpenCode peers: insert synchronously as undelivered,
-  // then mark delivered when the async path resolves, so dashboard stats
-  // reflect the send immediately. (Text-injection delivery can't carry the
-  // token, so OpenCode peers fall back to coarse correlation — see the design
-  // doc; we still persist it for the dashboard conversation view.)
-  if (target?.agent_type === "opencode" && (target.surface_id || target.opencode_url)) {
+  // OpenCode peers on the legacy MCP route (launched with CMUX_SURFACE_ID) get
+  // the message typed into their cmux terminal: insert as undelivered, mark
+  // delivered when the async injection resolves. Text injection can't carry
+  // the correlation token; it is still persisted for the conversation view.
+  // OpenCode peers from the plugin (src/opencode/) register without a
+  // surface_id and take the WebSocket path below, token included.
+  if (target?.agent_type === "opencode" && target.surface_id) {
     try {
       const result = msgStmts.insertMessage.run(fromId, toId, text, now, 0, correlationId);
       const messageId = Number(result.lastInsertRowid);
-      const delivery = target.surface_id
-        ? deliverViaCmux(target, fromId, fromSummary, text)
-        : deliverViaOpenCodeHttp(target, fromId, fromSummary, text);
-      delivery
+      deliverViaCmux(target, fromId, fromSummary, text)
         .then((ok) => { if (ok) msgStmts.markDelivered.run(messageId); })
         .catch((e) => log(`Async delivery error for ${toId}: ${e}`));
       // Outcome is asynchronous; report as queued (accepted, not yet confirmed).
@@ -324,7 +254,7 @@ export function deliverOrQueue(
     }
   }
 
-  // Synchronous delivery for Claude Code / Copilot via WebSocket
+  // Synchronous delivery via WebSocket (MCP server, or the OpenCode plugin)
   const targetWs = ctx.peerSockets.get(toId);
   if (targetWs && targetWs.readyState === WS_OPEN) {
     try {

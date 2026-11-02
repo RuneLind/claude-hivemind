@@ -31,6 +31,7 @@ The `rpc()` function in `client.ts` opens a new TCP socket per call — acceptab
 | surface.list | — | Get surface ID after select |
 | surface.send_text | text, surface_id | Send commands |
 | surface.send_key | key, surface_id | Send keystrokes |
+| surface.read_text | surface_id | Read the terminal's visible text (shell readiness) |
 
 ## Launch Flow
 
@@ -50,14 +51,15 @@ Surface IDs are captured so delayed keystrokes target the correct terminal even 
 
 `launchOpenCodeInstance()` does:
 
-1. `workspace.create` — new workspace named after the repo
+1. `workspace.create` — new workspace named "<repo> - OpenCode"
 2. `workspace.select` — focus it
 3. `surface.list` — capture surface ID
-4. `surface.send_text` — write `.opencode.json` with hivemind MCP config (if not present), then `cd <dir> && opencode`
-5. `surface.send_key` enter — execute
-6. (Optional) setTimeout 8s → send initial prompt
+4. `waitForShellReady()` — poll `surface.read_text` until the shell has drawn its prompt and stopped changing (max 10s). Typing earlier lost the Enter: the command sat unexecuted on the prompt line.
+5. `surface.send_text` + `send_key enter` — `cd <dir> && CLAUDE_HIVEMIND=1 OPENCODE_CONFIG_CONTENT='{"plugin":["file://…/src/opencode/plugin.ts"],"permission":{"*":"allow"}}' opencode [--prompt '<initial prompt>']` (built by `opencode-command.ts`)
 
-The generated `opencode.json` configures the hivemind MCP server with `CLAUDE_HIVEMIND=1` and `CLAUDE_HIVEMIND_AGENT_TYPE=opencode` env vars, so the broker knows to deliver messages via HTTP `prompt_async` instead of MCP channels. Uses OpenCode's config format: `"mcp"` key (not `"mcpServers"`), `"type": "local"` (not `"stdio"`), `"environment"` (not `"env"`), command as array.
+The plugin arrives through `OPENCODE_CONFIG_CONTENT`, so no global install is needed and the project's `opencode.json` is left alone; the plugin guards against loading twice when it is also installed globally. The initial prompt rides on `--prompt` instead of being typed after a delay. cmux sets `CMUX_WORKSPACE_ID` in the new terminal, which the plugin sends at registration so the broker can rename the workspace.
+
+`workspace.create` also accepts `working_directory` and `initial_command`, but cmux runs that command in a non-interactive login shell (no `.zshrc` PATH), and the workspace closes when it exits, so the launcher types the command instead.
 
 ## CLI Reference
 

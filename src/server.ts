@@ -59,13 +59,11 @@ const lastServicePayloads = new Map<
 >();
 
 const myAgentType: AgentType = (process.env.CLAUDE_HIVEMIND_AGENT_TYPE as AgentType) ?? "claude-code";
-const myOpenCodeUrl: string | null = process.env.OPENCODE_URL ?? null;
 const mySurfaceId: string | null = process.env.CMUX_SURFACE_ID ?? null;
 const myWorkspaceId: string | null = process.env.CMUX_WORKSPACE_ID ?? null;
 
 let orientationSent = false;
 let pendingPeersResolve: ((peers: Peer[]) => void) | null = null;
-let pendingPeersReject: ((err: Error) => void) | null = null;
 
 // In-flight send_message calls awaiting a send_result from the broker, keyed
 // by the send_id minted on the outbound. Lets the tool report whether the
@@ -257,7 +255,6 @@ function connectToBroker(): void {
       summary: "",
       namespace: myNamespace,
       agent_type: myAgentType,
-      opencode_url: myOpenCodeUrl ?? undefined,
       surface_id: mySurfaceId ?? undefined,
       workspace_id: myWorkspaceId ?? undefined,
     };
@@ -401,7 +398,6 @@ function handleBrokerMessage(msg: BrokerMessage): void {
     case "peers":
       pendingPeersResolve?.(msg.peers);
       pendingPeersResolve = null;
-      pendingPeersReject = null;
       break;
 
     case "send_result": {
@@ -414,10 +410,10 @@ function handleBrokerMessage(msg: BrokerMessage): void {
     }
 
     case "error":
+      // The broker sends "error" only for a send_message to an unknown peer;
+      // that send resolves through send_result, so a pending list_peers must
+      // not be rejected by it.
       log(`Broker error: ${msg.error}`);
-      pendingPeersReject?.(new Error(msg.error));
-      pendingPeersResolve = null;
-      pendingPeersReject = null;
       break;
 
     case "peer_joined":
@@ -443,12 +439,10 @@ async function requestPeerList(
   }
   return new Promise((resolve, reject) => {
     pendingPeersResolve = resolve;
-    pendingPeersReject = reject;
     wsSend({ type: "list_peers", scope });
     setTimeout(() => {
       if (pendingPeersResolve === resolve) {
         pendingPeersResolve = null;
-        pendingPeersReject = null;
         reject(new Error("list_peers timeout"));
       }
     }, 5000);
@@ -707,7 +701,6 @@ async function startBrokerConnection() {
   log(`Git branch: ${myGitBranch ?? "(none)"}`);
   log(`Namespace: ${myNamespace}`);
   log(`Agent type: ${myAgentType}`);
-  if (myOpenCodeUrl) log(`OpenCode URL: ${myOpenCodeUrl}`);
   if (mySurfaceId) log(`cmux surface: ${mySurfaceId}`);
 
   await ensureBroker();

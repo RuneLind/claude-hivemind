@@ -13,6 +13,7 @@
 import { Socket } from "node:net";
 import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
+import { buildOpenCodeCommand, shellQuote } from "./opencode-command.ts";
 
 function isLiveSocket(path: string): boolean {
   try {
@@ -178,55 +179,57 @@ export interface LaunchOptions {
   flags?: string[];
 }
 
+export async function readSurfaceText(surfaceId: string): Promise<string> {
+  const res = await rpc("surface.read_text", { surface_id: surfaceId });
+  assertOk(res, "read surface text");
+  return (res.result as { text?: string }).text ?? "";
+}
+
+/**
+ * Wait until a new terminal's shell has drawn something and stopped changing,
+ * i.e. its prompt is up. Text typed before that can lose its Enter: the
+ * command then sits unexecuted on the prompt line. Gives up after timeoutMs
+ * and lets the caller type anyway.
+ */
+export async function waitForShellReady(
+  surfaceId: string,
+  { timeoutMs = 10_000, stableMs = 600, pollMs = 150 } = {},
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  let last = "";
+  let stableSince = 0;
+  while (Date.now() < deadline) {
+    let text = "";
+    try {
+      text = (await readSurfaceText(surfaceId)).trim();
+    } catch {
+      // surface not readable yet
+    }
+    if (text && text === last) {
+      if (Date.now() - stableSince >= stableMs) return true;
+    } else {
+      last = text;
+      stableSince = Date.now();
+    }
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
+  return false;
+}
+
 export async function launchOpenCodeInstance(opts: LaunchOptions): Promise<{ workspaceId: string }> {
   const baseName = opts.name ?? opts.directory.split("/").pop() ?? "opencode";
-  const name = `${baseName} - OpenCode`;
-  const workspaceId = await createWorkspace(name);
+  const workspaceId = await createWorkspace(`${baseName} - OpenCode`);
   await selectWorkspace(workspaceId);
 
-  // Capture surface ID before building config — this is the terminal we'll push messages to
+  // The terminal the command is typed into.
   const surfaceId = await getActiveSurface() ?? undefined;
+  if (surfaceId) await waitForShellReady(surfaceId);
 
-  // OpenCode MCP config with hivemind integration
-  // OpenCode uses: opencode.json (no dot), "mcp" key, "type": "local", "environment", command as array
-  const serverPath = new URL("../server.ts", import.meta.url).pathname;
-  const mcpConfig = {
-    permission: { "*": "allow" },
-    mcp: {
-      "claude-hivemind": {
-        type: "local",
-        command: ["bun", "run", serverPath],
-        environment: {
-          CLAUDE_HIVEMIND: "1",
-          CLAUDE_HIVEMIND_AGENT_TYPE: "opencode",
-          ...(surfaceId ? { CMUX_SURFACE_ID: surfaceId } : {}),
-          CMUX_WORKSPACE_ID: workspaceId,
-        },
-      },
-    },
-  };
-
-  const openCodeCmd = [
-    `cd ${JSON.stringify(opts.directory)}`,
-    "&&",
-    // Only write opencode.json if missing — don't clobber user config
-    `test -f opencode.json || echo ${JSON.stringify(JSON.stringify(mcpConfig))} > opencode.json`,
-    "&&",
-    process.env.OPENCODE_COMMAND || "opencode",
-  ].join(" ");
-  await sendText(openCodeCmd, surfaceId);
+  // The initial prompt rides on --prompt rather than being typed later, so it
+  // cannot land in the shell if OpenCode starts slowly.
+  const command = `cd ${shellQuote(opts.directory)} && ${buildOpenCodeCommand(opts.prompt)}`;
+  await sendText(command, surfaceId);
   await sendKey("enter", surfaceId);
-
-  if (opts.prompt) {
-    // OpenCode takes a few seconds to initialize
-    setTimeout(async () => {
-      try {
-        await sendText(opts.prompt!, surfaceId);
-        await sendKey("enter", surfaceId);
-      } catch { /* user can type manually */ }
-    }, 8000);
-  }
-
   return { workspaceId };
 }
 

@@ -7,7 +7,7 @@ The broker is split into focused modules. The entry point `../broker.ts` wires e
 | File | Responsibility |
 |------|---------------|
 | `db.ts` | Schema creation, `BrokerContext` type, `WSData` types |
-| `peers.ts` | Peer CRUD, ID generation, messaging (WebSocket + OpenCode HTTP), stale cleanup, `log()` |
+| `peers.ts` | Peer CRUD, ID generation, messaging (WebSocket + cmux injection), stale cleanup, `log()` |
 | `services.ts` | Service health polling, baseline statements |
 | `docker.ts` | Docker container monitoring, event stream, Docker log tailing |
 | `logs.ts` | Log parsing, `LogTailer` class, service log subscriptions |
@@ -39,12 +39,13 @@ Docker, log subscriptions, and cmux each have a `createXState()` factory that re
 `deliverOrQueue()` in `peers.ts` routes messages based on the target peer's `agent_type`:
 
 - **claude-code** (default): Send via WebSocket → MCP server → MCP channel notification (interrupts mid-task)
-- **opencode**: Resolve active session via `GET {opencode_url}/session` (cached 30s), then `POST {opencode_url}/session/{id}/prompt_async` (queued for next turn)
+- **opencode** (plugin, no `surface_id`): WebSocket → plugin (`src/opencode/`) → `client.session.promptAsync` into the active session (queued for next turn). Carries `correlation_id`.
+- **opencode** with `surface_id` (legacy MCP route): typed into the cmux terminal (`deliverViaCmux`). The `opencode_url` column is unused and always null.
 - **copilot**: WebSocket delivery (same as claude-code for now; future: CLI extension `session.send()`)
 
 ### `correlation_id` (opaque reply token)
 
-`send_message` may carry an optional `correlation_id` the broker **never interprets** — it persists it on the `messages` row and round-trips it to the target (live WS payload + queued redelivery). A peer mints a token on an outbound and matches it on the echoed reply to route the reply back to the request it answers. Text-injection transports (OpenCode HTTP push / cmux) can't carry it, so those targets fall back to coarse correlation. Design + consumer side: `mimir/plans/claude-hivemind-reply-correlation.md`.
+`send_message` may carry an optional `correlation_id` the broker **never interprets** — it persists it on the `messages` row and round-trips it to the target (live WS payload + queued redelivery). A peer mints a token on an outbound and matches it on the echoed reply to route the reply back to the request it answers. The cmux text-injection transport can't carry it, so those targets fall back to coarse correlation. Design + consumer side: `mimir/plans/claude-hivemind-reply-correlation.md`.
 
 ## Adding new features
 
