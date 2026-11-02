@@ -59,7 +59,6 @@ const lastServicePayloads = new Map<
 >();
 
 const myAgentType: AgentType = (process.env.CLAUDE_HIVEMIND_AGENT_TYPE as AgentType) ?? "claude-code";
-const myOpenCodeUrl: string | null = process.env.OPENCODE_URL ?? null;
 const mySurfaceId: string | null = process.env.CMUX_SURFACE_ID ?? null;
 const myWorkspaceId: string | null = process.env.CMUX_WORKSPACE_ID ?? null;
 
@@ -257,7 +256,6 @@ function connectToBroker(): void {
       summary: "",
       namespace: myNamespace,
       agent_type: myAgentType,
-      opencode_url: myOpenCodeUrl ?? undefined,
       surface_id: mySurfaceId ?? undefined,
       workspace_id: myWorkspaceId ?? undefined,
     };
@@ -707,7 +705,6 @@ async function startBrokerConnection() {
   log(`Git branch: ${myGitBranch ?? "(none)"}`);
   log(`Namespace: ${myNamespace}`);
   log(`Agent type: ${myAgentType}`);
-  if (myOpenCodeUrl) log(`OpenCode URL: ${myOpenCodeUrl}`);
   if (mySurfaceId) log(`cmux surface: ${mySurfaceId}`);
 
   await ensureBroker();

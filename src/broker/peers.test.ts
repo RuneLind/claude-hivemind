@@ -1,9 +1,9 @@
 /**
- * Unit tests for peer ID generation (M15) and OpenCode HTTP delivery (M13).
+ * Unit tests for peer ID generation (M15) and OpenCode delivery routing.
  *
- * These exercise pure-ish broker internals against an in-memory bun:sqlite DB
- * and a stubbed globalThis.fetch, with no broker subprocess. The cmux client is
- * mocked so the surface_id delivery branch is observable without a real socket.
+ * These exercise pure-ish broker internals against an in-memory bun:sqlite DB,
+ * with no broker subprocess. The cmux client is mocked so the surface_id
+ * delivery branch is observable without a real socket.
  */
 
 import { describe, test, expect, beforeEach, afterEach, mock } from "bun:test";
@@ -46,7 +46,6 @@ function insertPeer(
     cwd?: string;
     namespace?: string;
     agent_type?: string;
-    opencode_url?: string | null;
     surface_id?: string | null;
   },
 ) {
@@ -61,7 +60,7 @@ function insertPeer(
     "",
     opts.namespace ?? "default",
     opts.agent_type ?? "claude-code",
-    opts.opencode_url ?? null,
+    null,
     opts.surface_id ?? null,
     now,
     now,
@@ -139,9 +138,9 @@ describe("generateId", () => {
   });
 });
 
-// --- M13: OpenCode HTTP delivery via deliverOrQueue ---
+// --- OpenCode delivery routing via deliverOrQueue ---
 
-describe("OpenCode HTTP delivery", () => {
+describe("OpenCode delivery routing", () => {
   let db: Database;
   let peerStmts: ReturnType<typeof createPeerStatements>;
   let msgStmts: ReturnType<typeof createMessageStatements>;
@@ -180,147 +179,6 @@ describe("OpenCode HTTP delivery", () => {
     return rows.filter((r) => r.delivered === 1).length;
   }
 
-  test("selects the newest-updatedAt session and marks the row delivered", async () => {
-    insertPeer(peerStmts, {
-      id: "oc-1",
-      agent_type: "opencode",
-      opencode_url: "http://oc.test:9000",
-    });
-
-    const requested: string[] = [];
-    globalThis.fetch = (async (url: any, init?: any) => {
-      const u = String(url);
-      requested.push(u);
-      if (u.endsWith("/session")) {
-        return new Response(
-          JSON.stringify({
-            sessions: [
-              { id: "old", updatedAt: "2026-01-01T00:00:00Z" },
-              { id: "newest", updatedAt: "2026-05-01T00:00:00Z" },
-              { id: "mid", updatedAt: "2026-03-01T00:00:00Z" },
-            ],
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
-      }
-      // prompt_async
-      return new Response("", { status: 200 });
-    }) as any;
-
-    deliverOrQueue(ctx, peerStmts, msgStmts, "sender", "oc-1", "hello", new Date().toISOString());
-
-    await until(() => countDelivered("oc-1") === 1);
-    // The prompt was POSTed to the newest session id.
-    expect(requested.some((u) => u.includes("/session/newest/prompt_async"))).toBe(true);
-  });
-
-  test("parses the bare-array session response shape", async () => {
-    insertPeer(peerStmts, {
-      id: "oc-arr",
-      agent_type: "opencode",
-      opencode_url: "http://oc-arr.test:9000",
-    });
-
-    const requested: string[] = [];
-    globalThis.fetch = (async (url: any) => {
-      const u = String(url);
-      requested.push(u);
-      if (u.endsWith("/session")) {
-        return new Response(
-          JSON.stringify([
-            { id: "a", updatedAt: "2026-01-01T00:00:00Z" },
-            { id: "b", updatedAt: "2026-02-01T00:00:00Z" },
-          ]),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
-      }
-      return new Response("", { status: 204 });
-    }) as any;
-
-    deliverOrQueue(ctx, peerStmts, msgStmts, "sender", "oc-arr", "hi", new Date().toISOString());
-
-    await until(() => countDelivered("oc-arr") === 1);
-    expect(requested.some((u) => u.includes("/session/b/prompt_async"))).toBe(true);
-  });
-
-  test("a 204 from prompt_async still marks the row delivered", async () => {
-    insertPeer(peerStmts, {
-      id: "oc-204",
-      agent_type: "opencode",
-      opencode_url: "http://oc204.test:9000",
-    });
-    globalThis.fetch = (async (url: any) => {
-      const u = String(url);
-      if (u.endsWith("/session")) {
-        return new Response(JSON.stringify([{ id: "s1", updatedAt: "2026-01-01T00:00:00Z" }]), { status: 200 });
-      }
-      return new Response("", { status: 204 });
-    }) as any;
-
-    deliverOrQueue(ctx, peerStmts, msgStmts, "sender", "oc-204", "x", new Date().toISOString());
-    await until(() => countDelivered("oc-204") === 1);
-    expect(countDelivered("oc-204")).toBe(1);
-  });
-
-  test("the resolved session is cached within the 30s TTL", async () => {
-    insertPeer(peerStmts, {
-      id: "oc-cache",
-      agent_type: "opencode",
-      opencode_url: "http://oc-cache.test:9000",
-    });
-
-    let sessionFetches = 0;
-    globalThis.fetch = (async (url: any) => {
-      const u = String(url);
-      if (u.endsWith("/session")) {
-        sessionFetches++;
-        return new Response(JSON.stringify([{ id: "cached", updatedAt: "2026-01-01T00:00:00Z" }]), { status: 200 });
-      }
-      return new Response("", { status: 200 });
-    }) as any;
-
-    const now = new Date().toISOString();
-    deliverOrQueue(ctx, peerStmts, msgStmts, "sender", "oc-cache", "m1", now);
-    await until(() => countDelivered("oc-cache") === 1);
-
-    deliverOrQueue(ctx, peerStmts, msgStmts, "sender", "oc-cache", "m2", new Date().toISOString());
-    await until(() => countDelivered("oc-cache") === 2);
-
-    // Second send reused the cached session: /session was only fetched once.
-    expect(sessionFetches).toBe(1);
-  });
-
-  test("a 404 from prompt_async evicts the cache so the next send re-resolves", async () => {
-    insertPeer(peerStmts, {
-      id: "oc-evict",
-      agent_type: "opencode",
-      opencode_url: "http://oc-evict.test:9000",
-    });
-
-    let sessionFetches = 0;
-    let promptStatus = 404;
-    globalThis.fetch = (async (url: any) => {
-      const u = String(url);
-      if (u.endsWith("/session")) {
-        sessionFetches++;
-        return new Response(JSON.stringify([{ id: "s", updatedAt: "2026-01-01T00:00:00Z" }]), { status: 200 });
-      }
-      return new Response("", { status: promptStatus });
-    }) as any;
-
-    // First send: prompt_async 404s, so it is NOT delivered and the cache is evicted.
-    deliverOrQueue(ctx, peerStmts, msgStmts, "sender", "oc-evict", "first", new Date().toISOString());
-    await until(() => sessionFetches === 1);
-    await Bun.sleep(30); // let the .then chain settle (no markDelivered expected)
-    expect(countDelivered("oc-evict")).toBe(0);
-
-    // Second send: cache was evicted by the 404, so /session is fetched again.
-    promptStatus = 200;
-    deliverOrQueue(ctx, peerStmts, msgStmts, "sender", "oc-evict", "second", new Date().toISOString());
-    await until(() => countDelivered("oc-evict") === 1);
-    expect(sessionFetches).toBe(2);
-  });
-
   test("the surface_id branch delivers via cmux and marks delivered", async () => {
     insertPeer(peerStmts, {
       id: "oc-surface",
@@ -337,5 +195,27 @@ describe("OpenCode HTTP delivery", () => {
     await until(() => countDelivered("oc-surface") === 1);
     expect(cmuxCalls.some((c) => c.kind === "text" && c.surfaceId === "surf-42")).toBe(true);
     expect(cmuxCalls.some((c) => c.kind === "key" && c.arg === "enter")).toBe(true);
+  });
+
+  test("an opencode peer without surface_id (the plugin) gets the message on its WebSocket", () => {
+    insertPeer(peerStmts, { id: "oc-plugin", agent_type: "opencode" });
+    const sent: string[] = [];
+    ctx.peerSockets.set("oc-plugin", { readyState: 1, send: (s: string) => sent.push(s) });
+    globalThis.fetch = (async () => {
+      throw new Error("no HTTP delivery expected");
+    }) as any;
+
+    try {
+      const status = deliverOrQueue(ctx, peerStmts, msgStmts, "sender", "oc-plugin", "hi", new Date().toISOString(), "tok-9");
+
+      expect(status).toBe("delivered");
+      expect(cmuxCalls).toHaveLength(0);
+      expect(sent).toHaveLength(1);
+      const payload = JSON.parse(sent[0]!);
+      expect(payload).toMatchObject({ type: "message", from_id: "sender", text: "hi", correlation_id: "tok-9" });
+      expect(countDelivered("oc-plugin")).toBe(1);
+    } finally {
+      ctx.peerSockets.delete("oc-plugin");
+    }
   });
 });

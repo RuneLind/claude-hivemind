@@ -14,7 +14,7 @@ export interface Peer {
   summary: string;
   namespace: Namespace;
   agent_type: AgentType;
-  opencode_url: string | null; // Base URL for OpenCode HTTP API (e.g. http://localhost:3000)
+  opencode_url: string | null; // Unused: the OpenCode HTTP push it fed was removed. Kept as a DB column, always null.
   surface_id: string | null;   // cmux surface ID for terminal-based push delivery
   registered_at: string; // ISO timestamp
   last_seen: string; // ISO timestamp
@@ -58,7 +58,6 @@ export type ClientMessage =
       summary: string;
       namespace: Namespace;
       agent_type?: AgentType;
-      opencode_url?: string; // Base URL for OpenCode HTTP push delivery
       surface_id?: string;   // cmux surface ID for terminal push delivery
       workspace_id?: string; // cmux workspace ID for rename on registration
     }
