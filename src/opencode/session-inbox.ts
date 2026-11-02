@@ -168,9 +168,11 @@ export function formatInbound(msg: InboundMessage): string {
   if (msg.correlation_id) attrs.push(`correlation_id=${attr(msg.correlation_id)}`);
   // In the body only tag-like spellings of the wrapper are escaped, so code in
   // a message keeps its "<".
-  // Anything but a letter, digit, "_" or ">" between "<" and the name (space,
-  // "/", zero-width or combining characters) counts as the same spelling.
-  const body = msg.text.replace(/<(?=[^\p{L}\p{N}_>]*hivemind_message)/giu, "&lt;");
+  // Every "<" in the body is escaped, so no ASCII tag of any spelling can
+  // form there (spelling blocklists missed zero-width and filler characters).
+  // Lookalike brackets such as U+FF1C are not covered: only the first line's
+  // from_id is authority.
+  const body = msg.text.replace(/</g, "&lt;");
   return [
     `<hivemind_message ${attrs.join(" ")}>`,
     body,
