@@ -36,15 +36,12 @@ export interface SessionInfoLike {
   parentID?: string;
 }
 
-/** A message the server rejects this many times is dropped (and logged). */
-export const MAX_ATTEMPTS = 3;
-
 export class SessionInbox {
   active: string | null = null;
   private roots = new Set<string>();
   private children = new Set<string>();
   private prefs = new Map<string, PromptPrefs>();
-  private pending: { text: string; attempts: number; onDelivered?: () => void }[] = [];
+  private pending: { text: string; onDelivered?: () => void }[] = [];
   private flushing: Promise<void> = Promise.resolve();
   /** Touches are numbered by start; a touch never overrides one that started later. */
   private touchSeq = 0;
@@ -114,7 +111,7 @@ export class SessionInbox {
 
   /** Queue a message; `onDelivered` runs once prompt_async accepted it. */
   deliver(text: string, onDelivered?: () => void): void {
-    this.pending.push({ text, attempts: 0, onDelivered });
+    this.pending.push({ text, onDelivered });
     if (this.active) this.enqueueFlush();
   }
 
@@ -151,13 +148,9 @@ export class SessionInbox {
         }
         continue;
       }
-      item.attempts++;
-      if (item.attempts >= MAX_ATTEMPTS) {
-        // Stop one bad message from holding back the rest.
-        this.pending.shift();
-        this.log(`dropped a peer message after ${MAX_ATTEMPTS} failed attempts: ${item.text.slice(0, 120)}`);
-      }
-      // The session may be gone: wait for the next prompt to pick a target.
+      // prompt_async fails only for a missing or unreachable session (OpenCode
+      // 1.19 answers 204 for any body, even an unknown agent or model), so the
+      // message is kept for the next prompted session, never dropped.
       if (this.active === target) this.active = null;
       return;
     }
@@ -175,7 +168,9 @@ export function formatInbound(msg: InboundMessage): string {
   if (msg.correlation_id) attrs.push(`correlation_id=${attr(msg.correlation_id)}`);
   // In the body only tag-like spellings of the wrapper are escaped, so code in
   // a message keeps its "<".
-  const body = msg.text.replace(/<(?=\s*\/?\s*hivemind_message)/gi, "&lt;");
+  // Anything but a letter, digit, "_" or ">" between "<" and the name (space,
+  // "/", zero-width or combining characters) counts as the same spelling.
+  const body = msg.text.replace(/<(?=[^\p{L}\p{N}_>]*hivemind_message)/giu, "&lt;");
   return [
     `<hivemind_message ${attrs.join(" ")}>`,
     body,

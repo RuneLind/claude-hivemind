@@ -412,10 +412,10 @@ function handleBrokerMessage(msg: BrokerMessage): void {
     }
 
     case "error":
+      // The broker sends "error" only for a send_message to an unknown peer;
+      // that send resolves through send_result, so a pending list_peers must
+      // not be rejected by it.
       log(`Broker error: ${msg.error}`);
-      pendingPeersReject?.(new Error(msg.error));
-      pendingPeersResolve = null;
-      pendingPeersReject = null;
       break;
 
     case "peer_joined":
