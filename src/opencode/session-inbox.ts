@@ -79,10 +79,10 @@ export class SessionInbox {
   }
 
   /**
-   * A session was prompted (prefs from the chat.message hook) or called a
-   * hivemind tool (no prefs). It becomes the target if it is a root session
-   * whose prompt prefs are known, unless a touch that started later has
-   * already chosen a target while this one's root lookup ran.
+   * A session was prompted (prefs from the chat.message hook). It becomes the
+   * target if it is a root session whose prompt prefs are known, unless a
+   * touch that started later has already chosen a target while this one's
+   * root lookup ran.
    */
   async touch(id: string, prefs?: PromptPrefs): Promise<void> {
     if (prefs) this.prefs.set(id, prefs);
@@ -166,8 +166,6 @@ export function formatInbound(msg: InboundMessage): string {
   if (msg.from_summary) attrs.push(`from_summary=${attr(msg.from_summary)}`);
   if (msg.from_cwd) attrs.push(`from_cwd=${attr(msg.from_cwd)}`);
   if (msg.correlation_id) attrs.push(`correlation_id=${attr(msg.correlation_id)}`);
-  // In the body only tag-like spellings of the wrapper are escaped, so code in
-  // a message keeps its "<".
   // Every "<" in the body is escaped, so no ASCII tag of any spelling can
   // form there (spelling blocklists missed zero-width and filler characters).
   // Lookalike brackets such as U+FF1C are not covered: only the first line's

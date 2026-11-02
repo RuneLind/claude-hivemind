@@ -95,7 +95,7 @@ describe("opencode plugin end to end against a fake broker", () => {
     try {
       const model = { providerID: "anthropic", modelID: "claude-x" };
       await hooks.event!({ event: { type: "session.created", properties: { info: { id: "ses_1" } } } as any });
-      await hooks["chat.message"]!({ sessionID: "ses_1", agent: "plan", model } as any, {} as any);
+      await hooks["chat.message"]!({ sessionID: "ses_1", agent: "plan", model, variant: "high" } as any, {} as any);
       const deadline = Date.now() + 2000;
       while (!peerWs && Date.now() < deadline) await Bun.sleep(5);
       peerWs.send(JSON.stringify({ type: "message", from_id: "huginn", from_summary: "", from_cwd: "", text: "ping", sent_at: "t" }));
@@ -105,7 +105,70 @@ describe("opencode plugin end to end against a fake broker", () => {
       expect(prompts[0].path).toEqual({ id: "ses_1" });
       expect(prompts[0].body.agent).toBe("plan");
       expect(prompts[0].body.model).toEqual(model);
+      expect(prompts[0].body.variant).toBe("high");
       expect(prompts[0].body.parts[0].text).toContain('<hivemind_message from_id="huginn">');
+    } finally {
+      await hooks.dispose?.();
+      broker.stop(true);
+    }
+  });
+});
+
+describe("opencode plugin message target", () => {
+  const saved = process.env.CLAUDE_HIVEMIND;
+  const savedPort = process.env.CLAUDE_HIVEMIND_PORT;
+  afterEach(() => {
+    if (saved === undefined) delete process.env.CLAUDE_HIVEMIND;
+    else process.env.CLAUDE_HIVEMIND = saved;
+    if (savedPort === undefined) delete process.env.CLAUDE_HIVEMIND_PORT;
+    else process.env.CLAUDE_HIVEMIND_PORT = savedPort;
+  });
+
+  test("a hivemind tool call in an older session does not move the target off the last prompted one", async () => {
+    let peerWs: any = null;
+    const broker = Bun.serve({
+      port: 0,
+      fetch(req, srv) {
+        if (srv.upgrade(req)) return;
+        return new Response("no", { status: 400 });
+      },
+      websocket: {
+        message(ws, data) {
+          const msg = JSON.parse(String(data));
+          if (msg.type === "register") {
+            peerWs = ws;
+            ws.send(JSON.stringify({ type: "registered", id: "oc", namespace: "default" }));
+          }
+        },
+      },
+    });
+    const prompts: any[] = [];
+    const client = {
+      app: { log: async () => ({}) },
+      session: {
+        async promptAsync(opts: any) {
+          prompts.push(opts);
+          return {};
+        },
+        async get({ path }: any) {
+          return { data: { id: path.id } };
+        },
+      },
+    };
+    process.env.CLAUDE_HIVEMIND = "1";
+    process.env.CLAUDE_HIVEMIND_PORT = String(broker.port);
+    const hooks = await pluginModule.default({ client, directory: "/tmp", worktree: "/tmp" } as any);
+    try {
+      await hooks["chat.message"]!({ sessionID: "ses_a", agent: "build" } as any, {} as any);
+      await hooks["chat.message"]!({ sessionID: "ses_b", agent: "plan" } as any, {} as any);
+      // A turn still running in ses_a calls a hivemind tool.
+      await hooks.tool!.hivemind_set_summary!.execute({ summary: "x" } as any, { sessionID: "ses_a" } as any);
+      await Bun.sleep(20);
+      const deadline = Date.now() + 2000;
+      while (!peerWs && Date.now() < deadline) await Bun.sleep(5);
+      peerWs.send(JSON.stringify({ type: "message", from_id: "huginn", from_summary: "", from_cwd: "", text: "ping", sent_at: "t" }));
+      while (prompts.length === 0 && Date.now() < deadline) await Bun.sleep(5);
+      expect(prompts.map((p) => p.path.id)).toEqual(["ses_b"]);
     } finally {
       await hooks.dispose?.();
       broker.stop(true);

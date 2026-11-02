@@ -64,7 +64,6 @@ const myWorkspaceId: string | null = process.env.CMUX_WORKSPACE_ID ?? null;
 
 let orientationSent = false;
 let pendingPeersResolve: ((peers: Peer[]) => void) | null = null;
-let pendingPeersReject: ((err: Error) => void) | null = null;
 
 // In-flight send_message calls awaiting a send_result from the broker, keyed
 // by the send_id minted on the outbound. Lets the tool report whether the
@@ -399,7 +398,6 @@ function handleBrokerMessage(msg: BrokerMessage): void {
     case "peers":
       pendingPeersResolve?.(msg.peers);
       pendingPeersResolve = null;
-      pendingPeersReject = null;
       break;
 
     case "send_result": {
@@ -441,13 +439,11 @@ async function requestPeerList(
   }
   return new Promise((resolve, reject) => {
     pendingPeersResolve = resolve;
-    pendingPeersReject = reject;
     wsSend({ type: "list_peers", scope });
     setTimeout(() => {
       if (pendingPeersResolve === resolve) {
         pendingPeersResolve = null;
-        pendingPeersReject = null;
-        reject(new Error("list_peers timeout"));
+          reject(new Error("list_peers timeout"));
       }
     }, 5000);
   });

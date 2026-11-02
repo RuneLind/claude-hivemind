@@ -112,8 +112,7 @@ const HivemindPlugin: Plugin = async ({ client, directory }): Promise<Hooks> => 
         description:
           'List other AI coding agents (Claude Code, OpenCode, Copilot) on the hivemind network. Scope "namespace" (default) shows your project group; "machine" shows every agent on this computer.',
         args: { scope: z.enum(["namespace", "machine"]).optional() },
-        async execute(args, ctx) {
-          void inbox.touch(ctx.sessionID);
+        async execute(args) {
           const scope = args.scope ?? "namespace";
           let peers;
           try {
@@ -147,8 +146,7 @@ const HivemindPlugin: Plugin = async ({ client, directory }): Promise<Hooks> => 
           message: z.string().describe("The message to send"),
           in_reply_to: z.string().optional().describe("correlation_id of the message you are answering"),
         },
-        async execute(args, ctx) {
-          void inbox.touch(ctx.sessionID);
+        async execute(args) {
           if (!peer.connected) return notConnected;
           const correlationId = correlation.resolveOutbound(args.to, args.in_reply_to);
           const status = await peer.sendMessage(args.to, args.message, correlationId);
@@ -168,8 +166,7 @@ const HivemindPlugin: Plugin = async ({ client, directory }): Promise<Hooks> => 
       hivemind_set_summary: tool({
         description: "Set a 1-2 sentence summary of what you are working on, visible to other peers.",
         args: { summary: z.string() },
-        async execute(args, ctx) {
-          void inbox.touch(ctx.sessionID);
+        async execute(args) {
           return peer.setSummary(args.summary) ? `Summary updated: "${args.summary}"` : notConnected;
         },
       }),
@@ -183,8 +180,7 @@ const HivemindPlugin: Plugin = async ({ client, directory }): Promise<Hooks> => 
           log_file: z.string().optional().describe("Absolute path to the service's log file"),
           log_format: z.enum(["spring", "json", "plain"]).optional(),
         },
-        async execute(args, ctx) {
-          void inbox.touch(ctx.sessionID);
+        async execute(args) {
           const health_url = args.health_url || DEFAULT_HEALTH_URL;
           const ok = peer.registerService({
             port: args.port,
