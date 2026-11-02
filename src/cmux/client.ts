@@ -168,16 +168,17 @@ export async function renameWorkspace(workspaceRef: string, title: string): Prom
 /**
  * The terminal a launcher types into: the surface workspace.create returned,
  * else the selected surface of that workspace. surface.list without a
- * workspace_id lists the CALLER's workspace (cmux 0.64+), which typed launch
- * commands into the broker's own terminal.
+ * workspace_id lists the CALLER's workspace, which typed launch commands into
+ * the broker's own terminal. Throws rather than return nothing: an untargeted
+ * send_text lands wherever cmux chooses, possibly another agent's session.
  */
-async function targetSurface(created: { workspaceId: string; surfaceId: string | null }): Promise<string | undefined> {
+async function targetSurface(created: { workspaceId: string; surfaceId: string | null }): Promise<string> {
   if (created.surfaceId) return created.surfaceId;
-  const res = await rpc("surface.list", { workspace_id: created.workspaceId });
-  if (!res.ok) return undefined;
-  const result = res.result as { surfaces?: { id: string; focused?: boolean; selected_in_pane?: boolean }[] };
-  const selected = result.surfaces?.find((s) => s.selected_in_pane || s.focused);
-  return selected?.id ?? result.surfaces?.[0]?.id;
+  const res = created.workspaceId ? await rpc("surface.list", { workspace_id: created.workspaceId }) : null;
+  const surfaces = res?.ok ? ((res.result as { surfaces?: { id: string; focused?: boolean; selected_in_pane?: boolean }[] }).surfaces ?? []) : [];
+  const surface = surfaces.find((s) => s.selected_in_pane || s.focused) ?? surfaces[0];
+  if (!surface) throw new Error(`cmux: no terminal surface in new workspace ${created.workspaceId || "(no id)"}`);
+  return surface.id;
 }
 
 export interface LaunchOptions {

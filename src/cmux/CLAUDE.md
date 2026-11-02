@@ -28,7 +28,7 @@ The `rpc()` function in `client.ts` opens a new TCP socket per call — acceptab
 | workspace.create | name | New workspace |
 | workspace.select | workspace_id | Focus before sending |
 | workspace.close | workspace_id | Cleanup |
-| surface.list | workspace_id | Fallback: the workspace's selected surface (`selected_in_pane`). Without `workspace_id` it lists the CALLER's workspace |
+| surface.list | workspace_id | Fallback: the workspace's selected surface (`selected_in_pane` / `focused`). Without `workspace_id` it lists the CALLER's workspace. No surface → the launch fails rather than typing untargeted |
 | surface.send_text | text, surface_id | Send commands |
 | surface.send_key | key, surface_id | Send keystrokes |
 | surface.read_text | surface_id | Read the terminal's visible text (shell readiness) |

@@ -1,9 +1,8 @@
 /**
  * The launchers must type into the terminal of the workspace they just
- * created. Driven against a fake cmux socket that answers like cmux 0.64+:
+ * created. Driven against a fake cmux socket that answers like cmux 0.65:
  * workspace.create returns the new surface_id, and surface.list without a
- * workspace_id lists the CALLER's workspace (surfaces carry selected_in_pane,
- * not focused).
+ * workspace_id lists the CALLER's workspace.
  */
 
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
@@ -14,6 +13,9 @@ const socketPath = `${tmpdir()}/hivemind-fake-cmux-${process.pid}.sock`;
 const calls: { method: string; params: any }[] = [];
 let server: ReturnType<typeof Bun.listen>;
 let createReturnsSurface = true;
+let newWorkspaceSurfaces: { id: string; focused: boolean; selected_in_pane: boolean }[] = [
+  { id: "SURF-NEW", focused: true, selected_in_pane: true },
+];
 
 function answer(method: string, params: any): unknown {
   switch (method) {
@@ -23,8 +25,8 @@ function answer(method: string, params: any): unknown {
       return { text: "$ " };
     case "surface.list":
       return params.workspace_id === "WS-NEW"
-        ? { surfaces: [{ id: "SURF-NEW", selected_in_pane: true }] }
-        : { surfaces: [{ id: "SURF-CALLER", selected_in_pane: true }] };
+        ? { surfaces: newWorkspaceSurfaces }
+        : { surfaces: [{ id: "SURF-CALLER", focused: true, selected_in_pane: true }] };
     default:
       return {};
   }
@@ -76,6 +78,41 @@ describe("cmux launchers target the new workspace's terminal", () => {
       createReturnsSurface = true;
     }
     expect(typedSurfaces()).toEqual(["SURF-NEW"]);
+  });
+
+  test("the fallback picks the selected surface, not the first one", async () => {
+    calls.length = 0;
+    createReturnsSurface = false;
+    const saved = newWorkspaceSurfaces;
+    newWorkspaceSurfaces = [
+      { id: "SURF-OTHER", focused: false, selected_in_pane: false },
+      { id: "SURF-NEW", focused: true, selected_in_pane: true },
+    ];
+    try {
+      await launchOpenCodeInstance({ directory: "/tmp", name: "t" });
+    } finally {
+      createReturnsSurface = true;
+      newWorkspaceSurfaces = saved;
+    }
+    expect(typedSurfaces()).toEqual(["SURF-NEW"]);
+  });
+
+  test("with no surface for the new workspace the launch fails instead of typing untargeted", async () => {
+    calls.length = 0;
+    createReturnsSurface = false;
+    const saved = newWorkspaceSurfaces;
+    newWorkspaceSurfaces = [];
+    let error: unknown;
+    try {
+      await launchOpenCodeInstance({ directory: "/tmp", name: "t" });
+    } catch (e) {
+      error = e;
+    } finally {
+      createReturnsSurface = true;
+      newWorkspaceSurfaces = saved;
+    }
+    expect(String(error)).toContain("no terminal");
+    expect(calls.some((c) => c.method === "surface.send_text" || c.method === "surface.send_key")).toBe(false);
   });
 
   test("launchClaudeInstance types into the surface workspace.create returned", async () => {
