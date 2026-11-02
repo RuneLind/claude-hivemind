@@ -33,14 +33,14 @@ graph TB
 
 **MCP Server** — One per Claude Code (or Copilot) instance, spawned as a stdio MCP server. Connects to the broker via WebSocket for real-time messaging. Agent type comes from `CLAUDE_HIVEMIND_AGENT_TYPE` (`claude-code` or `copilot`).
 
-**OpenCode plugin** — `src/opencode/plugin.ts` runs inside each OpenCode 1.x process instead of the MCP server. It registers with the broker over the same WebSocket protocol, gives the agent `hivemind_list_peers`, `hivemind_send_message`, `hivemind_set_summary` and `hivemind_register_service`, and hands inbound messages to the root session the user last used.
+**OpenCode plugin** — `src/opencode/plugin.ts` runs inside each OpenCode 1.x process instead of the MCP server. It registers with the broker over the same WebSocket protocol, gives the agent `hivemind_list_peers`, `hivemind_send_message`, `hivemind_set_summary` and `hivemind_register_service`, and hands inbound messages to the root session the user last prompted.
 
 **Push transport** — How an inbound message reaches the agent depends on its type:
 
 | Agent | Push mechanism | Interrupts mid-task? |
 |-------|----------------|----------------------|
 | Claude Code | `claude/channel` MCP notification → `<channel source="claude-hivemind">` block | Yes |
-| OpenCode | WebSocket → plugin → `client.session.promptAsync` into the active session, wrapped in `<hivemind_message from_id=…>` (held until a session exists) | No (queued for next turn) |
+| OpenCode | WebSocket → plugin → `client.session.promptAsync` into the root session last prompted, with that prompt's agent and model, wrapped in `<hivemind_message from_id=…>` (held until a session is prompted) | No (queued for next turn) |
 | Copilot | WebSocket → MCP (CLI extension `session.send()` planned) | No (queued) |
 
 ### Message flow
@@ -130,7 +130,7 @@ ln -s ~/claude-hivemind/src/opencode/plugin.ts ~/.config/opencode/plugins/claude
 CLAUDE_HIVEMIND=1 opencode
 ```
 
-The plugin needs a running broker (`bun start`, or any Claude Code peer starts one). Messages that arrive before the first prompt in a fresh TUI wait until a session exists. OpenCode 2 runs plugins differently and is not supported yet.
+The plugin needs a running broker (`bun start`, or any Claude Code peer starts one). Messages go to the session you last prompted, under that prompt's agent and model; in a fresh TUI they wait until your first prompt. OpenCode 2 runs plugins differently and is not supported yet.
 
 **Migrating from the MCP route:** older dashboard launches wrote a project `opencode.json` with a `claude-hivemind` MCP entry and a fixed `CMUX_SURFACE_ID`. With the plugin installed, such a project registers twice: once through the plugin and once as a legacy MCP peer whose messages are typed into a cmux surface that may no longer exist. Remove the `claude-hivemind` entry from those files (`grep -l claude-hivemind ~/source/*/*/opencode.json`).
 

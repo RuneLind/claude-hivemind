@@ -2,21 +2,30 @@
  * Picks the OpenCode session that receives hivemind messages, and delivers
  * them with the SDK's prompt_async (`client.session.promptAsync`).
  *
- * The target is the root session (no parentID) the human last used in THIS
- * OpenCode process: the last root session created, prompted, or calling a
- * hivemind tool. Subagent sessions never receive peer messages. Until a root
- * session is known (a fresh TUI before its first prompt), messages wait in
- * memory and are flushed in order once one appears.
+ * The target is the root session (no parentID) the user last prompted in THIS
+ * OpenCode process. A message is sent with that prompt's agent, model and
+ * variant: prompt_async without them runs the default agent, so a peer could
+ * otherwise act as "build" in a session the user keeps in "plan". A session
+ * whose last prompt this process has not seen gets no messages; they wait in
+ * memory, in order, until one is prompted. Subagent sessions never receive
+ * peer messages.
  */
 
 import type { InboundMessage } from "./broker-peer.ts";
+
+export interface PromptPrefs {
+  agent?: string;
+  model?: { providerID: string; modelID: string };
+  variant?: string;
+}
 
 /** The slice of the OpenCode v1 SDK client this module calls. */
 export interface SessionClient {
   session: {
     promptAsync(opts: {
       path: { id: string };
-      body: { parts: { type: "text"; text: string }[] };
+      // `variant` is accepted by the server; the v1 SDK types omit it.
+      body: { parts: { type: "text"; text: string }[] } & PromptPrefs;
     }): Promise<{ error?: unknown }>;
     get(opts: { path: { id: string } }): Promise<{ data?: { id: string; parentID?: string }; error?: unknown }>;
   };
@@ -27,12 +36,19 @@ export interface SessionInfoLike {
   parentID?: string;
 }
 
+/** A message the server rejects this many times is dropped (and logged). */
+export const MAX_ATTEMPTS = 3;
+
 export class SessionInbox {
   active: string | null = null;
   private roots = new Set<string>();
   private children = new Set<string>();
-  private pending: string[] = [];
+  private prefs = new Map<string, PromptPrefs>();
+  private pending: { text: string; attempts: number }[] = [];
   private flushing: Promise<void> = Promise.resolve();
+  /** Touches are numbered by start; a touch never overrides one that started later. */
+  private touchSeq = 0;
+  private activatedSeq = 0;
 
   constructor(
     private client: SessionClient,
@@ -53,21 +69,32 @@ export class SessionInbox {
     return this.children.has(id);
   }
 
-  /** A session was created: a new root becomes the target (the TUI shows it). */
+  /** A new session is only observed: it becomes a target once it is prompted. */
   created(info: SessionInfoLike): void {
     this.observe(info);
-    if (!info.parentID) this.activate(info.id);
   }
 
   deleted(id: string): void {
     this.roots.delete(id);
     this.children.delete(id);
+    this.prefs.delete(id);
     if (this.active === id) this.active = null;
   }
 
-  /** A session was prompted or called a tool: make it the target if it is a root. */
-  async touch(id: string): Promise<void> {
-    if (await this.isRoot(id)) this.activate(id);
+  /**
+   * A session was prompted (prefs from the chat.message hook) or called a
+   * hivemind tool (no prefs). It becomes the target if it is a root session
+   * whose prompt prefs are known, unless a touch that started later has
+   * already chosen a target while this one's root lookup ran.
+   */
+  async touch(id: string, prefs?: PromptPrefs): Promise<void> {
+    if (prefs) this.prefs.set(id, prefs);
+    const seq = ++this.touchSeq;
+    if (!(await this.isRoot(id))) return;
+    if (!this.prefs.has(id) || seq < this.activatedSeq) return;
+    this.activatedSeq = seq;
+    this.active = id;
+    if (this.pending.length > 0) this.enqueueFlush();
   }
 
   private async isRoot(id: string): Promise<boolean> {
@@ -85,13 +112,8 @@ export class SessionInbox {
     return false;
   }
 
-  private activate(id: string): void {
-    this.active = id;
-    if (this.pending.length > 0) this.enqueueFlush();
-  }
-
   deliver(text: string): void {
-    this.pending.push(text);
+    this.pending.push({ text, attempts: 0 });
     if (this.active) this.enqueueFlush();
   }
 
@@ -107,24 +129,31 @@ export class SessionInbox {
   private async flush(): Promise<void> {
     while (this.pending.length > 0 && this.active) {
       const target = this.active;
-      const text = this.pending[0]!;
+      const item = this.pending[0]!;
       let ok = false;
       try {
         const res = await this.client.session.promptAsync({
           path: { id: target },
-          body: { parts: [{ type: "text", text }] },
+          body: { parts: [{ type: "text", text: item.text }], ...this.prefs.get(target) },
         });
         ok = !res.error;
         if (!ok) this.log(`promptAsync to ${target} failed: ${JSON.stringify(res.error)}`);
       } catch (e) {
         this.log(`promptAsync to ${target} threw: ${e}`);
       }
-      if (!ok) {
-        // Keep the message and wait for the next touch/created to pick a target.
-        if (this.active === target) this.active = null;
-        return;
+      if (ok) {
+        this.pending.shift();
+        continue;
       }
-      this.pending.shift();
+      item.attempts++;
+      if (item.attempts >= MAX_ATTEMPTS) {
+        // Stop one bad message from holding back the rest.
+        this.pending.shift();
+        this.log(`dropped a peer message after ${MAX_ATTEMPTS} failed attempts: ${item.text.slice(0, 120)}`);
+      }
+      // The session may be gone: wait for the next prompt to pick a target.
+      if (this.active === target) this.active = null;
+      return;
     }
   }
 }

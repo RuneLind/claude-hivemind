@@ -1,30 +1,45 @@
 import { describe, test, expect } from "bun:test";
 import { SessionInbox, formatInbound, type SessionClient } from "./session-inbox.ts";
 
-type Call = { id: string; text: string };
+type Call = { id: string; text: string; agent?: string; model?: unknown; variant?: string };
 
-function fakeClient(opts: { parents?: Record<string, string | undefined>; fail?: (id: string) => boolean } = {}) {
+function fakeClient(
+  opts: {
+    parents?: Record<string, string | undefined>;
+    fail?: (id: string, text: string) => boolean;
+    slowGet?: Record<string, Promise<void>>;
+  } = {},
+) {
   const calls: Call[] = [];
+  const attempts: Call[] = [];
   const gets: string[] = [];
   const client: SessionClient = {
     session: {
       async promptAsync({ path, body }) {
-        if (opts.fail?.(path.id)) return { error: { name: "NotFound" } };
-        calls.push({ id: path.id, text: body.parts[0]!.text });
+        const call: Call = { id: path.id, text: body.parts[0]!.text };
+        if (body.agent !== undefined) call.agent = body.agent;
+        if (body.model !== undefined) call.model = body.model;
+        if (body.variant !== undefined) call.variant = body.variant;
+        attempts.push(call);
+        if (opts.fail?.(path.id, call.text)) return { error: { name: "BadRequest" } };
+        calls.push(call);
         return {};
       },
       async get({ path }) {
         gets.push(path.id);
+        await opts.slowGet?.[path.id];
         if (!(path.id in (opts.parents ?? {}))) return { error: { name: "NotFound" } };
         return { data: { id: path.id, parentID: opts.parents![path.id] } };
       },
     },
   };
-  return { client, calls, gets };
+  return { client, calls, attempts, gets };
 }
 
+const build = { agent: "build" };
+
 describe("SessionInbox", () => {
-  test("holds messages until a root session exists, then delivers them in order", async () => {
+  test("holds messages until a root session is prompted, then delivers them in order", async () => {
     const { client, calls } = fakeClient();
     const inbox = new SessionInbox(client);
     inbox.deliver("one");
@@ -34,32 +49,56 @@ describe("SessionInbox", () => {
     expect(inbox.pendingCount).toBe(2);
 
     inbox.created({ id: "root-1" });
+    await inbox.touch("root-1", build);
     await inbox.idle();
-    expect(calls).toEqual([
-      { id: "root-1", text: "one" },
-      { id: "root-1", text: "two" },
+    expect(calls.map((c) => [c.id, c.text])).toEqual([
+      ["root-1", "one"],
+      ["root-1", "two"],
     ]);
     expect(inbox.pendingCount).toBe(0);
+  });
+
+  test("delivers with the agent, model and variant of the session's last prompt", async () => {
+    const { client, calls } = fakeClient();
+    const inbox = new SessionInbox(client);
+    inbox.created({ id: "a" });
+    const model = { providerID: "anthropic", modelID: "claude-x" };
+    await inbox.touch("a", { agent: "plan", model, variant: "high" });
+    inbox.deliver("hi");
+    await inbox.idle();
+    expect(calls).toEqual([{ id: "a", text: "hi", agent: "plan", model, variant: "high" }]);
+  });
+
+  test("a session that was never prompted does not receive messages: its agent is unknown", async () => {
+    const { client, calls } = fakeClient({ parents: { a: undefined } });
+    const inbox = new SessionInbox(client);
+    inbox.created({ id: "a" });
+    await inbox.touch("a"); // a tool call carries no agent
+    inbox.deliver("hi");
+    await inbox.idle();
+    expect(calls).toHaveLength(0);
+    expect(inbox.active).toBeNull();
   });
 
   test("a subagent session never becomes the target", async () => {
     const { client, calls } = fakeClient();
     const inbox = new SessionInbox(client);
     inbox.created({ id: "root-1" });
+    await inbox.touch("root-1", build);
     inbox.created({ id: "child-1", parentID: "root-1" });
-    await inbox.touch("child-1");
+    await inbox.touch("child-1", build);
     inbox.deliver("hi");
     await inbox.idle();
     expect(inbox.active).toBe("root-1");
-    expect(calls).toEqual([{ id: "root-1", text: "hi" }]);
+    expect(calls.map((c) => c.id)).toEqual(["root-1"]);
   });
 
   test("touch on an unseen session asks the server whether it is a root", async () => {
     const { client, gets } = fakeClient({ parents: { resumed: undefined, sub: "resumed" } });
     const inbox = new SessionInbox(client);
-    await inbox.touch("sub");
+    await inbox.touch("sub", build);
     expect(inbox.active).toBeNull();
-    await inbox.touch("resumed");
+    await inbox.touch("resumed", build);
     expect(inbox.active).toBe("resumed");
     expect(gets).toEqual(["sub", "resumed"]);
     // Classification is cached: a second touch does not ask again.
@@ -70,7 +109,7 @@ describe("SessionInbox", () => {
   test("an unknown session (lookup fails) is not treated as a root", async () => {
     const { client } = fakeClient();
     const inbox = new SessionInbox(client);
-    await inbox.touch("ghost");
+    await inbox.touch("ghost", build);
     expect(inbox.active).toBeNull();
   });
 
@@ -79,16 +118,40 @@ describe("SessionInbox", () => {
     const inbox = new SessionInbox(client);
     inbox.created({ id: "a" });
     inbox.created({ id: "b" });
-    await inbox.touch("a");
+    await inbox.touch("b", build);
+    await inbox.touch("a", build);
     inbox.deliver("x");
     await inbox.idle();
-    expect(calls).toEqual([{ id: "a", text: "x" }]);
+    expect(calls.map((c) => c.id)).toEqual(["a"]);
+  });
+
+  test("a slow root lookup does not overwrite a target chosen while it ran", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const { client } = fakeClient({ parents: { a: undefined }, slowGet: { a: gate } });
+    const inbox = new SessionInbox(client);
+    const slow = inbox.touch("a", build); // unseen: waits on session.get
+    inbox.created({ id: "b" });
+    await inbox.touch("b", build);
+    release();
+    await slow;
+    expect(inbox.active).toBe("b");
+  });
+
+  test("of two touches running at once, the one that started last wins", async () => {
+    const { client } = fakeClient();
+    const inbox = new SessionInbox(client);
+    inbox.created({ id: "a" });
+    inbox.created({ id: "b" });
+    await Promise.all([inbox.touch("a", build), inbox.touch("b", build)]);
+    expect(inbox.active).toBe("b");
   });
 
   test("a failed prompt keeps the message and waits for the next target", async () => {
     const { client, calls } = fakeClient({ fail: (id) => id === "gone" });
     const inbox = new SessionInbox(client);
     inbox.created({ id: "gone" });
+    await inbox.touch("gone", build);
     inbox.deliver("keep me");
     await inbox.idle();
     expect(calls).toHaveLength(0);
@@ -96,14 +159,31 @@ describe("SessionInbox", () => {
     expect(inbox.pendingCount).toBe(1);
 
     inbox.created({ id: "fresh" });
+    await inbox.touch("fresh", build);
     await inbox.idle();
-    expect(calls).toEqual([{ id: "fresh", text: "keep me" }]);
+    expect(calls.map((c) => [c.id, c.text])).toEqual([["fresh", "keep me"]]);
+  });
+
+  test("a message the server keeps rejecting is dropped after 3 attempts; the ones behind it still go", async () => {
+    const { client, calls, attempts } = fakeClient({ fail: (_id, text) => text === "bad" });
+    const inbox = new SessionInbox(client);
+    inbox.created({ id: "a" });
+    inbox.deliver("bad");
+    inbox.deliver("good");
+    for (let i = 0; i < 5; i++) {
+      await inbox.touch("a", build);
+      await inbox.idle();
+    }
+    expect(attempts.filter((c) => c.text === "bad")).toHaveLength(3);
+    expect(calls.map((c) => c.text)).toEqual(["good"]);
+    expect(inbox.pendingCount).toBe(0);
   });
 
   test("deleting the active session clears the target", async () => {
     const { client, calls } = fakeClient();
     const inbox = new SessionInbox(client);
     inbox.created({ id: "a" });
+    await inbox.touch("a", build);
     inbox.deleted("a");
     inbox.deliver("later");
     await inbox.idle();

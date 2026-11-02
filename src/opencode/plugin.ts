@@ -99,7 +99,7 @@ const HivemindPlugin: Plugin = async ({ client, directory }): Promise<Hooks> => 
     },
 
     "chat.message": async (input) => {
-      await inbox.touch(input.sessionID);
+      await inbox.touch(input.sessionID, { agent: input.agent, model: input.model, variant: input.variant });
     },
 
     "experimental.chat.system.transform": async (input, output) => {
