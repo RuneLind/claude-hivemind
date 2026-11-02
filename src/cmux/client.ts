@@ -132,12 +132,13 @@ export async function listWorkspaces(): Promise<{ id: string; name: string }[]> 
   return (result.workspaces ?? []).map((w) => ({ id: w.id, name: w.title ?? w.name ?? "" }));
 }
 
-export async function createWorkspace(name: string): Promise<string> {
+export async function createWorkspace(name: string): Promise<{ workspaceId: string; surfaceId: string | null }> {
   const res = await rpc("workspace.create", { name });
   assertOk(res, "create workspace");
-  // cmux API returns workspace_id or id depending on version
-  const result = res.result as { workspace_id?: string; id?: string };
-  return result.workspace_id ?? result.id ?? "";
+  // cmux API returns workspace_id or id depending on version; 0.64+ also
+  // returns the new workspace's terminal as surface_id.
+  const result = res.result as { workspace_id?: string; id?: string; surface_id?: string };
+  return { workspaceId: result.workspace_id ?? result.id ?? "", surfaceId: result.surface_id ?? null };
 }
 
 export async function sendText(text: string, surfaceId?: string): Promise<void> {
@@ -164,12 +165,19 @@ export async function renameWorkspace(workspaceRef: string, title: string): Prom
   assertOk(res, "rename workspace");
 }
 
-export async function getActiveSurface(): Promise<string | null> {
-  const res = await rpc("surface.list", {});
-  if (!res.ok) return null;
-  const result = res.result as { surfaces?: { id: string; focused: boolean }[] };
-  const focused = result.surfaces?.find(s => s.focused);
-  return focused?.id ?? result.surfaces?.[0]?.id ?? null;
+/**
+ * The terminal a launcher types into: the surface workspace.create returned,
+ * else the selected surface of that workspace. surface.list without a
+ * workspace_id lists the CALLER's workspace (cmux 0.64+), which typed launch
+ * commands into the broker's own terminal.
+ */
+async function targetSurface(created: { workspaceId: string; surfaceId: string | null }): Promise<string | undefined> {
+  if (created.surfaceId) return created.surfaceId;
+  const res = await rpc("surface.list", { workspace_id: created.workspaceId });
+  if (!res.ok) return undefined;
+  const result = res.result as { surfaces?: { id: string; focused?: boolean; selected_in_pane?: boolean }[] };
+  const selected = result.surfaces?.find((s) => s.selected_in_pane || s.focused);
+  return selected?.id ?? result.surfaces?.[0]?.id;
 }
 
 export interface LaunchOptions {
@@ -218,11 +226,10 @@ export async function waitForShellReady(
 
 export async function launchOpenCodeInstance(opts: LaunchOptions): Promise<{ workspaceId: string }> {
   const baseName = opts.name ?? opts.directory.split("/").pop() ?? "opencode";
-  const workspaceId = await createWorkspace(`${baseName} - OpenCode`);
+  const created = await createWorkspace(`${baseName} - OpenCode`);
+  const workspaceId = created.workspaceId;
   await selectWorkspace(workspaceId);
-
-  // The terminal the command is typed into.
-  const surfaceId = await getActiveSurface() ?? undefined;
+  const surfaceId = await targetSurface(created);
   if (surfaceId) await waitForShellReady(surfaceId);
 
   // The initial prompt rides on --prompt rather than being typed later, so it
@@ -235,7 +242,8 @@ export async function launchOpenCodeInstance(opts: LaunchOptions): Promise<{ wor
 
 export async function launchClaudeInstance(opts: LaunchOptions): Promise<{ workspaceId: string }> {
   const name = opts.name ?? opts.directory.split("/").pop() ?? "claude";
-  const workspaceId = await createWorkspace(name);
+  const created = await createWorkspace(name);
+  const workspaceId = created.workspaceId;
   await selectWorkspace(workspaceId);
 
   const flags = opts.flags ?? [];
@@ -251,7 +259,7 @@ export async function launchClaudeInstance(opts: LaunchOptions): Promise<{ works
     ...flags,
   ].join(" ");
 
-  const surfaceId = await getActiveSurface() ?? undefined;
+  const surfaceId = await targetSurface(created);
   await sendText(claudeCmd, surfaceId);
   await sendKey("enter", surfaceId);
 
