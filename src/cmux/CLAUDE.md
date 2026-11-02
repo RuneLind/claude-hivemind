@@ -28,7 +28,7 @@ The `rpc()` function in `client.ts` opens a new TCP socket per call — acceptab
 | workspace.create | name | New workspace |
 | workspace.select | workspace_id | Focus before sending |
 | workspace.close | workspace_id | Cleanup |
-| surface.list | — | Get surface ID after select |
+| surface.list | workspace_id | Fallback: the workspace's selected surface (`selected_in_pane` / `focused`). Without `workspace_id` it lists the CALLER's workspace. No surface → the launch fails rather than typing untargeted |
 | surface.send_text | text, surface_id | Send commands |
 | surface.send_key | key, surface_id | Send keystrokes |
 | surface.read_text | surface_id | Read the terminal's visible text (shell readiness) |
@@ -39,7 +39,7 @@ The `rpc()` function in `client.ts` opens a new TCP socket per call — acceptab
 
 1. `workspace.create` — new workspace named after the repo
 2. `workspace.select` — focus it
-3. `surface.list` — capture the surface ID for targeted input
+3. Take the new terminal's `surface_id` from the `workspace.create` result (fallback: `surface.list` with that `workspace_id`) for targeted input
 4. `surface.send_text` — send `cd <dir> && CLAUDE_HIVEMIND=1 claude --name <name> --dangerously-load-development-channels server:claude-hivemind --dangerously-skip-permissions`
 5. `surface.send_key` enter — execute the command
 6. setTimeout 4s + 7s → `surface.send_key` enter — auto-confirm development channels prompt (two attempts to cover slow startups)
@@ -53,7 +53,7 @@ Surface IDs are captured so delayed keystrokes target the correct terminal even 
 
 1. `workspace.create` — new workspace named "<repo> - OpenCode"
 2. `workspace.select` — focus it
-3. `surface.list` — capture surface ID
+3. Take the new terminal's surface ID, as above
 4. `waitForShellReady()` — poll `surface.read_text` until the shell has drawn its prompt and stopped changing (max 10s). Typing earlier lost the Enter: the command sat unexecuted on the prompt line.
 5. `surface.send_text` + `send_key enter` — `cd <dir> && CLAUDE_HIVEMIND=1 OPENCODE_CONFIG_CONTENT='{"plugin":["file://…/src/opencode/plugin.ts"],"permission":{"*":"allow"}}' opencode [--prompt '<initial prompt>']` (built by `opencode-command.ts`)
 
