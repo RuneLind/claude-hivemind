@@ -113,10 +113,11 @@ function waitForMessage<T extends { type: string }>(
 /** Register a peer and wait for the "registered" response. */
 async function registerPeer(
   ws: WebSocket,
-  opts: { cwd?: string; namespace?: string; summary?: string; pid?: number } = {}
+  opts: { cwd?: string; namespace?: string; summary?: string; pid?: number; acks?: boolean } = {}
 ): Promise<BrokerMessage & { type: "registered" }> {
   await waitForOpen(ws);
-  const msg: ClientMessage = {
+  const msg: ClientMessage & Record<string, unknown> = {
+    ...(opts.acks ? { acks: true } : {}),
     type: "register",
     pid: opts.pid ?? process.pid,
     cwd: opts.cwd ?? "/test/peer",
@@ -391,6 +392,75 @@ describe("broker", () => {
       const queued = await queuedPromise;
       expect(queued.text).toBe("queued ping");
       expect(queued.correlation_id).toBe("tok-queued-9");
+    });
+
+    test("an acking peer gets an unacked message again on reconnect, and not once acked", async () => {
+      const ns = "ack-ns";
+      const sender = connectPeer(testPort, ns);
+      await registerPeer(sender, { cwd: "/test/ack-sender", namespace: ns, pid: spawnSleeper() });
+      const pidR = spawnSleeper();
+      const r1 = connectPeer(testPort, ns);
+      const reg = await registerPeer(r1, { cwd: "/test/ack-receiver", namespace: ns, pid: pidR, acks: true });
+
+      const first = waitForMessage<BrokerMessage & { type: "message" }>(r1, "message");
+      sendMessage(sender, { type: "send_message", to: reg.id, text: "needs ack" });
+      const got1 = await first;
+      expect(got1.text).toBe("needs ack");
+
+      // Disconnect without acking: the message must come back.
+      await closeSocket(r1);
+      removeFromActive(r1);
+      await Bun.sleep(200);
+      const r2 = connectPeer(testPort, ns);
+      const replay = waitForMessage<BrokerMessage & { type: "message" }>(r2, "message", 2000);
+      await registerPeer(r2, { cwd: "/test/ack-receiver", namespace: ns, pid: pidR, acks: true });
+      const got2 = await replay;
+      expect(got2.text).toBe("needs ack");
+      expect(typeof (got2 as any).message_id).toBe("number");
+      expect((got2 as any).message_id).toBe((got1 as any).message_id);
+
+      // A replay is not an ack either: a second reconnect still gets it.
+      await closeSocket(r2);
+      removeFromActive(r2);
+      await Bun.sleep(200);
+      const r2b = connectPeer(testPort, ns);
+      const replay2 = waitForMessage<BrokerMessage & { type: "message" }>(r2b, "message", 2000);
+      await registerPeer(r2b, { cwd: "/test/ack-receiver", namespace: ns, pid: pidR, acks: true });
+      expect((await replay2).text).toBe("needs ack");
+
+      // Ack it: the next reconnect gets nothing.
+      sendMessage(r2b, { type: "ack", message_id: (got2 as any).message_id } as any);
+      await Bun.sleep(150);
+      await closeSocket(r2b);
+      removeFromActive(r2b);
+      await Bun.sleep(200);
+      const r3 = connectPeer(testPort, ns);
+      const none = waitForMessage(r3, "message", 600).then(() => "got", () => "none");
+      await registerPeer(r3, { cwd: "/test/ack-receiver", namespace: ns, pid: pidR, acks: true });
+      expect(await none).toBe("none");
+    });
+
+    test("an ack for a message addressed to another peer is ignored", async () => {
+      const ns = "ack-other-ns";
+      const sender = connectPeer(testPort, ns);
+      await registerPeer(sender, { cwd: "/test/acko-sender", namespace: ns, pid: spawnSleeper() });
+      const pidR = spawnSleeper();
+      const r1 = connectPeer(testPort, ns);
+      const reg = await registerPeer(r1, { cwd: "/test/acko-receiver", namespace: ns, pid: pidR, acks: true });
+      const first = waitForMessage<BrokerMessage & { type: "message" }>(r1, "message");
+      sendMessage(sender, { type: "send_message", to: reg.id, text: "mine" });
+      const got1 = await first;
+
+      // The sender tries to ack the receiver's message.
+      sendMessage(sender, { type: "ack", message_id: (got1 as any).message_id } as any);
+      await Bun.sleep(150);
+      await closeSocket(r1);
+      removeFromActive(r1);
+      await Bun.sleep(200);
+      const r2 = connectPeer(testPort, ns);
+      const replay = waitForMessage<BrokerMessage & { type: "message" }>(r2, "message", 2000);
+      await registerPeer(r2, { cwd: "/test/acko-receiver", namespace: ns, pid: pidR, acks: true });
+      expect((await replay).text).toBe("mine");
     });
 
     test("message to non-existent peer returns an error", async () => {

@@ -44,7 +44,7 @@ export class SessionInbox {
   private roots = new Set<string>();
   private children = new Set<string>();
   private prefs = new Map<string, PromptPrefs>();
-  private pending: { text: string; attempts: number }[] = [];
+  private pending: { text: string; attempts: number; onDelivered?: () => void }[] = [];
   private flushing: Promise<void> = Promise.resolve();
   /** Touches are numbered by start; a touch never overrides one that started later. */
   private touchSeq = 0;
@@ -112,8 +112,9 @@ export class SessionInbox {
     return false;
   }
 
-  deliver(text: string): void {
-    this.pending.push({ text, attempts: 0 });
+  /** Queue a message; `onDelivered` runs once prompt_async accepted it. */
+  deliver(text: string, onDelivered?: () => void): void {
+    this.pending.push({ text, attempts: 0, onDelivered });
     if (this.active) this.enqueueFlush();
   }
 
@@ -143,6 +144,11 @@ export class SessionInbox {
       }
       if (ok) {
         this.pending.shift();
+        try {
+          item.onDelivered?.();
+        } catch (e) {
+          this.log(`delivered callback threw: ${e}`);
+        }
         continue;
       }
       item.attempts++;

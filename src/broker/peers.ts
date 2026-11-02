@@ -71,6 +71,10 @@ export function createMessageStatements(db: Database) {
     markDelivered: db.prepare(
       `UPDATE messages SET delivered = 1 WHERE id = ?`
     ),
+    // For acks: a peer may only mark its own messages delivered.
+    markDeliveredTo: db.prepare(
+      `UPDATE messages SET delivered = 1 WHERE id = ? AND to_id = ?`
+    ),
     deleteOldDeliveredMessages: db.prepare(
       `DELETE FROM messages WHERE delivered = 1 AND sent_at < ?`
     ),
@@ -256,6 +260,28 @@ export function deliverOrQueue(
 
   // Synchronous delivery via WebSocket (MCP server, or the OpenCode plugin)
   const targetWs = ctx.peerSockets.get(toId);
+  // A peer that acks (the OpenCode plugin) holds a message in memory until it
+  // can hand it to a session. The row stays undelivered until the ack, so a
+  // message lost with the process is replayed when the peer registers again.
+  if (targetWs && targetWs.readyState === WS_OPEN && (targetWs.data as { acks?: boolean } | undefined)?.acks) {
+    try {
+      const result = msgStmts.insertMessage.run(fromId, toId, text, now, 0, correlationId);
+      targetWs.send(JSON.stringify({
+        type: "message",
+        from_id: fromId,
+        from_summary: sender?.summary ?? "",
+        from_cwd: sender?.cwd ?? "",
+        text,
+        sent_at: now,
+        correlation_id: correlationId ?? undefined,
+        message_id: Number(result.lastInsertRowid),
+      } satisfies BrokerMessage));
+      return target && isPeerLive(target, ctx.peerSockets) ? "delivered" : "queued";
+    } catch (e) {
+      log(`Failed to send to acking peer ${toId}: ${e}`);
+      return "failed";
+    }
+  }
   if (targetWs && targetWs.readyState === WS_OPEN) {
     try {
       targetWs.send(JSON.stringify({

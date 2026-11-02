@@ -60,11 +60,15 @@ export type ClientMessage =
       agent_type?: AgentType;
       surface_id?: string;   // cmux surface ID for terminal push delivery
       workspace_id?: string; // cmux workspace ID for rename on registration
+      // The peer acks each message once it has handed it on (OpenCode plugin).
+      // Until then the message stays undelivered and is replayed on re-register.
+      acks?: boolean;
     }
   | { type: "set_summary"; summary: string }
   | { type: "send_message"; to: PeerId; text: string; correlation_id?: string; send_id?: string }
   | { type: "list_peers"; scope: "namespace" | "machine" }
   | { type: "heartbeat" }
+  | { type: "ack"; message_id: number }
   | {
       type: "register_service";
       port: number;
@@ -88,6 +92,8 @@ export type BrokerMessage =
       // never interprets it — it round-trips whatever a sender attached to
       // `send_message`, so a peer can match a reply to the request it answers.
       correlation_id?: string;
+      // Row id, sent to peers that registered with `acks`; they echo it in "ack".
+      message_id?: number;
     }
   | { type: "peers"; peers: Peer[] }
   // Reports the outcome of a send_message that carried a send_id, so the

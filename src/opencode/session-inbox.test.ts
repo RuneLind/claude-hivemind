@@ -179,6 +179,22 @@ describe("SessionInbox", () => {
     expect(inbox.pendingCount).toBe(0);
   });
 
+  test("the delivered callback runs after a successful prompt, never after a failed one", async () => {
+    let failing = true;
+    const { client } = fakeClient({ fail: () => failing });
+    const inbox = new SessionInbox(client);
+    const done: string[] = [];
+    inbox.created({ id: "a" });
+    (inbox.deliver as any)("m1", () => done.push("m1"));
+    await inbox.touch("a", build);
+    await inbox.idle();
+    expect(done).toEqual([]);
+    failing = false;
+    await inbox.touch("a", build);
+    await inbox.idle();
+    expect(done).toEqual(["m1"]);
+  });
+
   test("deleting the active session clears the target", async () => {
     const { client, calls } = fakeClient();
     const inbox = new SessionInbox(client);

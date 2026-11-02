@@ -40,7 +40,7 @@ graph TB
 | Agent | Push mechanism | Interrupts mid-task? |
 |-------|----------------|----------------------|
 | Claude Code | `claude/channel` MCP notification → `<channel source="claude-hivemind">` block | Yes |
-| OpenCode | WebSocket → plugin → `client.session.promptAsync` into the root session last prompted, with that prompt's agent and model, wrapped in `<hivemind_message from_id=…>` (held until a session is prompted) | No (queued for next turn) |
+| OpenCode | WebSocket → plugin → `client.session.promptAsync` into the root session last prompted, with that prompt's agent and model, wrapped in `<hivemind_message from_id=…>` (held until a session is prompted; the broker keeps it undelivered until the plugin acks, so it survives an OpenCode restart) | No (queued for next turn) |
 | Copilot | WebSocket → MCP (CLI extension `session.send()` planned) | No (queued) |
 
 ### Message flow

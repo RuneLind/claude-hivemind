@@ -58,6 +58,11 @@ const HivemindPlugin: Plugin = async ({ client, directory }): Promise<Hooks> => 
   const namespace = resolveNamespace(directory, await loadNamespaceConfig());
   const correlation = new CorrelationTracker();
   const inbox = new SessionInbox(client as unknown as SessionClient, log);
+  // Broker message ids this process holds (pending) or has handed to a
+  // session (delivered). The broker replays unacked ids on every register,
+  // so a reconnect must not queue a message twice.
+  const pendingIds = new Set<number>();
+  const deliveredIds = new Set<number>();
 
   const peer = new BrokerPeer({
     port: parseInt(process.env.CLAUDE_HIVEMIND_PORT ?? "7899", 10),
@@ -73,8 +78,20 @@ const HivemindPlugin: Plugin = async ({ client, directory }): Promise<Hooks> => 
       workspace_id: process.env.CMUX_WORKSPACE_ID || undefined,
     },
     onMessage: (msg) => {
+      const id = msg.message_id;
+      if (id !== undefined) {
+        // Already in a session: the ack was lost, so send it again.
+        if (deliveredIds.has(id)) return void peer.ack(id);
+        if (pendingIds.has(id)) return;
+        pendingIds.add(id);
+      }
       correlation.recordInbound(msg.from_id, msg.correlation_id);
-      inbox.deliver(formatInbound(msg));
+      inbox.deliver(formatInbound(msg), () => {
+        if (id === undefined) return;
+        pendingIds.delete(id);
+        deliveredIds.add(id);
+        peer.ack(id);
+      });
     },
     log,
   });

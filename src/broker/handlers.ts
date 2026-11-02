@@ -310,6 +310,7 @@ export function handlePeerMessage(
 
       ws.data.peerId = id;
       ws.data.namespace = namespace;
+      ws.data.acks = msg.acks === true;
 
       ws.subscribe(`ns:${namespace}`);
       ws.subscribe(`peer:${id}`);
@@ -334,9 +335,11 @@ export function handlePeerMessage(
           text: m.text,
           sent_at: m.sent_at,
           correlation_id: m.correlation_id ?? undefined,
+          ...(ws.data.acks ? { message_id: m.id } : {}),
         };
         ws.send(JSON.stringify(deliverMsg));
-        msgStmts.markDelivered.run(m.id);
+        // An acking peer marks it delivered itself, with "ack".
+        if (!ws.data.acks) msgStmts.markDelivered.run(m.id);
       }
 
       const peer = getPeer(peerStmts, id)!;
@@ -443,6 +446,12 @@ export function handlePeerMessage(
         .filter((p) => isPeerLive(p, ctx.peerSockets));
 
       ws.send(JSON.stringify({ type: "peers", peers } satisfies BrokerMessage));
+      break;
+    }
+
+    case "ack": {
+      if (!ws.data.peerId) return;
+      msgStmts.markDeliveredTo.run(msg.message_id, ws.data.peerId);
       break;
     }
 

@@ -68,6 +68,17 @@ describe("BrokerPeer", () => {
     expect(reg.surface_id).toBeUndefined();
   });
 
+  test("registers with acks and sends an ack for a message id", async () => {
+    broker = fakeBroker();
+    peer = new BrokerPeer({ port: broker.server.port!, namespace: "default", register, onMessage: () => {} });
+    peer.start();
+    await until(() => peer!.connected);
+    expect(broker.received.find((m) => m.type === "register").acks).toBe(true);
+    (peer as any).ack(42);
+    await until(() => broker!.received.some((m) => m.type === "ack"));
+    expect(broker.received.find((m) => m.type === "ack")).toEqual({ type: "ack", message_id: 42 });
+  });
+
   test("passes inbound messages to onMessage", async () => {
     const got: InboundMessage[] = [];
     broker = fakeBroker();

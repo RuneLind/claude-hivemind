@@ -197,10 +197,10 @@ describe("OpenCode delivery routing", () => {
     expect(cmuxCalls.some((c) => c.kind === "key" && c.arg === "enter")).toBe(true);
   });
 
-  test("an opencode peer without surface_id (the plugin) gets the message on its WebSocket", () => {
+  test("an opencode peer without surface_id (the plugin) gets the message on its WebSocket, undelivered until it acks", () => {
     insertPeer(peerStmts, { id: "oc-plugin", agent_type: "opencode" });
     const sent: string[] = [];
-    ctx.peerSockets.set("oc-plugin", { readyState: 1, send: (s: string) => sent.push(s) });
+    ctx.peerSockets.set("oc-plugin", { readyState: 1, send: (s: string) => sent.push(s), data: { acks: true } });
     globalThis.fetch = (async () => {
       throw new Error("no HTTP delivery expected");
     }) as any;
@@ -213,7 +213,8 @@ describe("OpenCode delivery routing", () => {
       expect(sent).toHaveLength(1);
       const payload = JSON.parse(sent[0]!);
       expect(payload).toMatchObject({ type: "message", from_id: "sender", text: "hi", correlation_id: "tok-9" });
-      expect(countDelivered("oc-plugin")).toBe(1);
+      expect(typeof payload.message_id).toBe("number");
+      expect(countDelivered("oc-plugin")).toBe(0);
     } finally {
       ctx.peerSockets.delete("oc-plugin");
     }

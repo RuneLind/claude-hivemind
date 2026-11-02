@@ -39,7 +39,7 @@ Docker, log subscriptions, and cmux each have a `createXState()` factory that re
 `deliverOrQueue()` in `peers.ts` routes messages based on the target peer's `agent_type`:
 
 - **claude-code** (default): Send via WebSocket → MCP server → MCP channel notification (interrupts mid-task)
-- **opencode** (plugin, no `surface_id`): WebSocket → plugin (`src/opencode/`) → `client.session.promptAsync` into the active session (queued for next turn). Carries `correlation_id`.
+- **opencode** (plugin, no `surface_id`): WebSocket → plugin (`src/opencode/`) → `client.session.promptAsync` into the active session (queued for next turn). Carries `correlation_id`. The plugin registers with `acks: true`: the broker sends `message_id`, keeps the row undelivered until the plugin sends `{type:"ack", message_id}` (only the addressee can ack), and replays unacked rows on every register. Peers without `acks` are marked delivered on send/replay as before.
 - **opencode** with `surface_id` (legacy MCP route): typed into the cmux terminal (`deliverViaCmux`). The `opencode_url` column is unused and always null.
 - **copilot**: WebSocket delivery (same as claude-code for now; future: CLI extension `session.send()`)
 
