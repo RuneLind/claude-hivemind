@@ -486,6 +486,22 @@ describe("SessionInbox in a process nobody has prompted yet", () => {
     expect(calls.map((c) => [c.id, c.text])).toEqual([["ses-tui", "two"]]);
   });
 
+  test("a message that arrived during a prompt which set no target is typed once that prompt's lookup ends", async () => {
+    let releaseGet!: () => void;
+    const getGate = new Promise<void>((r) => (releaseGet = r));
+    const { client, tui } = fakeClient({ parents: { sub: "root-x" }, slowGet: { sub: getGate } });
+    const inbox = newInbox(client);
+    const touching = inbox.touch("sub", build, "x"); // a subagent's prompt, not seen yet
+    inbox.deliver("one");
+    await inbox.idle();
+    expect(tui).toEqual([]);
+    releaseGet();
+    await touching;
+    await inbox.idle();
+    expect(inbox.active).toBeNull();
+    expect(tui).toEqual(["append:one", "submit"]);
+  });
+
   test("a repeated message retries a failed append", async () => {
     let failAppend = true;
     const { client, tui } = fakeClient({ tuiAppend: () => (failAppend ? { error: { name: "Down" } } : { data: true }) });

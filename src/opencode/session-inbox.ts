@@ -135,14 +135,17 @@ export class SessionInbox {
     if (prefs) this.prefs.set(id, prefs);
     const seq = ++this.touchSeq;
     this.touching++;
+    let root = false;
     try {
-      if (!(await this.isRoot(id))) return;
+      root = await this.isRoot(id);
     } finally {
       this.touching--;
     }
-    if (!this.prefs.has(id) || seq < this.activatedSeq) return;
-    this.activatedSeq = seq;
-    this.active = id;
+    if (root && this.prefs.has(id) && seq >= this.activatedSeq) {
+      this.activatedSeq = seq;
+      this.active = id;
+    }
+    // Also when no target was set: typing skipped during the lookup resumes.
     this.pump();
   }
 
