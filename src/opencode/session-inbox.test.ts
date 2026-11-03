@@ -388,7 +388,7 @@ describe("SessionInbox in a process nobody has prompted yet", () => {
   });
 
   test("a prompt confirming the typed message while promptAsync sends it drops nothing else", async () => {
-    // Past the confirmation window, so flush sends "one" before the TUI's prompt arrives.
+    // Past the confirmation window, so "one" goes by promptAsync before the TUI's prompt arrives.
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     const { client, calls } = fakeClient({ slowPrompt: (text) => (text === "one" ? gate : undefined) });
@@ -399,7 +399,7 @@ describe("SessionInbox in a process nobody has prompted yet", () => {
     await inbox.idle();
     inbox.created({ id: "root-1" });
     await inbox.touch("root-1", build, "unrelated");
-    await Bun.sleep(CONFIRM_MS + 20); // window over: flush starts sending "one"
+    await Bun.sleep(CONFIRM_MS + 20); // window over: promptAsync starts sending "one"
     await inbox.touch("root-1", build, "one"); // a late prompt containing "one" lands meanwhile
     release();
     await inbox.idle();
@@ -408,7 +408,7 @@ describe("SessionInbox in a process nobody has prompted yet", () => {
     expect(inbox.pendingCount).toBe(0);
   });
 
-  test("a prompt that lands right after the submit does not make flush send the typed message too", async () => {
+  test("a prompt that lands right after the submit does not send the typed message by promptAsync too", async () => {
     const { client, calls } = fakeClient();
     const inbox = newInbox(client, 300);
     const done: string[] = [];
@@ -537,7 +537,7 @@ describe("SessionInbox after losing its target", () => {
     inbox.deliver("one");
     await inbox.idle();
     inbox.created({ id: "a" });
-    await inbox.touch("a", build, "x"); // flush now waits for "one" to be confirmed
+    await inbox.touch("a", build, "x"); // "one" is now held for its confirmation
     const t0 = Date.now();
     inbox.deleted("a");
     await inbox.idle();
@@ -634,7 +634,7 @@ describe("SessionInbox never runs a send and a TUI attempt at once", () => {
     inbox.deliver("two");
     await inbox.idle();
     inbox.created({ id: "a" });
-    await inbox.touch("a", build, "user's own prompt"); // flush waits for "one"
+    await inbox.touch("a", build, "user's own prompt"); // "one" is held for its confirmation
     const t0 = Date.now();
     await inbox.touch("a", build, "one"); // the TUI's prompt confirms it
     await inbox.idle();

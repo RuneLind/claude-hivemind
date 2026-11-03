@@ -8,13 +8,16 @@
  * otherwise act as "build" in a session the user keeps in "plan". Subagent
  * sessions never receive peer messages.
  *
- * Before any prompt, the first held message is typed into the TUI's prompt
- * box and submitted (`client.tui.appendPrompt` + `submitPrompt`). OpenCode
- * 1.19 answers both with `true` even when no TUI is attached (`opencode
- * serve`), so the message stays held until a prompt whose text contains it
- * reaches chat.message; that prompt also sets the target, and the rest follow
- * by prompt_async. Messages held with no TUI wait in memory, in order, until
- * a session is prompted. Identical messages still held are kept once.
+ * While no target exists, the first held message is typed into the TUI's
+ * prompt box and submitted (`client.tui.appendPrompt` + `submitPrompt`).
+ * OpenCode 1.19 answers both with `true` even when no TUI is attached
+ * (`opencode serve`), so the message stays held until a prompt whose text
+ * contains it reaches chat.message; that prompt also sets the target, and the
+ * rest follow by prompt_async. If another prompt sets the target first, the
+ * typed message is held for up to CONFIRM_MS before it, too, goes by
+ * prompt_async. Messages held with no TUI wait in memory, in order, until a
+ * session is prompted. While no target exists, identical messages are kept
+ * once.
  */
 
 import type { InboundMessage } from "./broker-peer.ts";
@@ -54,9 +57,10 @@ interface Pending {
 }
 
 /**
- * How long flush holds a typed message for the TUI's own prompt to confirm it
- * before sending it by prompt_async. Measured on OpenCode 1.19: chat.message
- * fires about 30 ms after the submit.
+ * How long a typed message is held, once a target exists, for the TUI's own
+ * prompt to confirm it before it is sent by prompt_async; counted from when
+ * submitPrompt returned. Measured on OpenCode 1.19: chat.message fired about
+ * 30 ms after the TUI received the submit command.
  */
 const CONFIRM_MS = 2_000;
 
@@ -113,7 +117,8 @@ export class SessionInbox {
 
   /**
    * No session receives messages any more: the first held message goes back to
-   * the TUI. Only the head is ever typed; it is typed again on every loss.
+   * the TUI (only the head is ever typed). If its append is still running, that
+   * attempt marks it typed again and it is not typed a second time.
    */
   private loseTarget(): void {
     this.active = null;
