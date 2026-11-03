@@ -5,10 +5,16 @@
  * The target is the root session (no parentID) the user last prompted in THIS
  * OpenCode process. A message is sent with that prompt's agent, model and
  * variant: prompt_async without them runs the default agent, so a peer could
- * otherwise act as "build" in a session the user keeps in "plan". A session
- * whose last prompt this process has not seen gets no messages; they wait in
- * memory, in order, until one is prompted. Subagent sessions never receive
- * peer messages.
+ * otherwise act as "build" in a session the user keeps in "plan". Subagent
+ * sessions never receive peer messages.
+ *
+ * Before any prompt, the first held message is typed into the TUI's prompt
+ * box and submitted (`client.tui.appendPrompt` + `submitPrompt`). OpenCode
+ * 1.19 answers both with `true` even when no TUI is attached (`opencode
+ * serve`), so the message stays held until a prompt whose text contains it
+ * reaches chat.message; that prompt also sets the target, and the rest follow
+ * by prompt_async. Messages held with no TUI wait in memory, in order, until
+ * a session is prompted. Identical messages still held are kept once.
  */
 
 import type { InboundMessage } from "./broker-peer.ts";
@@ -29,6 +35,10 @@ export interface SessionClient {
     }): Promise<{ error?: unknown }>;
     get(opts: { path: { id: string } }): Promise<{ data?: { id: string; parentID?: string }; error?: unknown }>;
   };
+  tui: {
+    appendPrompt(opts: { body: { text: string } }): Promise<{ data?: boolean; error?: unknown }>;
+    submitPrompt(): Promise<{ data?: boolean; error?: unknown }>;
+  };
 }
 
 export interface SessionInfoLike {
@@ -36,13 +46,21 @@ export interface SessionInfoLike {
   parentID?: string;
 }
 
+interface Pending {
+  text: string;
+  callbacks: (() => void)[];
+  /** Typed into the TUI; delivered once a prompt containing it is seen. */
+  typed: boolean;
+}
+
 export class SessionInbox {
   active: string | null = null;
   private roots = new Set<string>();
   private children = new Set<string>();
   private prefs = new Map<string, PromptPrefs>();
-  private pending: { text: string; onDelivered?: () => void }[] = [];
+  private pending: Pending[] = [];
   private flushing: Promise<void> = Promise.resolve();
+  private typing: Promise<void> = Promise.resolve();
   /** Touches are numbered by start; a touch never overrides one that started later. */
   private touchSeq = 0;
   private activatedSeq = 0;
@@ -79,12 +97,14 @@ export class SessionInbox {
   }
 
   /**
-   * A session was prompted (prefs from the chat.message hook). It becomes the
-   * target if it is a root session whose prompt prefs are known, unless a
+   * A session was prompted (prefs and text from the chat.message hook). A
+   * typed message the prompt's text contains is delivered. The session becomes
+   * the target if it is a root session whose prompt prefs are known, unless a
    * touch that started later has already chosen a target while this one's
    * root lookup ran.
    */
-  async touch(id: string, prefs?: PromptPrefs): Promise<void> {
+  async touch(id: string, prefs?: PromptPrefs, promptText?: string): Promise<void> {
+    if (promptText !== undefined) this.confirmTyped(promptText);
     if (prefs) this.prefs.set(id, prefs);
     const seq = ++this.touchSeq;
     if (!(await this.isRoot(id))) return;
@@ -109,15 +129,73 @@ export class SessionInbox {
     return false;
   }
 
-  /** Queue a message; `onDelivered` runs once prompt_async accepted it. */
+  /**
+   * Queue a message; `onDelivered` runs once it is delivered. A message
+   * identical to one still held is not queued again.
+   */
   deliver(text: string, onDelivered?: () => void): void {
-    this.pending.push({ text, onDelivered });
+    const same = this.pending.find((p) => p.text === text);
+    if (same) {
+      if (onDelivered) same.callbacks.push(onDelivered);
+      return;
+    }
+    this.pending.push({ text, callbacks: onDelivered ? [onDelivered] : [], typed: false });
     if (this.active) this.enqueueFlush();
+    else this.typing = this.typing.then(() => this.typeHead());
   }
 
-  /** Resolves once every flush queued so far has finished (used by tests). */
-  idle(): Promise<void> {
-    return this.flushing;
+  /** Resolves once every flush and TUI attempt queued so far has finished (used by tests). */
+  async idle(): Promise<void> {
+    await Promise.all([this.flushing, this.typing]);
+  }
+
+  /**
+   * Type the first held message into the TUI and submit it, once. A failed
+   * append is retried on the next deliver; a failed submit is not, because the
+   * text is already in the prompt box.
+   */
+  private async typeHead(): Promise<void> {
+    const head = this.pending[0];
+    if (!head || head.typed || this.active) return;
+    head.typed = true;
+    try {
+      const res = await this.client.tui.appendPrompt({ body: { text: head.text } });
+      if (res.error) {
+        this.log(`tui.appendPrompt failed: ${JSON.stringify(res.error)}`);
+        head.typed = false;
+        return;
+      }
+    } catch (e) {
+      this.log(`tui.appendPrompt threw: ${e}`);
+      head.typed = false;
+      return;
+    }
+    try {
+      const res = await this.client.tui.submitPrompt();
+      if (res.error) this.log(`tui.submitPrompt failed: ${JSON.stringify(res.error)}`);
+    } catch (e) {
+      this.log(`tui.submitPrompt threw: ${e}`);
+    }
+  }
+
+  private confirmTyped(promptText: string): void {
+    // OpenCode 1.19's TUI submits appended text unchanged; a draft the user
+    // was typing may surround it.
+    for (const item of this.pending.filter((p) => p.typed && promptText.includes(p.text))) this.settle(item);
+  }
+
+  /** Drop a delivered message and run its callbacks; a no-op if already dropped. */
+  private settle(item: Pending): void {
+    const i = this.pending.indexOf(item);
+    if (i < 0) return;
+    this.pending.splice(i, 1);
+    for (const cb of item.callbacks) {
+      try {
+        cb();
+      } catch (e) {
+        this.log(`delivered callback threw: ${e}`);
+      }
+    }
   }
 
   private enqueueFlush(): void {
@@ -140,12 +218,8 @@ export class SessionInbox {
         this.log(`promptAsync to ${target} threw: ${e}`);
       }
       if (ok) {
-        this.pending.shift();
-        try {
-          item.onDelivered?.();
-        } catch (e) {
-          this.log(`delivered callback threw: ${e}`);
-        }
+        // By identity: a prompt may have confirmed this message meanwhile.
+        this.settle(item);
         continue;
       }
       // For the well-formed bodies sent here, prompt_async fails only for a

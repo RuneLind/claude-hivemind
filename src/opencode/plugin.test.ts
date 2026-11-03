@@ -178,6 +178,81 @@ describe("opencode plugin message target", () => {
       broker.stop(true);
     }
   });
+
+  test("unprompted, the first message is typed into the TUI; the TUI's prompt confirms it and the rest follow", async () => {
+    let peerWs: any = null;
+    const broker = Bun.serve({
+      port: 0,
+      fetch(req, srv) {
+        if (srv.upgrade(req)) return;
+        return new Response("no", { status: 400 });
+      },
+      websocket: {
+        message(ws, data) {
+          const msg = JSON.parse(String(data));
+          if (msg.type === "register") {
+            peerWs = ws;
+            ws.send(JSON.stringify({ type: "registered", id: "oc", namespace: "default" }));
+          }
+        },
+      },
+    });
+    const prompts: any[] = [];
+    const typed: string[] = [];
+    let submits = 0;
+    const client = {
+      app: { log: async () => ({}) },
+      tui: {
+        async appendPrompt(opts: any) {
+          typed.push(opts.body.text);
+          return { data: true };
+        },
+        async submitPrompt() {
+          submits++;
+          return { data: true };
+        },
+      },
+      session: {
+        async promptAsync(opts: any) {
+          prompts.push(opts);
+          return {};
+        },
+        async get({ path }: any) {
+          return { data: { id: path.id } };
+        },
+      },
+    };
+    process.env.CLAUDE_HIVEMIND = "1";
+    process.env.CLAUDE_HIVEMIND_PORT = String(broker.port);
+    const hooks = await pluginModule.default({ client, directory: "/tmp", worktree: "/tmp" } as any);
+    try {
+      const deadline = Date.now() + 2000;
+      while (!peerWs && Date.now() < deadline) await Bun.sleep(5);
+      const send = (text: string) =>
+        peerWs.send(JSON.stringify({ type: "message", from_id: "dashboard", from_summary: "", from_cwd: "", text, sent_at: "t" }));
+      send("start");
+      send("start"); // a repeated ▶ collapses into the held one
+      send("ping");
+      while (submits === 0 && Date.now() < deadline) await Bun.sleep(5);
+      await Bun.sleep(20);
+      expect(typed).toHaveLength(1);
+      expect(typed[0]).toContain("\nstart\n");
+      expect(prompts).toHaveLength(0);
+
+      // The TUI submits the typed text as a new session's first prompt.
+      await hooks["chat.message"]!(
+        { sessionID: "ses_tui", agent: "build" } as any,
+        { message: {}, parts: [{ type: "text", text: typed[0] }] } as any,
+      );
+      while (prompts.length === 0 && Date.now() < deadline) await Bun.sleep(5);
+      await Bun.sleep(20);
+      expect(prompts.map((p) => [p.path.id, p.body.agent])).toEqual([["ses_tui", "build"]]);
+      expect(prompts[0].body.parts[0].text).toContain("\nping\n");
+    } finally {
+      await hooks.dispose?.();
+      broker.stop(true);
+    }
+  });
 });
 
 describe("buildOpenCodeCommand", () => {

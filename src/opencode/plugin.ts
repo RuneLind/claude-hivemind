@@ -3,7 +3,8 @@
  *
  * Makes an OpenCode process a hivemind peer: it registers with the broker over
  * WebSocket, gives the agent hivemind_* tools, and puts inbound peer messages
- * into the active session with prompt_async (see ./session-inbox.ts). No
+ * into the active session with prompt_async (see ./session-inbox.ts); before
+ * the first prompt, the first message is typed into the TUI. No
  * OPENCODE_URL, cmux surface or MCP server is involved.
  *
  * Inert unless CLAUDE_HIVEMIND is set, the same gate as the MCP server.
@@ -98,8 +99,11 @@ const HivemindPlugin: Plugin = async ({ client, directory }): Promise<Hooks> => 
       else if (e.type === "session.deleted") inbox.deleted(e.properties.info.id);
     },
 
-    "chat.message": async (input) => {
-      await inbox.touch(input.sessionID, { agent: input.agent, model: input.model, variant: input.variant });
+    "chat.message": async (input, output) => {
+      const text = (output?.parts ?? [])
+        .map((p) => (p.type === "text" ? p.text : ""))
+        .join("\n");
+      await inbox.touch(input.sessionID, { agent: input.agent, model: input.model, variant: input.variant }, text);
     },
 
     "experimental.chat.system.transform": async (input, output) => {
