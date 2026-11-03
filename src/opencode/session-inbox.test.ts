@@ -447,7 +447,7 @@ describe("SessionInbox in a process nobody has prompted yet", () => {
     expect(inbox.pendingCount).toBe(0);
   });
 
-  test("once the window is over the typed message goes by promptAsync, and a late append is not submitted", async () => {
+  test("nothing is sent while an append runs; with no TUI the message goes by promptAsync once the window after the submit ends", async () => {
     let releaseAppend!: () => void;
     const appendGate = new Promise<void>((r) => (releaseAppend = r));
     const { client, calls, tui } = fakeClient({
@@ -462,10 +462,11 @@ describe("SessionInbox in a process nobody has prompted yet", () => {
     inbox.created({ id: "root-1" });
     await inbox.touch("root-1", build, "user's own prompt");
     await Bun.sleep(CONFIRM_MS + 20);
-    expect(calls.map((c) => c.text)).toEqual(["one"]);
+    expect(calls).toHaveLength(0);
     releaseAppend();
     await inbox.idle();
-    expect(tui).toEqual(["append:one"]);
+    expect(tui).toEqual(["append:one", "submit"]);
+    expect(calls.map((c) => c.text)).toEqual(["one"]);
   });
 
   test("a message arriving while a prompt's root lookup runs is not typed into the TUI", async () => {
@@ -516,15 +517,113 @@ describe("SessionInbox after losing its target", () => {
 
   test("deleting the target session while a typed message waits for confirmation types it again", async () => {
     const { client, tui } = fakeClient();
-    const inbox = newInbox(client, 300);
+    const inbox = newInbox(client, 1_000);
     inbox.deliver("one");
     await inbox.idle();
     inbox.created({ id: "a" });
     await inbox.touch("a", build, "x"); // flush now waits for "one" to be confirmed
+    const t0 = Date.now();
     inbox.deleted("a");
     await inbox.idle();
+    expect(Date.now() - t0).toBeLessThan(500); // the wait ends with the target
     expect(tui).toEqual(["append:one", "submit", "append:one", "submit"]);
     expect(inbox.pendingCount).toBe(1);
+  });
+});
+
+describe("SessionInbox never runs a send and a TUI attempt at once", () => {
+  test("with a TUI attached, an append that outlasts the window still delivers the message once", async () => {
+    let releaseAppend!: () => void;
+    const appendGate = new Promise<void>((r) => (releaseAppend = r));
+    let releasePrompt!: () => void;
+    const promptGate = new Promise<void>((r) => (releasePrompt = r));
+    let typed = "";
+    let inbox!: SessionInbox;
+    const { client, calls, tui } = fakeClient({
+      tuiAppend: async (text) => {
+        await appendGate;
+        typed = text;
+        return { data: true };
+      },
+      // A TUI is attached: its submit becomes a prompt in the session it shows.
+      tuiSubmit: () => {
+        setTimeout(() => void inbox.touch("a", build, typed), 2);
+        return { data: true };
+      },
+      slowPrompt: () => promptGate,
+    });
+    inbox = newInbox(client);
+    inbox.deliver("one");
+    await Bun.sleep(1); // append in flight
+    inbox.created({ id: "a" });
+    await inbox.touch("a", build, "x"); // the user's own prompt sets the target
+    await Bun.sleep(CONFIRM_MS + 20); // the window has run out while the append is still running
+    releaseAppend();
+    await Bun.sleep(10);
+    releasePrompt();
+    await inbox.idle();
+    const deliveries = calls.filter((c) => c.text === "one").length + tui.filter((t) => t === "submit").length;
+    expect(deliveries).toBe(1);
+    expect(inbox.pendingCount).toBe(0);
+  });
+
+  test("losing the target while an append runs does not type the message twice", async () => {
+    let releaseAppend!: () => void;
+    const appendGate = new Promise<void>((r) => (releaseAppend = r));
+    let first = true;
+    const { client, tui } = fakeClient({
+      tuiAppend: async () => {
+        if (first) {
+          first = false;
+          await appendGate;
+        }
+        return { data: true };
+      },
+    });
+    const inbox = newInbox(client);
+    inbox.deliver("one");
+    await Bun.sleep(1); // append in flight
+    inbox.created({ id: "a" });
+    await inbox.touch("a", build, "x");
+    inbox.deleted("a");
+    releaseAppend();
+    await inbox.idle();
+    expect(tui).toEqual(["append:one", "submit"]);
+  });
+
+  test("a prompt sent from the box while the append runs confirms the message, and the submit is skipped", async () => {
+    let releaseAppend!: () => void;
+    const appendGate = new Promise<void>((r) => (releaseAppend = r));
+    const { client, calls, tui } = fakeClient({
+      tuiAppend: async () => {
+        await appendGate;
+        return { data: true };
+      },
+    });
+    const inbox = newInbox(client);
+    inbox.deliver("one");
+    await Bun.sleep(1); // append in flight
+    inbox.created({ id: "a" });
+    await inbox.touch("a", build, "my draft one");
+    releaseAppend();
+    await inbox.idle();
+    expect(tui).toEqual(["append:one"]);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("a confirmation ends the wait at once: the next message does not sit out the window", async () => {
+    const { client, calls } = fakeClient();
+    const inbox = newInbox(client, 1_000);
+    inbox.deliver("one");
+    inbox.deliver("two");
+    await inbox.idle();
+    inbox.created({ id: "a" });
+    await inbox.touch("a", build, "user's own prompt"); // flush waits for "one"
+    const t0 = Date.now();
+    await inbox.touch("a", build, "one"); // the TUI's prompt confirms it
+    await inbox.idle();
+    expect(calls.map((c) => c.text)).toEqual(["two"]);
+    expect(Date.now() - t0).toBeLessThan(500);
   });
 });
 
