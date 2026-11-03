@@ -53,10 +53,14 @@ function fakeClient(
 
 const build = { agent: "build" };
 
+/** A short confirmation window keeps the tests fast; production uses the default. */
+const CONFIRM_MS = 30;
+const newInbox = (client: SessionClient, confirmMs = CONFIRM_MS) => new SessionInbox(client, () => {}, { confirmMs });
+
 describe("SessionInbox", () => {
   test("holds messages until a root session is prompted, then delivers them in order", async () => {
     const { client, calls } = fakeClient();
-    const inbox = new SessionInbox(client);
+    const inbox = newInbox(client);
     inbox.deliver("one");
     inbox.deliver("two");
     await inbox.idle();
@@ -75,7 +79,7 @@ describe("SessionInbox", () => {
 
   test("delivers with the agent, model and variant of the session's last prompt", async () => {
     const { client, calls } = fakeClient();
-    const inbox = new SessionInbox(client);
+    const inbox = newInbox(client);
     inbox.created({ id: "a" });
     const model = { providerID: "anthropic", modelID: "claude-x" };
     await inbox.touch("a", { agent: "plan", model, variant: "high" });
@@ -86,7 +90,7 @@ describe("SessionInbox", () => {
 
   test("a session that was never prompted does not receive messages: its agent is unknown", async () => {
     const { client, calls } = fakeClient({ parents: { a: undefined } });
-    const inbox = new SessionInbox(client);
+    const inbox = newInbox(client);
     inbox.created({ id: "a" });
     await inbox.touch("a"); // no prompt prefs known for "a"
     inbox.deliver("hi");
@@ -97,7 +101,7 @@ describe("SessionInbox", () => {
 
   test("a subagent session never becomes the target", async () => {
     const { client, calls } = fakeClient();
-    const inbox = new SessionInbox(client);
+    const inbox = newInbox(client);
     inbox.created({ id: "root-1" });
     await inbox.touch("root-1", build);
     inbox.created({ id: "child-1", parentID: "root-1" });
@@ -110,7 +114,7 @@ describe("SessionInbox", () => {
 
   test("touch on an unseen session asks the server whether it is a root", async () => {
     const { client, gets } = fakeClient({ parents: { resumed: undefined, sub: "resumed" } });
-    const inbox = new SessionInbox(client);
+    const inbox = newInbox(client);
     await inbox.touch("sub", build);
     expect(inbox.active).toBeNull();
     await inbox.touch("resumed", build);
@@ -123,14 +127,14 @@ describe("SessionInbox", () => {
 
   test("an unknown session (lookup fails) is not treated as a root", async () => {
     const { client } = fakeClient();
-    const inbox = new SessionInbox(client);
+    const inbox = newInbox(client);
     await inbox.touch("ghost", build);
     expect(inbox.active).toBeNull();
   });
 
   test("the last touched root session wins", async () => {
     const { client, calls } = fakeClient();
-    const inbox = new SessionInbox(client);
+    const inbox = newInbox(client);
     inbox.created({ id: "a" });
     inbox.created({ id: "b" });
     await inbox.touch("b", build);
@@ -144,7 +148,7 @@ describe("SessionInbox", () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     const { client } = fakeClient({ parents: { a: undefined }, slowGet: { a: gate } });
-    const inbox = new SessionInbox(client);
+    const inbox = newInbox(client);
     const slow = inbox.touch("a", build); // unseen: waits on session.get
     inbox.created({ id: "b" });
     await inbox.touch("b", build);
@@ -155,7 +159,7 @@ describe("SessionInbox", () => {
 
   test("of two touches running at once, the one that started last wins", async () => {
     const { client } = fakeClient();
-    const inbox = new SessionInbox(client);
+    const inbox = newInbox(client);
     inbox.created({ id: "a" });
     inbox.created({ id: "b" });
     await Promise.all([inbox.touch("a", build), inbox.touch("b", build)]);
@@ -164,7 +168,7 @@ describe("SessionInbox", () => {
 
   test("a failed prompt keeps the message and waits for the next target", async () => {
     const { client, calls } = fakeClient({ fail: (id) => id === "gone" });
-    const inbox = new SessionInbox(client);
+    const inbox = newInbox(client);
     inbox.created({ id: "gone" });
     await inbox.touch("gone", build);
     inbox.deliver("keep me");
@@ -181,7 +185,7 @@ describe("SessionInbox", () => {
 
   test("a message is never dropped: after repeated failed prompts it reaches the next prompted session", async () => {
     const { client, calls, attempts } = fakeClient({ fail: (id) => id !== "good" });
-    const inbox = new SessionInbox(client);
+    const inbox = newInbox(client);
     const done: string[] = [];
     inbox.deliver("m1", () => done.push("m1"));
     inbox.deliver("m2", () => done.push("m2"));
@@ -204,7 +208,7 @@ describe("SessionInbox", () => {
   test("the delivered callback runs after a successful prompt, never after a failed one", async () => {
     let failing = true;
     const { client } = fakeClient({ fail: () => failing });
-    const inbox = new SessionInbox(client);
+    const inbox = newInbox(client);
     const done: string[] = [];
     inbox.created({ id: "a" });
     (inbox.deliver as any)("m1", () => done.push("m1"));
@@ -219,7 +223,7 @@ describe("SessionInbox", () => {
 
   test("deleting the active session clears the target", async () => {
     const { client, calls } = fakeClient();
-    const inbox = new SessionInbox(client);
+    const inbox = newInbox(client);
     inbox.created({ id: "a" });
     await inbox.touch("a", build);
     inbox.deleted("a");
@@ -233,7 +237,7 @@ describe("SessionInbox", () => {
 describe("SessionInbox in a process nobody has prompted yet", () => {
   test("types the first held message into the TUI, submits it, and keeps it until a prompt confirms it", async () => {
     const { client, calls, tui } = fakeClient();
-    const inbox = new SessionInbox(client);
+    const inbox = newInbox(client);
     inbox.deliver("one");
     inbox.deliver("two");
     await inbox.idle();
@@ -244,7 +248,7 @@ describe("SessionInbox in a process nobody has prompted yet", () => {
 
   test("the TUI's prompt confirms the typed message, and the rest follow by promptAsync to that session", async () => {
     const { client, calls } = fakeClient();
-    const inbox = new SessionInbox(client);
+    const inbox = newInbox(client);
     const done: string[] = [];
     inbox.deliver("one", () => done.push("one"));
     inbox.deliver("two", () => done.push("two"));
@@ -259,7 +263,7 @@ describe("SessionInbox in a process nobody has prompted yet", () => {
 
   test("a draft typed around the message still confirms it", async () => {
     const { client, calls } = fakeClient();
-    const inbox = new SessionInbox(client);
+    const inbox = newInbox(client);
     inbox.deliver("line 1\n\nline 2");
     await inbox.idle();
     inbox.created({ id: "root-1" });
@@ -271,7 +275,7 @@ describe("SessionInbox in a process nobody has prompted yet", () => {
 
   test("with no TUI (submit answers true, no prompt follows) the message stays held and is typed only once", async () => {
     const { client, calls, tui } = fakeClient();
-    const inbox = new SessionInbox(client);
+    const inbox = newInbox(client);
     inbox.deliver("one");
     await inbox.idle();
     inbox.deliver("two");
@@ -289,7 +293,7 @@ describe("SessionInbox in a process nobody has prompted yet", () => {
 
   test("only a typed message is confirmed by a prompt's text", async () => {
     const { client, calls } = fakeClient();
-    const inbox = new SessionInbox(client);
+    const inbox = newInbox(client);
     inbox.deliver("one");
     inbox.deliver("two");
     await inbox.idle();
@@ -302,7 +306,7 @@ describe("SessionInbox in a process nobody has prompted yet", () => {
   test("a failed append is retried with the same message when the next one arrives", async () => {
     let failAppend = true;
     const { client, tui } = fakeClient({ tuiAppend: () => (failAppend ? { error: { name: "Down" } } : { data: true }) });
-    const inbox = new SessionInbox(client);
+    const inbox = newInbox(client);
     inbox.deliver("one");
     await inbox.idle();
     expect(tui).toEqual(["append:one"]);
@@ -323,7 +327,7 @@ describe("SessionInbox in a process nobody has prompted yet", () => {
         return { data: true };
       },
     });
-    const inbox = new SessionInbox(client);
+    const inbox = newInbox(client);
     inbox.deliver("one");
     await inbox.idle();
     inbox.deliver("two");
@@ -333,7 +337,7 @@ describe("SessionInbox in a process nobody has prompted yet", () => {
 
   test("a failed submit is not retried: the text sits in the prompt box, and the user's Enter confirms it", async () => {
     const { client, calls, tui } = fakeClient({ tuiSubmit: () => ({ error: { name: "Down" } }) });
-    const inbox = new SessionInbox(client);
+    const inbox = newInbox(client);
     inbox.deliver("one");
     await inbox.idle();
     inbox.deliver("two");
@@ -348,7 +352,7 @@ describe("SessionInbox in a process nobody has prompted yet", () => {
 
   test("nothing is typed into the TUI while a target exists", async () => {
     const { client, calls, tui } = fakeClient();
-    const inbox = new SessionInbox(client);
+    const inbox = newInbox(client);
     inbox.created({ id: "a" });
     await inbox.touch("a", build);
     inbox.deliver("hi");
@@ -369,8 +373,9 @@ describe("SessionInbox in a process nobody has prompted yet", () => {
       },
       slowPrompt: () => promptGate,
     });
-    const inbox = new SessionInbox(client);
-    inbox.deliver("one"); // append in flight
+    const inbox = newInbox(client);
+    inbox.deliver("one");
+    await Bun.sleep(1); // append in flight
     inbox.deliver("two"); // its typing attempt waits behind the first
     inbox.created({ id: "root-1" });
     await inbox.touch("root-1", build, "x"); // target set; promptAsync of "one" in flight
@@ -383,30 +388,121 @@ describe("SessionInbox in a process nobody has prompted yet", () => {
   });
 
   test("a prompt confirming the typed message while promptAsync sends it drops nothing else", async () => {
+    // Past the confirmation window, so flush sends "one" before the TUI's prompt arrives.
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     const { client, calls } = fakeClient({ slowPrompt: (text) => (text === "one" ? gate : undefined) });
-    const inbox = new SessionInbox(client);
+    const inbox = newInbox(client);
     const done: string[] = [];
     inbox.deliver("one", () => done.push("one"));
     inbox.deliver("two", () => done.push("two"));
     await inbox.idle();
     inbox.created({ id: "root-1" });
-    await inbox.touch("root-1", build, "unrelated"); // flush starts sending "one"
-    await Bun.sleep(1);
-    await inbox.touch("root-1", build, "one"); // the TUI's submit of "one" lands meanwhile
+    await inbox.touch("root-1", build, "unrelated");
+    await Bun.sleep(CONFIRM_MS + 20); // window over: flush starts sending "one"
+    await inbox.touch("root-1", build, "one"); // a late prompt containing "one" lands meanwhile
     release();
     await inbox.idle();
     expect(calls.map((c) => c.text)).toEqual(["one", "two"]);
     expect(done).toEqual(["one", "two"]);
     expect(inbox.pendingCount).toBe(0);
   });
+
+  test("a prompt that lands right after the submit does not make flush send the typed message too", async () => {
+    const { client, calls } = fakeClient();
+    const inbox = newInbox(client, 300);
+    const done: string[] = [];
+    inbox.deliver("one", () => done.push("one"));
+    inbox.deliver("two", () => done.push("two"));
+    await inbox.idle();
+    inbox.created({ id: "root-1" });
+    await inbox.touch("root-1", build, "user's own prompt"); // the user pressed Enter first
+    await Bun.sleep(5);
+    await inbox.touch("root-1", build, "one"); // then the TUI submits "one"
+    await inbox.idle();
+    expect(calls.map((c) => c.text)).toEqual(["two"]);
+    expect(done).toEqual(["one", "two"]);
+  });
+
+  test("a prompt that lands while the append runs does not deliver the typed message twice", async () => {
+    let releaseAppend!: () => void;
+    const appendGate = new Promise<void>((r) => (releaseAppend = r));
+    const { client, calls, tui } = fakeClient({
+      tuiAppend: async () => {
+        await appendGate;
+        return { data: true };
+      },
+    });
+    const inbox = newInbox(client, 300);
+    inbox.deliver("one");
+    await Bun.sleep(1); // append in flight
+    inbox.created({ id: "root-1" });
+    await inbox.touch("root-1", build, "user's own prompt"); // target set mid-append
+    releaseAppend();
+    await Bun.sleep(5);
+    expect(tui).toEqual(["append:one", "submit"]);
+    await inbox.touch("root-1", build, "one"); // the TUI's submit of "one"
+    await inbox.idle();
+    expect(calls).toHaveLength(0);
+    expect(inbox.pendingCount).toBe(0);
+  });
+
+  test("once the window is over the typed message goes by promptAsync, and a late append is not submitted", async () => {
+    let releaseAppend!: () => void;
+    const appendGate = new Promise<void>((r) => (releaseAppend = r));
+    const { client, calls, tui } = fakeClient({
+      tuiAppend: async () => {
+        await appendGate;
+        return { data: true };
+      },
+    });
+    const inbox = newInbox(client);
+    inbox.deliver("one");
+    await Bun.sleep(1); // append in flight
+    inbox.created({ id: "root-1" });
+    await inbox.touch("root-1", build, "user's own prompt");
+    await Bun.sleep(CONFIRM_MS + 20);
+    expect(calls.map((c) => c.text)).toEqual(["one"]);
+    releaseAppend();
+    await inbox.idle();
+    expect(tui).toEqual(["append:one"]);
+  });
+
+  test("a message arriving while a prompt's root lookup runs is not typed into the TUI", async () => {
+    let releaseGet!: () => void;
+    const getGate = new Promise<void>((r) => (releaseGet = r));
+    const { client, calls, tui } = fakeClient({ parents: { "ses-tui": undefined }, slowGet: { "ses-tui": getGate } });
+    const inbox = newInbox(client);
+    inbox.deliver("one");
+    await inbox.idle();
+    const touching = inbox.touch("ses-tui", build, "one"); // the TUI's prompt; its session is not seen yet
+    inbox.deliver("two");
+    await inbox.idle();
+    releaseGet();
+    await touching;
+    await inbox.idle();
+    expect(tui).toEqual(["append:one", "submit"]);
+    expect(calls.map((c) => [c.id, c.text])).toEqual([["ses-tui", "two"]]);
+  });
+
+  test("a repeated message retries a failed append", async () => {
+    let failAppend = true;
+    const { client, tui } = fakeClient({ tuiAppend: () => (failAppend ? { error: { name: "Down" } } : { data: true }) });
+    const inbox = newInbox(client);
+    inbox.deliver("start");
+    await inbox.idle();
+    failAppend = false;
+    inbox.deliver("start"); // a second ▶ while the first is held
+    await inbox.idle();
+    expect(tui).toEqual(["append:start", "append:start", "submit"]);
+    expect(inbox.pendingCount).toBe(1);
+  });
 });
 
 describe("SessionInbox collapses repeated messages", () => {
   test("identical messages still pending are held as one, and every caller is told when it lands", async () => {
     const { client, calls } = fakeClient();
-    const inbox = new SessionInbox(client);
+    const inbox = newInbox(client);
     const done: string[] = [];
     inbox.deliver("start", () => done.push("s1"));
     inbox.deliver("start", () => done.push("s2"));
@@ -423,7 +519,7 @@ describe("SessionInbox collapses repeated messages", () => {
 
   test("a message identical to one already delivered is delivered again", async () => {
     const { client, calls } = fakeClient();
-    const inbox = new SessionInbox(client);
+    const inbox = newInbox(client);
     inbox.created({ id: "a" });
     await inbox.touch("a", build);
     inbox.deliver("start");

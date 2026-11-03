@@ -49,9 +49,16 @@ export interface SessionInfoLike {
 interface Pending {
   text: string;
   callbacks: (() => void)[];
-  /** Typed into the TUI; delivered once a prompt containing it is seen. */
-  typed: boolean;
+  /** When it was typed into the TUI; it is delivered once a prompt containing it is seen. */
+  typedAt: number | null;
 }
+
+/**
+ * How long flush holds a typed message for the TUI's own prompt to confirm it
+ * before sending it by prompt_async. Measured on OpenCode 1.19: chat.message
+ * fires about 30 ms after the submit.
+ */
+const CONFIRM_MS = 2_000;
 
 export class SessionInbox {
   active: string | null = null;
@@ -64,11 +71,17 @@ export class SessionInbox {
   /** Touches are numbered by start; a touch never overrides one that started later. */
   private touchSeq = 0;
   private activatedSeq = 0;
+  /** Touches still running; nothing is typed while a prompt may be about to set the target. */
+  private touching = 0;
+  private confirmMs: number;
 
   constructor(
     private client: SessionClient,
     private log: (msg: string) => void = () => {},
-  ) {}
+    opts: { confirmMs?: number } = {},
+  ) {
+    this.confirmMs = opts.confirmMs ?? CONFIRM_MS;
+  }
 
   get pendingCount(): number {
     return this.pending.length;
@@ -107,7 +120,12 @@ export class SessionInbox {
     if (promptText !== undefined) this.confirmTyped(promptText);
     if (prefs) this.prefs.set(id, prefs);
     const seq = ++this.touchSeq;
-    if (!(await this.isRoot(id))) return;
+    this.touching++;
+    try {
+      if (!(await this.isRoot(id))) return;
+    } finally {
+      this.touching--;
+    }
     if (!this.prefs.has(id) || seq < this.activatedSeq) return;
     this.activatedSeq = seq;
     this.active = id;
@@ -137,9 +155,9 @@ export class SessionInbox {
     const same = this.pending.find((p) => p.text === text);
     if (same) {
       if (onDelivered) same.callbacks.push(onDelivered);
-      return;
+    } else {
+      this.pending.push({ text, callbacks: onDelivered ? [onDelivered] : [], typedAt: null });
     }
-    this.pending.push({ text, callbacks: onDelivered ? [onDelivered] : [], typed: false });
     if (this.active) this.enqueueFlush();
     else this.typing = this.typing.then(() => this.typeHead());
   }
@@ -156,20 +174,22 @@ export class SessionInbox {
    */
   private async typeHead(): Promise<void> {
     const head = this.pending[0];
-    if (!head || head.typed || this.active) return;
-    head.typed = true;
+    if (!head || head.typedAt !== null || this.active || this.touching > 0) return;
+    head.typedAt = Date.now();
     try {
       const res = await this.client.tui.appendPrompt({ body: { text: head.text } });
       if (res.error) {
         this.log(`tui.appendPrompt failed: ${JSON.stringify(res.error)}`);
-        head.typed = false;
+        head.typedAt = null;
         return;
       }
     } catch (e) {
       this.log(`tui.appendPrompt threw: ${e}`);
-      head.typed = false;
+      head.typedAt = null;
       return;
     }
+    // A slow append can outlast the confirmation window; flush has then sent it.
+    if (!this.pending.includes(head)) return;
     try {
       const res = await this.client.tui.submitPrompt();
       if (res.error) this.log(`tui.submitPrompt failed: ${JSON.stringify(res.error)}`);
@@ -181,7 +201,7 @@ export class SessionInbox {
   private confirmTyped(promptText: string): void {
     // OpenCode 1.19's TUI submits appended text unchanged; a draft the user
     // was typing may surround it.
-    for (const item of this.pending.filter((p) => p.typed && promptText.includes(p.text))) this.settle(item);
+    for (const item of this.pending.filter((p) => p.typedAt !== null && promptText.includes(p.text))) this.settle(item);
   }
 
   /** Drop a delivered message and run its callbacks; a no-op if already dropped. */
@@ -206,6 +226,12 @@ export class SessionInbox {
     while (this.pending.length > 0 && this.active) {
       const target = this.active;
       const item = this.pending[0]!;
+      // Give the TUI's own prompt the chance to confirm a typed message first.
+      const wait = item.typedAt === null ? 0 : item.typedAt + this.confirmMs - Date.now();
+      if (wait > 0) {
+        await new Promise((r) => setTimeout(r, wait));
+        continue;
+      }
       let ok = false;
       try {
         const res = await this.client.session.promptAsync({
