@@ -399,7 +399,7 @@ describe("SessionInbox in a process nobody has prompted yet", () => {
     await inbox.idle();
     inbox.created({ id: "root-1" });
     await inbox.touch("root-1", build, "unrelated");
-    await Bun.sleep(CONFIRM_MS + 20); // window over: promptAsync starts sending "one"
+    await Bun.sleep(CONFIRM_MS + 100); // window over: promptAsync starts sending "one"
     await inbox.touch("root-1", build, "one"); // a late prompt containing "one" lands meanwhile
     release();
     await inbox.idle();
@@ -461,7 +461,7 @@ describe("SessionInbox in a process nobody has prompted yet", () => {
     await Bun.sleep(1); // append in flight
     inbox.created({ id: "root-1" });
     await inbox.touch("root-1", build, "user's own prompt");
-    await Bun.sleep(CONFIRM_MS + 20);
+    await Bun.sleep(CONFIRM_MS + 100);
     expect(calls).toHaveLength(0);
     releaseAppend();
     await inbox.idle();
@@ -573,7 +573,7 @@ describe("SessionInbox never runs a send and a TUI attempt at once", () => {
     await Bun.sleep(1); // append in flight
     inbox.created({ id: "a" });
     await inbox.touch("a", build, "x"); // the user's own prompt sets the target
-    await Bun.sleep(CONFIRM_MS + 20); // the window has run out while the append is still running
+    await Bun.sleep(CONFIRM_MS + 100); // the window has run out while the append is still running
     releaseAppend();
     await Bun.sleep(10);
     releasePrompt();
