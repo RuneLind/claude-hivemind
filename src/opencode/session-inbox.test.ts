@@ -516,6 +516,46 @@ describe("SessionInbox in a process nobody has prompted yet", () => {
   });
 });
 
+describe("SessionInbox: a message delivered during a prompt's root lookup, for every way the lookup ends", () => {
+  // touch() ends in one of four ways; in each, the held message must move on.
+  async function during(outcome: "not-root" | "no-prefs" | "older-seq" | "target") {
+    let releaseGet!: () => void;
+    const getGate = new Promise<void>((r) => (releaseGet = r));
+    const parents: Record<string, string | undefined> = { slow: outcome === "not-root" ? "p" : undefined, fast: undefined };
+    const { client, tui, calls } = fakeClient({ parents, slowGet: { slow: getGate } });
+    const inbox = newInbox(client);
+    const touching = inbox.touch("slow", outcome === "no-prefs" ? undefined : build, "x");
+    if (outcome === "older-seq") {
+      inbox.created({ id: "fast" });
+      await inbox.touch("fast", build, "y"); // a later touch sets the target first
+      inbox.deleted("fast"); // and loses it while "slow" still looks up
+    }
+    inbox.deliver("one");
+    await inbox.idle();
+    expect(tui).toEqual([]); // nothing typed while the lookup runs
+    releaseGet();
+    await touching;
+    await inbox.idle();
+    return { inbox, tui, calls };
+  }
+
+  for (const outcome of ["not-root", "no-prefs", "older-seq"] as const) {
+    test(`${outcome}: no target, so the message is typed into the TUI`, async () => {
+      const { inbox, tui, calls } = await during(outcome);
+      expect(inbox.active).toBeNull();
+      expect(tui).toEqual(["append:one", "submit"]);
+      expect(calls).toHaveLength(0);
+    });
+  }
+
+  test("target: the message is sent to the prompted session", async () => {
+    const { inbox, tui, calls } = await during("target");
+    expect(inbox.active).toBe("slow");
+    expect(tui).toEqual([]);
+    expect(calls.map((c) => [c.id, c.text])).toEqual([["slow", "one"]]);
+  });
+});
+
 describe("SessionInbox after losing its target", () => {
   test("a failed promptAsync clears the target, and the held message is typed into the TUI again", async () => {
     const { client, tui, calls } = fakeClient({ fail: (id) => id === "gone" });
