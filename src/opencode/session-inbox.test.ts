@@ -499,6 +499,35 @@ describe("SessionInbox in a process nobody has prompted yet", () => {
   });
 });
 
+describe("SessionInbox after losing its target", () => {
+  test("a failed promptAsync clears the target, and the held message is typed into the TUI again", async () => {
+    const { client, tui, calls } = fakeClient({ fail: (id) => id === "gone" });
+    const inbox = newInbox(client);
+    inbox.deliver("one");
+    await inbox.idle();
+    inbox.created({ id: "gone" });
+    await inbox.touch("gone", build, "x");
+    await inbox.idle();
+    expect(inbox.active).toBeNull();
+    expect(calls).toHaveLength(0);
+    expect(tui).toEqual(["append:one", "submit", "append:one", "submit"]);
+    expect(inbox.pendingCount).toBe(1);
+  });
+
+  test("deleting the target session while a typed message waits for confirmation types it again", async () => {
+    const { client, tui } = fakeClient();
+    const inbox = newInbox(client, 300);
+    inbox.deliver("one");
+    await inbox.idle();
+    inbox.created({ id: "a" });
+    await inbox.touch("a", build, "x"); // flush now waits for "one" to be confirmed
+    inbox.deleted("a");
+    await inbox.idle();
+    expect(tui).toEqual(["append:one", "submit", "append:one", "submit"]);
+    expect(inbox.pendingCount).toBe(1);
+  });
+});
+
 describe("SessionInbox collapses repeated messages", () => {
   test("identical messages still pending are held as one, and every caller is told when it lands", async () => {
     const { client, calls } = fakeClient();
@@ -515,6 +544,21 @@ describe("SessionInbox collapses repeated messages", () => {
     await inbox.idle();
     expect(calls.map((c) => c.text)).toEqual(["start", "other"]);
     expect(done).toEqual(["s1", "s2", "s3"]);
+  });
+
+  test("with a target, an identical message is delivered again even while the first is being sent", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const { client, calls } = fakeClient({ slowPrompt: () => gate });
+    const inbox = newInbox(client);
+    inbox.created({ id: "a" });
+    await inbox.touch("a", build);
+    inbox.deliver("yes");
+    await Bun.sleep(1); // the first "yes" is in flight
+    inbox.deliver("yes");
+    release();
+    await inbox.idle();
+    expect(calls.map((c) => c.text)).toEqual(["yes", "yes"]);
   });
 
   test("a message identical to one already delivered is delivered again", async () => {

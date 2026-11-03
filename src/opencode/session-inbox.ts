@@ -106,7 +106,17 @@ export class SessionInbox {
     this.roots.delete(id);
     this.children.delete(id);
     this.prefs.delete(id);
-    if (this.active === id) this.active = null;
+    if (this.active === id) this.loseTarget();
+  }
+
+  /**
+   * No session receives messages any more: held messages go back to the TUI.
+   * Each is typed afresh, so a typed message is retyped once.
+   */
+  private loseTarget(): void {
+    this.active = null;
+    for (const p of this.pending) p.typedAt = null;
+    if (this.pending.length > 0) this.typing = this.typing.then(() => this.typeHead());
   }
 
   /**
@@ -148,11 +158,11 @@ export class SessionInbox {
   }
 
   /**
-   * Queue a message; `onDelivered` runs once it is delivered. A message
-   * identical to one still held is not queued again.
+   * Queue a message; `onDelivered` runs once it is delivered. While no target
+   * exists, a message identical to one still held is not queued again.
    */
   deliver(text: string, onDelivered?: () => void): void {
-    const same = this.pending.find((p) => p.text === text);
+    const same = this.active ? undefined : this.pending.find((p) => p.text === text);
     if (same) {
       if (onDelivered) same.callbacks.push(onDelivered);
     } else {
@@ -252,7 +262,7 @@ export class SessionInbox {
       // missing or unreachable session (OpenCode 1.19 answers 204 even for an
       // unknown agent or model), so the message is kept for the next prompted
       // session, never dropped.
-      if (this.active === target) this.active = null;
+      if (this.active === target) this.loseTarget();
       return;
     }
   }
