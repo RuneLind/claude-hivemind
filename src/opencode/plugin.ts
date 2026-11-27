@@ -278,7 +278,11 @@ async function setup(ctx: Plugin.Context): Promise<Plugin.Cleanup | void> {
     // behind. Events may be lost across the gap, so cached ownership is
     // dropped when a stream ends, again when the next one starts (an answer
     // looked up in the gap may predate a lost move, and the next event may be
-    // hours away), and again when it first delivers.
+    // hours away), and again when it first delivers (an answer looked up
+    // before the host's subscription was actually live). A lookup in flight
+    // across any of these drops asks again within its one 3 s deadline
+    // (DirectoryScope.lookup), so the 2-3 drops of one reconnect do not turn
+    // an owned session into a foreign one.
     void (async () => {
       let backoff = RESUBSCRIBE_MIN_MS;
       for (let attempt = 0; !controller.signal.aborted; attempt++) {

@@ -742,6 +742,95 @@ describe("opencode plugin setup() (OpenCode 2.x entry)", () => {
     expect((await call).content).toBe('Summary updated: "porting"');
   });
 
+  /**
+   * Holds the current session.get and opens a new hold for the next one, in
+   * one step: the lookup's next ask is made after this returns, so it waits on
+   * the new hold.
+   */
+  async function reHold(server: ReturnType<typeof fakeV2Server>, release: () => void) {
+    const before = server.gets;
+    release();
+    const next = server.holdGets();
+    await until(() => server.gets > before, 500);
+    return next;
+  }
+
+  test("K-plugin-2: a tool call in the backoff gap whose asks straddle the re-subscribe drop and the first-event drop is not refused", async () => {
+    const broker = withBroker();
+    const server = fakeV2Server();
+    const { a } = twoDirs();
+    const ia = await load(server, a);
+    await until(() => broker.connected().length === 1);
+    await until(() => server.subscriberCount === 1);
+    server.sessions.set("ses_a", { directory: a });
+    const setA = ia.inst.tools.find((t) => t.name === "hivemind_set_summary");
+
+    server.endStreams("done");
+    await until(() => server.subscriberCount === 0, 500);
+    // In the backoff gap: the stream-end drop has already run.
+    let release = server.holdGets();
+    const before = server.gets;
+    const call = setA.execute({ summary: "porting" }, { sessionID: "ses_a" });
+    await until(() => server.gets > before, 500);
+    await until(() => server.subscriberCount === 1, 3000); // re-subscribe drop
+    release = await reHold(server, release);
+    server.emit({ type: "session.created", data: { sessionID: "ses_other", location: { directory: "/elsewhere" } } }); // first-event drop
+    await Bun.sleep(20);
+    release();
+    expect((await call).content).toBe('Summary updated: "porting"');
+  });
+
+  test("K-plugin-3: a tool call whose asks straddle the stream-end, re-subscribe and first-event drops in turn is not refused", async () => {
+    const broker = withBroker();
+    const server = fakeV2Server();
+    const { a } = twoDirs();
+    const ia = await load(server, a);
+    await until(() => broker.connected().length === 1);
+    await until(() => server.subscriberCount === 1);
+    server.sessions.set("ses_a", { directory: a });
+    const setA = ia.inst.tools.find((t) => t.name === "hivemind_set_summary");
+
+    let release = server.holdGets();
+    const before = server.gets;
+    const call = setA.execute({ summary: "porting" }, { sessionID: "ses_a" });
+    await until(() => server.gets > before, 500);
+    server.endStreams("done"); // stream-end drop
+    await until(() => server.subscriberCount === 0, 500);
+    await Bun.sleep(10);
+    release = await reHold(server, release);
+    await until(() => server.subscriberCount === 1, 3000); // re-subscribe drop
+    release = await reHold(server, release);
+    server.emit({ type: "session.created", data: { sessionID: "ses_other", location: { directory: "/elsewhere" } } }); // first-event drop
+    await Bun.sleep(20);
+    release();
+    expect((await call).content).toBe('Summary updated: "porting"');
+  });
+
+  test("K-plugin-first: an answer cached after the re-subscribe drop is dropped again at the new stream's first event", async () => {
+    const broker = withBroker();
+    const server = fakeV2Server();
+    const { a, b } = twoDirs();
+    await load(server, a);
+    await load(server, b);
+    await until(() => broker.connected().length === 2);
+    await until(() => server.subscriberCount === 2);
+
+    server.create("ses_y", a);
+    await Bun.sleep(20);
+    server.endStreams("done");
+    await until(() => server.subscriberCount === 0, 500);
+    await until(() => server.subscriberCount === 2, 3000);
+    // Looked up and cached after the re-subscribe drop, then moved before the
+    // host's subscription was live, so its session.moved never arrives.
+    expect((await server.context("ses_y"))[0].text).toContain('as peer "repoa"');
+    server.sessions.get("ses_y")!.directory = b;
+    server.emit({ type: "session.created", data: { sessionID: "ses_other", location: { directory: "/elsewhere" } } });
+    await Bun.sleep(30);
+    const sys = await server.context("ses_y");
+    expect(sys).toHaveLength(1);
+    expect(sys[0].text).toContain('as peer "repob"');
+  });
+
   test("R2-3: a move during the gap is not answered from the cache once the next stream is live, with no event after it", async () => {
     const broker = withBroker();
     const server = fakeV2Server();

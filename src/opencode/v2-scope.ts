@@ -10,7 +10,8 @@
  * Ownership is cached per session until `session.deleted`, or until
  * `session.moved` reports the session's new directory. The lookup also
  * records each session's parent, which a move does not change. When the event
- * stream may have missed events, `unconfirm()` drops every cached answer.
+ * stream may have missed events, `unconfirm()` drops every cached answer,
+ * and a lookup in flight across it asks again (see lookup()).
  *
  * Delivery does not trust the cache: `confirm()` asks the server afresh, and
  * `holds()` tells, synchronously and right before a message is sent, whether
@@ -148,7 +149,8 @@ export class DirectoryScope {
   /**
    * Drop every cached ownership answer (the event stream may have missed a
    * move or delete), so the next owns() looks each session up again. A lookup
-   * in flight discards its answer and asks once more.
+   * in flight discards the answer it is waiting for and asks again within its
+   * deadline (see lookup()).
    */
   unconfirm(): void {
     this.generation++;
@@ -182,31 +184,54 @@ export class DirectoryScope {
     return lookup;
   }
 
-  private async lookup(sessionID: string, retry = true): Promise<boolean> {
+  /**
+   * Ask the server whether the session is this instance's, under one rule:
+   *
+   * - One total deadline, `lookupMs` from the start, across every ask.
+   * - An answer is final only if no `unconfirm()` ran while its ask was out.
+   *   A straddled answer may predate a missed move: it is discarded, never
+   *   cached, and the server is asked again while the deadline allows. A
+   *   reconnect bumps the generation 2-3 times, so one retry is not enough.
+   * - The epoch is read once, at the start. If note() or forget() changed it
+   *   (a newer move or delete), the lookup returns what that newer state
+   *   records, whatever the ask returned, and caches nothing over it (F3).
+   * - Past the deadline, or when the ask fails, it answers not-owned and
+   *   caches nothing: the next hook asks again.
+   */
+  private async lookup(sessionID: string): Promise<boolean> {
     const epoch = this.epochs.get(sessionID) ?? 0;
-    const generation = this.generation;
+    const deadline = Date.now() + this.lookupMs;
+    const newer = () => (this.epochs.get(sessionID) ?? 0) !== epoch;
     this.inflight.set(sessionID, (this.inflight.get(sessionID) ?? 0) + 1);
     try {
-      const res = await withTimeout(this.session.get({ sessionID }), this.lookupMs);
-      // A timed-out lookup is not cached: the next hook asks again.
-      if (res === "timeout") {
-        this.log(`session.get ${sessionID} timed out; treated as another directory's`);
-        return false;
+      for (;;) {
+        const generation = this.generation;
+        let res: Awaited<ReturnType<SessionLookup["get"]>> | "timeout" | "failed";
+        try {
+          res = await withTimeout(this.session.get({ sessionID }), Math.max(0, deadline - Date.now()));
+        } catch (e) {
+          this.log(`session.get ${sessionID} failed: ${e}`);
+          res = "failed";
+        }
+        if (newer()) {
+          // The parent still holds, as a move keeps it; only an answer no
+          // unconfirm() straddled records it.
+          if (typeof res === "object" && this.generation === generation && this.owned.has(sessionID) && !this.parents.has(sessionID)) {
+            this.parents.set(sessionID, res.parentID ?? null);
+          }
+          return this.knownOwned(sessionID);
+        }
+        if (res === "failed") return false;
+        if (res === "timeout") {
+          this.log(`session.get ${sessionID} timed out; treated as another directory's`);
+          return false;
+        }
+        if (this.generation === generation) return this.note(sessionID, res.location?.directory, res.parentID ?? null);
+        if (Date.now() >= deadline) {
+          this.log(`session.get ${sessionID} kept straddling unconfirm() past ${this.lookupMs} ms; treated as another directory's`);
+          return false;
+        }
       }
-      // unconfirm() ran meanwhile, so the answer may predate a missed move.
-      // That voids the answer, not the ownership: ask once more, within the
-      // same bound, rather than read a reconnect as "not ours".
-      if (this.generation !== generation) return retry ? this.lookup(sessionID, false) : false;
-      // A session.moved (or deleted) that arrived meanwhile is newer than this
-      // answer: keep its ownership. The parent still holds, as a move keeps it.
-      if ((this.epochs.get(sessionID) ?? 0) !== epoch) {
-        if (this.owned.has(sessionID) && !this.parents.has(sessionID)) this.parents.set(sessionID, res.parentID ?? null);
-        return this.knownOwned(sessionID);
-      }
-      return this.note(sessionID, res.location?.directory, res.parentID ?? null);
-    } catch (e) {
-      this.log(`session.get ${sessionID} failed: ${e}`);
-      return false;
     } finally {
       const n = (this.inflight.get(sessionID) ?? 1) - 1;
       if (n > 0) this.inflight.set(sessionID, n);
