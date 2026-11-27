@@ -17,7 +17,8 @@
  * typed message is held for up to CONFIRM_MS before it, too, goes by
  * prompt_async. Messages held with no TUI wait in memory, in order, until a
  * session is prompted. While no target exists, identical messages are kept
- * once.
+ * once. On OpenCode 2.x (`tui: false`) nothing is typed: every held message
+ * waits for the first prompt.
  */
 
 import type { InboundMessage } from "./broker-peer.ts";
@@ -80,13 +81,16 @@ export class SessionInbox {
   /** Touches still running; nothing is typed while a prompt may be about to set the target. */
   private touching = 0;
   private confirmMs: number;
+  /** False on OpenCode 2.x, whose plugin API has no TUI calls: held messages wait for a prompt. */
+  private tui: boolean;
 
   constructor(
     private client: SessionClient,
     private log: (msg: string) => void = () => {},
-    opts: { confirmMs?: number } = {},
+    opts: { confirmMs?: number; tui?: boolean } = {},
   ) {
     this.confirmMs = opts.confirmMs ?? CONFIRM_MS;
+    this.tui = opts.tui ?? true;
   }
 
   get pendingCount(): number {
@@ -207,7 +211,7 @@ export class SessionInbox {
       const head = this.pending[0]!;
       const target = this.active;
       if (!target) {
-        if (head.typedAt === null && this.touching === 0) await this.typeHead(head);
+        if (this.tui && head.typedAt === null && this.touching === 0) await this.typeHead(head);
         return;
       }
       const wait = head.typedAt === null ? 0 : head.typedAt + this.confirmMs - Date.now();

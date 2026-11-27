@@ -7,7 +7,7 @@ Peer discovery and messaging for AI coding agents (Claude Code, OpenCode, Copilo
 - `src/broker.ts` — Entry point for the broker daemon (HTTP + WebSocket on localhost:7899). Wires together modules from `src/broker/`.
 - `src/broker/` — Broker internals: database schema (`db.ts`), peer lifecycle (`peers.ts`), service health (`services.ts`), Docker monitoring (`docker.ts`), log tailing (`logs.ts`), WS message handlers (`handlers.ts`). See `src/broker/CLAUDE.md`.
 - `src/server.ts` — MCP stdio server, one per Claude Code / Copilot instance. Connects to broker via WebSocket. Agent type detected from `CLAUDE_HIVEMIND_AGENT_TYPE` env var.
-- `src/opencode/` — OpenCode 1.x plugin (`plugin.ts`): the OpenCode peer. Broker WebSocket client (`broker-peer.ts`) and session targeting + `promptAsync` delivery (`session-inbox.ts`). Install: symlink `plugin.ts` into `~/.config/opencode/plugins/`; gated by `CLAUDE_HIVEMIND=1`.
+- `src/opencode/` — OpenCode plugin (`plugin.ts`): the OpenCode peer, one default export with the 1.x `server()` and the 2.x `setup()` entry. Broker WebSocket client (`broker-peer.ts`), the hivemind_* tools for both APIs (`peer-tools.ts`), session targeting + delivery (`session-inbox.ts`; 1.x `promptAsync`, 2.x `ctx.session.prompt` via `v2-session.ts`). Install: symlink `plugin.ts` into `~/.config/opencode/plugins/`; gated by `CLAUDE_HIVEMIND=1`.
 - `src/cli.ts` — CLI utility for inspecting broker state and managing peers.
 - `src/dashboard/` — Web dashboard (vanilla TypeScript, server-rendered HTML) showing peers grouped by namespace, Docker containers grouped by Compose project, service health, and log streaming.
 - `src/cmux/` — JSON-RPC client for cmux terminal multiplexer. Creates workspaces and launches Claude Code or OpenCode instances from the dashboard. See `src/cmux/CLAUDE.md`.
@@ -43,6 +43,7 @@ bun kill
 | `CLAUDE_HIVEMIND_DB` | `~/.claude-hivemind.db` | SQLite database path |
 | `CLAUDE_HIVEMIND_AGENT_TYPE` | `claude-code` | MCP server agent type: `claude-code` or `copilot` (OpenCode uses the plugin) |
 | `OPENCODE_COMMAND` | `opencode` | OpenCode command the dashboard launcher runs |
+| `CLAUDE_HIVEMIND_OPENCODE_LOG` | (unset) | OpenCode 2.x only: file the plugin appends its log to |
 | `CMUX_SOCKET_PATH` | `/tmp/cmux.sock` | cmux Unix socket path |
 
 ## Bun
