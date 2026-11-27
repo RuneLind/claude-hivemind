@@ -184,3 +184,41 @@ describe("DirectoryScope.confirm / holds / unconfirm", () => {
     expect(scope.knownOwned("s")).toBe(false);
   });
 });
+
+describe("DirectoryScope: bounded memory", () => {
+  const sizes = (scope: DirectoryScope) => {
+    const s = scope as any;
+    return { owned: s.owned.size, parents: s.parents.size, epochs: s.epochs.size, lookups: s.lookups.size, inflight: s.inflight.size };
+  };
+
+  test("noting 10,000 sessions keeps each per-session map at 1,000 or fewer; the newest stay known", () => {
+    const scope = new DirectoryScope("/tmp", { get: async () => ({ location: { directory: "/tmp" } }) });
+    for (let i = 0; i < 10_000; i++) scope.note(`ses_${i}`, i % 2 ? "/tmp" : "/elsewhere", null);
+    const n = sizes(scope);
+    expect(Math.max(n.owned, n.parents, n.epochs)).toBeLessThanOrEqual(1_000);
+    expect(n.lookups + n.inflight).toBe(0);
+    expect(scope.knownOwned("ses_9999")).toBe(true);
+  });
+
+  test("F3 kept: a session with a lookup in flight is never dropped, so a move during the lookup still wins", async () => {
+    const l = gatedLookup({ location: { directory: "/tmp" } });
+    const scope = new DirectoryScope("/tmp", l.session);
+    const owns = scope.owns("ses_x");
+    scope.note("ses_x", "/elsewhere");
+    for (let i = 0; i < 10_000; i++) scope.note(`ses_${i}`, "/elsewhere");
+    expect(sizes(scope).epochs).toBeLessThanOrEqual(1_000);
+    l.release();
+    expect(await owns).toBe(false);
+    expect(scope.knownOwned("ses_x")).toBe(false);
+  });
+
+  test("a token taken before a session was dropped does not hold after the session is noted again", async () => {
+    const scope = new DirectoryScope("/tmp", { get: async () => ({ location: { directory: "/tmp" } }) });
+    const token = await scope.confirm("ses_x");
+    expect(token).not.toBeNull();
+    for (let i = 0; i < 10_000; i++) scope.note(`ses_${i}`, "/elsewhere");
+    expect(sizes(scope).epochs).toBeLessThanOrEqual(1_000);
+    scope.note("ses_x", "/tmp");
+    expect(scope.holds("ses_x", token!)).toBe(false);
+  });
+});

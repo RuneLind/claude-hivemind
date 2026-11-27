@@ -22,6 +22,7 @@
  */
 
 import type { InboundMessage } from "./broker-peer.ts";
+import { LOOKUP_MS, MAX_SESSIONS, withTimeout } from "./v2-scope.ts";
 
 export interface PromptPrefs {
   agent?: string;
@@ -76,6 +77,17 @@ interface Pending {
  */
 const CONFIRM_MS = 2_000;
 
+/** Re-insert `id` as newest and drop the oldest entries past `cap`, never `keep`. */
+function remember<V>(c: Set<string> | Map<string, V>, id: string, cap: number, keep: string | null, value?: V): void {
+  c.delete(id);
+  if (c instanceof Map) c.set(id, value as V);
+  else c.add(id);
+  for (const k of c.keys()) {
+    if (c.size <= cap) return;
+    if (k !== keep) c.delete(k);
+  }
+}
+
 export class SessionInbox {
   active: string | null = null;
   private roots = new Set<string>();
@@ -92,6 +104,9 @@ export class SessionInbox {
   /** Touches still running; nothing is typed while a prompt may be about to set the target. */
   private touching = 0;
   private confirmMs: number;
+  private lookupMs: number;
+  /** Bound on roots, children and prefs; the oldest are dropped first, never the target's prefs. */
+  private maxSessions: number;
   /** False on OpenCode 2.x, whose plugin API has no TUI calls: held messages wait for a prompt. */
   private tui: boolean;
   /**
@@ -105,9 +120,11 @@ export class SessionInbox {
   constructor(
     private client: SessionClient,
     private log: (msg: string) => void = () => {},
-    opts: { confirmMs?: number; tui?: boolean; guard?: OwnershipGuard } = {},
+    opts: { confirmMs?: number; tui?: boolean; guard?: OwnershipGuard; lookupMs?: number; maxSessions?: number } = {},
   ) {
     this.confirmMs = opts.confirmMs ?? CONFIRM_MS;
+    this.lookupMs = opts.lookupMs ?? LOOKUP_MS;
+    this.maxSessions = opts.maxSessions ?? MAX_SESSIONS;
     this.tui = opts.tui ?? true;
     this.guard = opts.guard;
   }
@@ -125,8 +142,7 @@ export class SessionInbox {
 
   /** Record a session seen in a session.created/updated event. */
   observe(info: SessionInfoLike): void {
-    if (info.parentID) this.children.add(info.id);
-    else this.roots.add(info.id);
+    remember(info.parentID ? this.children : this.roots, info.id, this.maxSessions, null);
   }
 
   isChild(id: string): boolean {
@@ -168,7 +184,7 @@ export class SessionInbox {
   async touch(id: string, prefs?: PromptPrefs, promptText?: string): Promise<void> {
     if (this.disposed) return;
     if (promptText !== undefined) this.confirmTyped(promptText);
-    if (prefs) this.prefs.set(id, prefs);
+    if (prefs) remember(this.prefs, id, this.maxSessions, this.active, prefs);
     const seq = ++this.touchSeq;
     this.touching++;
     let root = false;
@@ -193,11 +209,16 @@ export class SessionInbox {
     this.pump();
   }
 
+  /** A failed or timed-out lookup answers false and is not cached: the next prompt asks again. */
   private async isRoot(id: string): Promise<boolean> {
     if (this.roots.has(id)) return true;
     if (this.children.has(id)) return false;
     try {
-      const res = await this.client.session.get({ path: { id } });
+      const res = await withTimeout(this.client.session.get({ path: { id } }), this.lookupMs);
+      if (res === "timeout") {
+        this.log(`session.get ${id} timed out; treated as not a root session`);
+        return false;
+      }
       if (res.data) {
         this.observe(res.data);
         return !res.data.parentID;

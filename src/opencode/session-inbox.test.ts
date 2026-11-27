@@ -891,3 +891,38 @@ describe("formatInbound", () => {
   });
 });
 
+
+describe("SessionInbox: bounded lookups and memory", () => {
+  test("H3: a session.get that never answers counts as not-root within the bound; typing and pumping resume", async () => {
+    const { client, calls, tui } = fakeClient({ parents: { b: undefined }, slowGet: { a: new Promise<void>(() => {}) } });
+    const inbox = new SessionInbox(client, () => {}, { confirmMs: CONFIRM_MS, lookupMs: 30 });
+    const touched = await Promise.race([inbox.touch("a", build).then(() => "done"), Bun.sleep(1_000).then(() => "hung")]);
+    expect(touched).toBe("done");
+    expect(inbox.active).toBe(null);
+    inbox.deliver("m");
+    await inbox.idle();
+    // Nothing is typed while a touch is running, so this shows `touching` went back to 0.
+    expect(tui).toEqual(["append:m", "submit"]);
+    await inbox.touch("b", build);
+    await inbox.idle();
+    expect(calls.map((c) => [c.id, c.text])).toEqual([["b", "m"]]);
+  });
+
+  test("roots, children and prefs stay at 1,000 or fewer across 10,000 sessions; the target keeps its prefs", async () => {
+    const { client, calls } = fakeClient();
+    const inbox = newInbox(client);
+    inbox.created({ id: "t" });
+    await inbox.touch("t", { agent: "plan" });
+    for (let i = 0; i < 10_000; i++) {
+      inbox.observe({ id: `r${i}` });
+      inbox.created({ id: `c${i}`, parentID: "t" });
+      await inbox.touch(`c${i}`, build);
+    }
+    const s = inbox as any;
+    expect(Math.max(s.roots.size, s.children.size, s.prefs.size)).toBeLessThanOrEqual(1_000);
+    expect(inbox.active).toBe("t");
+    inbox.deliver("m");
+    await inbox.idle();
+    expect(calls).toEqual([{ id: "t", text: "m", agent: "plan" }]);
+  });
+});
