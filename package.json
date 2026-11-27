@@ -17,6 +17,7 @@
     "test": "bun test"
   },
   "devDependencies": {
+    "@opencode/plugin": "2.4.2",
     "@types/bun": "latest"
   },
   "peerDependencies": {
