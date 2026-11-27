@@ -23,20 +23,22 @@ describe("opencode plugin module", () => {
     else process.env.CLAUDE_HIVEMIND_PORT = savedPort;
   });
 
-  test("exports only the plugin (OpenCode calls every export as a plugin)", () => {
+  test("exports only the plugin (OpenCode calls every export as a plugin), with both entry points", () => {
     expect(Object.keys(pluginModule)).toEqual(["default"]);
-    expect(typeof pluginModule.default).toBe("function");
+    expect(pluginModule.default.id).toBe("claude-hivemind");
+    expect(typeof pluginModule.default.server).toBe("function");
+    expect(typeof pluginModule.default.setup).toBe("function");
   });
 
   test("is inert without CLAUDE_HIVEMIND", async () => {
     delete process.env.CLAUDE_HIVEMIND;
-    expect(await pluginModule.default(fakeInput())).toEqual({});
+    expect(await pluginModule.default.server(fakeInput())).toEqual({});
   });
 
   test("with CLAUDE_HIVEMIND it registers the hivemind tools, and a second load is inert", async () => {
     process.env.CLAUDE_HIVEMIND = "1";
     process.env.CLAUDE_HIVEMIND_PORT = "1"; // nothing listens; the peer just retries
-    const hooks = await pluginModule.default(fakeInput());
+    const hooks = await pluginModule.default.server(fakeInput());
     dispose = hooks.dispose;
     expect(Object.keys(hooks.tool ?? {}).sort()).toEqual([
       "hivemind_list_peers",
@@ -44,7 +46,7 @@ describe("opencode plugin module", () => {
       "hivemind_send_message",
       "hivemind_set_summary",
     ]);
-    expect(await pluginModule.default(fakeInput())).toEqual({});
+    expect(await pluginModule.default.server(fakeInput())).toEqual({});
   });
 });
 
@@ -91,7 +93,7 @@ describe("opencode plugin end to end against a fake broker", () => {
     };
     process.env.CLAUDE_HIVEMIND = "1";
     process.env.CLAUDE_HIVEMIND_PORT = String(broker.port);
-    const hooks = await pluginModule.default({ client, directory: "/tmp", worktree: "/tmp" } as any);
+    const hooks = await pluginModule.default.server({ client, directory: "/tmp", worktree: "/tmp" } as any);
     try {
       const model = { providerID: "anthropic", modelID: "claude-x" };
       await hooks.event!({ event: { type: "session.created", properties: { info: { id: "ses_1" } } } as any });
@@ -157,7 +159,7 @@ describe("opencode plugin message target", () => {
     };
     process.env.CLAUDE_HIVEMIND = "1";
     process.env.CLAUDE_HIVEMIND_PORT = String(broker.port);
-    const hooks = await pluginModule.default({ client, directory: "/tmp", worktree: "/tmp" } as any);
+    const hooks = await pluginModule.default.server({ client, directory: "/tmp", worktree: "/tmp" } as any);
     try {
       await hooks["chat.message"]!({ sessionID: "ses_a", agent: "build" } as any, {} as any);
       await hooks["chat.message"]!({ sessionID: "ses_b", agent: "plan" } as any, {} as any);
@@ -224,7 +226,7 @@ describe("opencode plugin message target", () => {
     };
     process.env.CLAUDE_HIVEMIND = "1";
     process.env.CLAUDE_HIVEMIND_PORT = String(broker.port);
-    const hooks = await pluginModule.default({ client, directory: "/tmp", worktree: "/tmp" } as any);
+    const hooks = await pluginModule.default.server({ client, directory: "/tmp", worktree: "/tmp" } as any);
     try {
       const deadline = Date.now() + 2000;
       while (!peerWs && Date.now() < deadline) await Bun.sleep(5);
