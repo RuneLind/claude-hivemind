@@ -269,8 +269,32 @@ export function handlePeerMessage(
     case "register": {
       const now = new Date().toISOString();
       const namespace = sanitizeNamespace(msg.namespace);
+      // The same process re-registering for the same directory (a reconnect,
+      // or an OpenCode 2.x instance reload) gets back the id its row held, so
+      // messages queued for that id reach this directory and no other.
+      const own = peerStmts.selectByPidNsCwd.get(msg.pid, namespace, msg.cwd) as Peer | null;
       peerStmts.deleteByPidNsCwd.run(msg.pid, namespace, msg.cwd);
-      const id = generateId(peerStmts, ctx.peerSockets, msg.cwd);
+      let id: string;
+      if (own) {
+        id = own.id;
+        // Its previous socket may not have closed yet; detach it so its close
+        // handler leaves the new registration alone.
+        const old = ctx.peerSockets.get(id);
+        if (old && old !== ws) {
+          (old.data as PeerWSData).peerId = null;
+          ctx.peerSockets.delete(id);
+          try { old.close(); } catch {}
+        }
+      } else {
+        // The same process's disconnected rows for other directories are
+        // instances mid-reload: keep their ids free for them.
+        const reserved = new Set(
+          getAllPeers(peerStmts)
+            .filter((p) => p.pid === msg.pid && !p.connected && !ctx.peerSockets.has(p.id))
+            .map((p) => p.id),
+        );
+        id = generateId(peerStmts, ctx.peerSockets, msg.cwd, reserved);
+      }
 
       // generateId now ignores DB rows without an active WS, so the chosen ID
       // may still match a stale row whose close handler hasn't fired yet.
@@ -310,6 +334,7 @@ export function handlePeerMessage(
 
       ws.data.peerId = id;
       ws.data.namespace = namespace;
+      ws.data.ack = msg.ack === true;
 
       ws.subscribe(`ns:${namespace}`);
       ws.subscribe(`peer:${id}`);
@@ -334,9 +359,11 @@ export function handlePeerMessage(
           text: m.text,
           sent_at: m.sent_at,
           correlation_id: m.correlation_id ?? undefined,
+          ...(ws.data.ack ? { message_id: m.id } : {}),
         };
         ws.send(JSON.stringify(deliverMsg));
-        msgStmts.markDelivered.run(m.id);
+        // An acking peer marks it delivered itself, once it has handed it on.
+        if (!ws.data.ack) msgStmts.markDelivered.run(m.id);
       }
 
       const peer = getPeer(peerStmts, id)!;
@@ -443,6 +470,12 @@ export function handlePeerMessage(
         .filter((p) => isPeerLive(p, ctx.peerSockets));
 
       ws.send(JSON.stringify({ type: "peers", peers } satisfies BrokerMessage));
+      break;
+    }
+
+    case "ack": {
+      if (!ws.data.peerId) return;
+      msgStmts.ackMessage.run(msg.message_id, ws.data.peerId);
       break;
     }
 

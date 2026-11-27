@@ -41,6 +41,11 @@ export function createPeerStatements(db: Database) {
     markConnected: db.prepare(
       `UPDATE peers SET connected = ? WHERE id = ?`
     ),
+    // last_seen = disconnect time: cleanStalePeers reaps the row a grace period
+    // later, which still holds after a broker restart drops the grace timer.
+    markDisconnected: db.prepare(
+      `UPDATE peers SET connected = 0, last_seen = ? WHERE id = ?`
+    ),
     deletePeerStmt: db.prepare(`DELETE FROM peers WHERE id = ?`),
     selectPeerById: db.prepare(`SELECT * FROM peers WHERE id = ?`),
     selectAllPeers: db.prepare(`SELECT * FROM peers`),
@@ -50,6 +55,7 @@ export function createPeerStatements(db: Database) {
     // Keyed on cwd too: one OpenCode 2.x process registers a peer per
     // directory, and those must not replace each other.
     deleteByPidNsCwd: db.prepare(`DELETE FROM peers WHERE pid = ? AND namespace = ? AND cwd = ?`),
+    selectByPidNsCwd: db.prepare(`SELECT * FROM peers WHERE pid = ? AND namespace = ? AND cwd = ?`),
     selectPeerIdPid: db.prepare(`SELECT id, pid FROM peers`),
     upsertSummary: db.prepare(`
       INSERT INTO saved_summaries (cwd, summary, updated_at) VALUES (?, ?, ?)
@@ -72,6 +78,10 @@ export function createMessageStatements(db: Database) {
     ),
     markDelivered: db.prepare(
       `UPDATE messages SET delivered = 1 WHERE id = ?`
+    ),
+    // A peer can ack only its own messages.
+    ackMessage: db.prepare(
+      `UPDATE messages SET delivered = 1 WHERE id = ? AND to_id = ?`
     ),
     deleteOldDeliveredMessages: db.prepare(
       `DELETE FROM messages WHERE delivered = 1 AND sent_at < ?`
@@ -144,6 +154,9 @@ export function generateId(
   stmts: PeerStatements,
   peerSockets: Map<string, unknown>,
   cwd: string,
+  // Ids taken although no socket holds them (a disconnected row that is
+  // expected back, see the register handler).
+  reserved: ReadonlySet<string> = new Set(),
 ): string {
   // Derive the id from the cwd basename, but sanitize to [a-zA-Z0-9_-] first.
   // An unsanitized basename could contain a `:` (legal in unix dir names) and
@@ -156,7 +169,7 @@ export function generateId(
   // peerSockets is authoritative for "actively connected" — PID checks lie
   // briefly during fast re-execs (zombie PID, or close handler not yet fired)
   // and would push us to <name>-2 even though the slot is effectively free.
-  const livePeers = getAllPeers(stmts).filter((p) => peerSockets.has(p.id));
+  const livePeers = getAllPeers(stmts).filter((p) => peerSockets.has(p.id) || reserved.has(p.id));
   // Only `<base>` and `<base>-<digits>` count as conflicts — hyphenated names
   // like `melosys-api-claude` share a prefix with `melosys` but are distinct
   // identities and must not push us to `melosys-2`.
@@ -258,6 +271,34 @@ export function deliverOrQueue(
 
   // Synchronous delivery via WebSocket (MCP server, or the OpenCode plugin)
   const targetWs = ctx.peerSockets.get(toId);
+  // A peer that acks (the OpenCode plugin) gets the row id, and the row stays
+  // undelivered until the ack, so a message the peer held in memory when it
+  // stopped or crashed is resent on its next registration.
+  if (targetWs && targetWs.readyState === WS_OPEN && (targetWs.data as { ack?: boolean } | undefined)?.ack) {
+    let messageId: number;
+    try {
+      messageId = Number(msgStmts.insertMessage.run(fromId, toId, text, now, 0, correlationId).lastInsertRowid);
+    } catch (e) {
+      log(`Failed to queue message for ${toId}: ${e}`);
+      return "failed";
+    }
+    try {
+      targetWs.send(JSON.stringify({
+        type: "message",
+        from_id: fromId,
+        from_summary: sender?.summary ?? "",
+        from_cwd: sender?.cwd ?? "",
+        text,
+        sent_at: now,
+        correlation_id: correlationId ?? undefined,
+        message_id: messageId,
+      } satisfies BrokerMessage));
+    } catch (e) {
+      log(`Live send to ${toId} failed, kept queued: ${e}`);
+      return "queued";
+    }
+    return target && isPeerLive(target, ctx.peerSockets) ? "delivered" : "queued";
+  }
   if (targetWs && targetWs.readyState === WS_OPEN) {
     try {
       targetWs.send(JSON.stringify({
@@ -301,14 +342,21 @@ export function cleanStalePeers(
   msgStmts: MessageStatements,
   serviceStmts: { deleteServiceByPeer: { run: (...args: any[]) => void } },
   peerSockets?: Map<string, unknown>,
+  graceMs = 30_000,
 ): void {
   const peers = stmts.selectAllPeers.all() as Peer[];
+  const nowMs = Date.now();
   for (const peer of peers) {
     const pidDead = !isProcessAlive(peer.pid);
     // A peer marked connected in DB but missing from the WebSocket map is stale
     // (PID recycled by OS, or broker restarted while peer was connected)
     const orphanedConnection = peer.connected && peerSockets && !peerSockets.has(peer.id);
-    if (pidDead || orphanedConnection) {
+    // A disconnected row past its grace period. The close handler's grace
+    // timer does the same, but a broker restart loses that timer, and a live
+    // pid (an OpenCode 2.x process serving other directories, or a recycled
+    // pid) would otherwise keep the row forever.
+    const graceOver = !peer.connected && !peerSockets?.has(peer.id) && nowMs - Date.parse(peer.last_seen) >= graceMs;
+    if (pidDead || orphanedConnection || graceOver) {
       serviceStmts.deleteServiceByPeer.run(peer.id);
       stmts.deletePeerStmt.run(peer.id);
       if (orphanedConnection && !pidDead) {
@@ -316,7 +364,6 @@ export function cleanStalePeers(
       }
     }
   }
-  const now = Date.now();
-  msgStmts.deleteOldDeliveredMessages.run(new Date(now - DELIVERED_RETENTION_MS).toISOString());
-  msgStmts.deleteOldUndeliveredMessages.run(new Date(now - UNDELIVERED_RETENTION_MS).toISOString());
+  msgStmts.deleteOldDeliveredMessages.run(new Date(nowMs - DELIVERED_RETENTION_MS).toISOString());
+  msgStmts.deleteOldUndeliveredMessages.run(new Date(nowMs - UNDELIVERED_RETENTION_MS).toISOString());
 }

@@ -26,6 +26,8 @@ export interface BrokerPeerOptions {
   WebSocketImpl?: typeof WebSocket;
   /** Timeouts for list_peers / send_result, overridable in tests. */
   requestTimeoutMs?: number;
+  /** Acks a previous instance could not send; sent once this one registers. */
+  unsentAcks?: Iterable<number>;
 }
 
 const MAX_RECONNECT_DELAY = 30_000;
@@ -42,6 +44,7 @@ export class BrokerPeer {
   private services = new Map<number, Extract<ClientMessage, { type: "register_service" }>>();
   private peerWaiters: { resolve: (p: Peer[]) => void; reject: (e: Error) => void }[] = [];
   private sendWaiters = new Map<string, (s: SendStatus) => void>();
+  private unsentAcks: Set<number>;
   private readonly WS: typeof WebSocket;
   private readonly timeoutMs: number;
   private readonly log: (msg: string) => void;
@@ -50,6 +53,7 @@ export class BrokerPeer {
     this.WS = opts.WebSocketImpl ?? WebSocket;
     this.timeoutMs = opts.requestTimeoutMs ?? 5000;
     this.log = opts.log ?? (() => {});
+    this.unsentAcks = new Set(opts.unsentAcks ?? []);
   }
 
   start(): void {
@@ -142,6 +146,9 @@ export class BrokerPeer {
       case "registered":
         this.id = msg.id;
         this.log(`registered as ${msg.id} (namespace ${msg.namespace})`);
+        for (const id of [...this.unsentAcks]) {
+          if (this.raw({ type: "ack", message_id: id })) this.unsentAcks.delete(id);
+        }
         break;
       case "message":
         this.opts.onMessage(msg);
@@ -202,6 +209,19 @@ export class BrokerPeer {
       }, this.timeoutMs);
       this.raw({ type: "send_message", to, text, correlation_id: correlationId, send_id });
     });
+  }
+
+  /**
+   * Tell the broker a message (by its `message_id`) has been handed on. Kept
+   * and sent after the next registration when the socket is down.
+   */
+  ack(messageId: number): void {
+    if (this.id === null || !this.raw({ type: "ack", message_id: messageId })) this.unsentAcks.add(messageId);
+  }
+
+  /** Acks not yet sent, for the next instance (see `unsentAcks`). */
+  get pendingAcks(): number[] {
+    return [...this.unsentAcks];
   }
 
   setSummary(summary: string): boolean {

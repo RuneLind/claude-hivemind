@@ -6,7 +6,7 @@ import { Database } from "bun:sqlite";
 
 export const WS_OPEN = 1;
 
-export type PeerWSData = { kind: "peer"; peerId: string | null; namespace: string };
+export type PeerWSData = { kind: "peer"; peerId: string | null; namespace: string; ack?: boolean };
 export type DashboardWSData = { kind: "dashboard" };
 export type WSData = PeerWSData | DashboardWSData;
 

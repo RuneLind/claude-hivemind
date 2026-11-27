@@ -149,6 +149,25 @@ describe("BrokerPeer", () => {
     expect(broker.received[1]).toEqual({ type: "set_summary", summary: "working on X" });
   });
 
+  test("H2: an ack made while the socket is down is sent after the next registration", async () => {
+    broker = fakeBroker();
+    peer = new BrokerPeer({ port: broker.server.port!, namespace: "default", register, onMessage: () => {} });
+    peer.start();
+    await until(() => peer!.connected);
+    peer.ack(4);
+    await until(() => broker!.received.some((m) => m.type === "ack"));
+
+    broker.received.length = 0;
+    broker.sockets[0]!.close();
+    await until(() => !peer!.connected);
+    peer.ack(5);
+    expect(peer.pendingAcks).toEqual([5]);
+    await until(() => broker!.received.some((m) => m.type === "ack"), 3000);
+    expect(broker.received.map((m) => m.type)).toEqual(["register", "ack"]);
+    expect(broker.received[1]).toEqual({ type: "ack", message_id: 5 });
+    expect(peer.pendingAcks).toEqual([]);
+  });
+
   test("stop() does not reconnect", async () => {
     broker = fakeBroker();
     peer = new BrokerPeer({ port: broker.server.port!, namespace: "default", register, onMessage: () => {} });

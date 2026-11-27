@@ -66,7 +66,9 @@ const dashboardHtml = renderDashboardPage();
 const PORT = parseInt(process.env.CLAUDE_HIVEMIND_PORT ?? "7899", 10);
 const DB_PATH =
   process.env.CLAUDE_HIVEMIND_DB ?? `${process.env.HOME}/.claude-hivemind.db`;
-const GRACE_PERIOD_MS = 30_000;
+// How long a disconnected peer's row (and its id) is kept for it to come back.
+// The override exists for tests.
+const GRACE_PERIOD_MS = parseInt(process.env.CLAUDE_HIVEMIND_GRACE_MS ?? "30000", 10) || 30_000;
 
 // --- Origin protection (CSRF / DNS-rebinding) ---
 //
@@ -471,11 +473,13 @@ function startServer() {
         unsubscribeAllDockerLogs(dockerLogSubs, ws as import("bun").ServerWebSocket<WSData>);
       }
 
+      // A socket whose id a newer registration took was detached there
+      // (peerId cleared), so its close leaves the new registration alone.
       if (ws.data.kind === "peer" && ws.data.peerId) {
         const peerId = ws.data.peerId;
         const namespace = ws.data.namespace;
         peerSockets.delete(peerId);
-        peerStmts.markConnected.run(0, peerId);
+        peerStmts.markDisconnected.run(new Date().toISOString(), peerId);
 
         server.publish(
           `ns:${namespace}`,
@@ -529,8 +533,13 @@ const dashboardDeps: DashboardDeps = {
 
 // --- Start background tasks ---
 
-cleanStalePeers(peerStmts, msgStmts, svcStmts, peerSockets);
-const staleCheckTimer = setInterval(() => cleanStalePeers(peerStmts, msgStmts, svcStmts, peerSockets), 30_000);
+// Also reaps rows that were disconnected when the broker last stopped: their
+// grace timers died with it.
+cleanStalePeers(peerStmts, msgStmts, svcStmts, peerSockets, GRACE_PERIOD_MS);
+const staleCheckTimer = setInterval(
+  () => cleanStalePeers(peerStmts, msgStmts, svcStmts, peerSockets, GRACE_PERIOD_MS),
+  Math.min(30_000, GRACE_PERIOD_MS),
+);
 const serviceHealthTimer = setInterval(() => pollServiceHealth(ctx, peerStmts, svcStmts, servicePollState), 15_000);
 
 // Background monitoring is fire-and-forget; attach .catch() so a rejection

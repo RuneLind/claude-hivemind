@@ -16,6 +16,10 @@
  *   (./v2-scope.ts). Inbound messages go by `ctx.session.prompt`
  *   (./v2-session.ts). 2.x plugins have no TUI calls, so messages that arrive
  *   before the first prompt wait for it.
+ * Both register with `ack: true`: the broker keeps each message undelivered
+ * until the inbox has put it into a session, and resends it when this
+ * directory's peer registers again, so a held message survives a reload, a
+ * restart or a crash.
  * OpenCode 1.19 calls `setup()` too, with a context that has no session, tool
  * or event domain; `setup()` returns at once there.
  *
@@ -54,6 +58,11 @@ function claim(): boolean {
   return true;
 }
 
+// Acks a stopped peer could not send (broker unreachable), by port and
+// directory, for the next instance of the same directory in this process.
+const UNSENT_ACKS = Symbol.for("claude-hivemind.opencode-plugin.unsent-acks");
+const unsentAcks = (g[UNSENT_ACKS] ??= new Map<string, number[]>()) as Map<string, number[]>;
+
 function run(cmd: string[], cwd: string): string | null {
   try {
     const p = Bun.spawnSync(cmd, { cwd, stdout: "pipe", stderr: "ignore" });
@@ -70,10 +79,22 @@ async function startPeer(directory: string, client: SessionClient, log: (m: stri
   const namespace = resolveNamespace(directory, await loadNamespaceConfig());
   const correlation = new CorrelationTracker();
   const inbox = new SessionInbox(client, log, { tui });
+  const port = parseInt(process.env.CLAUDE_HIVEMIND_PORT ?? "7899", 10);
+  const ackKey = `${port}\0${directory}`;
+  const inheritedAcks = unsentAcks.get(ackKey) ?? [];
+  unsentAcks.delete(ackKey);
 
-  const peer = new BrokerPeer({
-    port: parseInt(process.env.CLAUDE_HIVEMIND_PORT ?? "7899", 10),
+  // The broker keeps a message undelivered until it is acked here, which is
+  // once the inbox has put it into a session; it resends unacked messages when
+  // this directory's peer registers again (reconnect, reload, restart). Ids
+  // already held or handed on are not taken twice; a handed-on one is acked again.
+  const held = new Set<number>();
+  const handedOn = new Set<number>(inheritedAcks);
+
+  const peer: BrokerPeer = new BrokerPeer({
+    port,
     namespace,
+    unsentAcks: inheritedAcks,
     register: {
       pid: process.pid,
       cwd: directory,
@@ -83,14 +104,36 @@ async function startPeer(directory: string, client: SessionClient, log: (m: stri
       agent_type: "opencode",
       // No surface_id: the broker must route to this socket, not type into cmux.
       workspace_id: process.env.CMUX_WORKSPACE_ID || undefined,
+      ack: true,
     },
     onMessage: (msg) => {
+      const mid = msg.message_id;
+      if (mid !== undefined) {
+        if (handedOn.has(mid)) return peer.ack(mid);
+        if (held.has(mid)) return;
+        held.add(mid);
+      }
       correlation.recordInbound(msg.from_id, msg.correlation_id);
-      inbox.deliver(formatInbound(msg));
+      inbox.deliver(
+        formatInbound(msg),
+        mid === undefined
+          ? undefined
+          : () => {
+              held.delete(mid);
+              handedOn.add(mid);
+              peer.ack(mid);
+            },
+      );
     },
     log,
   });
   peer.start();
+
+  const stop = () => {
+    peer.stop();
+    const left = peer.pendingAcks;
+    if (left.length > 0) unsentAcks.set(ackKey, left);
+  };
 
   const instructions = () =>
     [
@@ -100,7 +143,7 @@ async function startPeer(directory: string, client: SessionClient, log: (m: stri
       `Call hivemind_set_summary early with 1-2 sentences on what you are working on.`,
     ].join("\n");
 
-  return { peer, inbox, instructions, tools: peerTools(peer, namespace, correlation) };
+  return { peer, stop, inbox, instructions, tools: peerTools(peer, namespace, correlation) };
 }
 
 /** OpenCode 1.x entry. */
@@ -112,7 +155,7 @@ async function server({ client, directory }: PluginInput): Promise<Hooks> {
   const log = (message: string) => {
     client.app.log({ body: { service: "claude-hivemind", level: "info", message } }).catch(() => {});
   };
-  const { peer, inbox, instructions, tools } = await startPeer(
+  const { stop, inbox, instructions, tools } = await startPeer(
     directory,
     client as unknown as SessionClient,
     log,
@@ -142,7 +185,7 @@ async function server({ client, directory }: PluginInput): Promise<Hooks> {
     tool: v1ToolMap(tools),
 
     dispose: async () => {
-      peer.stop();
+      stop();
       g[LOADED] = false;
     },
   };
@@ -181,8 +224,8 @@ async function setup(ctx: Plugin.Context): Promise<Plugin.Cleanup | void> {
   };
 
   try {
-    const { peer, inbox, instructions, tools } = await startPeer(directory, v2SessionClient(ctx.session), log, false);
-    stopPeer = () => peer.stop();
+    const { stop, inbox, instructions, tools } = await startPeer(directory, v2SessionClient(ctx.session), log, false);
+    stopPeer = stop;
 
     const foreign = "This session is not in this hivemind peer's directory.";
     registrations.push(

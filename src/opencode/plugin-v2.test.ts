@@ -1,16 +1,19 @@
 import { describe, test, expect, afterEach } from "bun:test";
-import { mkdtempSync, realpathSync } from "node:fs";
+import type { Subprocess } from "bun";
+import { Database } from "bun:sqlite";
+import { mkdtempSync, realpathSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import plugin from "./plugin.ts";
 
 /** A fake broker: one socket per registered peer, each given an id from its cwd's basename. */
-function fakeBroker() {
+function fakeBroker(port = 0) {
   const registers: any[] = [];
   const sockets = new Map<string, any>();
   const unregistered: string[] = [];
+  const acks: number[] = [];
   const srv = Bun.serve({
-    port: 0,
+    port,
     fetch(req, s) {
       if (s.upgrade(req, { data: { id: "" } } as any)) return;
       return new Response("no", { status: 400 });
@@ -24,6 +27,8 @@ function fakeBroker() {
           ws.data.id = id;
           sockets.set(id, ws);
           ws.send(JSON.stringify({ type: "registered", id, namespace: "default" }));
+        } else if (msg.type === "ack") {
+          acks.push(msg.message_id);
         }
       },
       close(ws: any) {
@@ -38,11 +43,12 @@ function fakeBroker() {
     port: srv.port,
     registers,
     unregistered,
+    acks,
     connected: () => [...sockets.keys()].sort(),
-    async push(to: string, text: string) {
+    async push(to: string, text: string, message_id?: number) {
       const deadline = Date.now() + 2000;
       while (!sockets.has(to) && Date.now() < deadline) await Bun.sleep(5);
-      sockets.get(to).send(JSON.stringify({ type: "message", from_id: "huginn", from_summary: "", from_cwd: "", text, sent_at: "t" }));
+      sockets.get(to).send(JSON.stringify({ type: "message", from_id: "huginn", from_summary: "", from_cwd: "", text, sent_at: "t", message_id }));
     },
     stop: () => srv.stop(true),
   };
@@ -178,6 +184,55 @@ const until = async (cond: () => boolean, ms = 2000) => {
   const deadline = Date.now() + ms;
   while (!cond() && Date.now() < deadline) await Bun.sleep(5);
 };
+
+/** The real broker in a subprocess, on a spare port with a temp DB. */
+async function realBroker() {
+  const s = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("") });
+  const port = s.port!;
+  s.stop(true);
+  const dbPath = join(tmpdir(), `hm-v2-broker-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
+  const proc: Subprocess = Bun.spawn(["bun", "run", join(import.meta.dir, "..", "broker.ts")], {
+    env: { ...process.env, CLAUDE_HIVEMIND_PORT: String(port), CLAUDE_HIVEMIND_DB: dbPath },
+    stdout: "ignore",
+    stderr: "ignore",
+  });
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    try {
+      if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) break;
+    } catch {}
+    if (Date.now() > deadline) throw new Error("broker did not start");
+    await Bun.sleep(50);
+  }
+  const query = <T>(sql: string, ...args: any[]) => {
+    const db = new Database(dbPath, { readonly: true });
+    try {
+      return db.query(sql).all(...args) as T[];
+    } finally {
+      db.close();
+    }
+  };
+  return {
+    port,
+    connectedIds: () => query<{ id: string }>(`SELECT id FROM peers WHERE connected = 1`).map((r) => r.id).sort(),
+    delivered: (text: string) => query<{ delivered: number }>(`SELECT delivered FROM messages WHERE text = ?`, text)[0]?.delivered,
+    send: (to: string, text: string) =>
+      fetch(`http://127.0.0.1:${port}/api/send-message`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ from_id: "test", to_id: to, text }),
+      }).then((r) => r.json() as Promise<{ ok: boolean }>),
+    async stop() {
+      proc.kill();
+      await proc.exited;
+      for (const suffix of ["", "-wal", "-shm"]) {
+        try {
+          unlinkSync(dbPath + suffix);
+        } catch {}
+      }
+    },
+  };
+}
 
 /** Two directories whose basenames the fake broker turns into peer ids. */
 function twoDirs() {
@@ -382,6 +437,103 @@ describe("opencode plugin setup() (OpenCode 2.x entry)", () => {
     expect(server.prompts.map((p) => p.sessionID)).toEqual(["ses_root", "ses_root"]);
     expect(server.prompts[0].text).toContain('<hivemind_message from_id="huginn">');
     expect(server.prompts[0].agent).toBeUndefined();
+  });
+
+  test("H2: a message held before the first prompt survives an instance reload and arrives once (real broker)", async () => {
+    const broker = await realBroker();
+    cleanups.push(broker.stop);
+    process.env.CLAUDE_HIVEMIND = "1";
+    process.env.CLAUDE_HIVEMIND_PORT = String(broker.port);
+    const server = fakeV2Server();
+    const { a } = twoDirs();
+
+    const first = await load(server, a);
+    await until(() => broker.connectedIds().includes("repoa"), 5000);
+    expect((await broker.send("repoa", "held-before-reload")).ok).toBe(true);
+    await Bun.sleep(200);
+    expect(server.prompts).toHaveLength(0);
+
+    await first.cleanup!();
+    const second = await load(server, a);
+    await until(() => broker.connectedIds().includes("repoa"), 5000);
+    await Bun.sleep(200);
+    server.create("ses_a", a);
+    await server.prompt("ses_a", "hello");
+    await until(() => server.prompts.length > 0);
+    await Bun.sleep(200);
+    expect(server.prompts.filter((p) => p.text.includes("held-before-reload"))).toHaveLength(1);
+    await until(() => broker.delivered("held-before-reload") === 1);
+    expect(broker.delivered("held-before-reload")).toBe(1);
+
+    // Handed on and acked: the next reload does not bring it back.
+    await second.cleanup!();
+    await load(server, a);
+    await until(() => broker.connectedIds().includes("repoa"), 5000);
+    await server.prompt("ses_a", "again");
+    await Bun.sleep(300);
+    expect(server.prompts.filter((p) => p.text.includes("held-before-reload"))).toHaveLength(1);
+  }, 20_000);
+
+  test("H2: an ack the broker could not take is handed to the next instance of the directory, and its resend is not delivered twice", async () => {
+    const broker = withBroker();
+    const server = fakeV2Server();
+    const { a } = twoDirs();
+    const first = await load(server, a);
+    await until(() => broker.connected().length === 1);
+    server.create("ses_a", a);
+    await broker.push("repoa", "m7", 7);
+    await Bun.sleep(30);
+
+    // The broker goes away; the message is then put into the session.
+    broker.stop();
+    await Bun.sleep(30);
+    await server.prompt("ses_a", "hello");
+    await until(() => server.prompts.length > 0);
+    expect(server.prompts.filter((p) => p.text.includes("\nm7\n"))).toHaveLength(1);
+    await first.cleanup!();
+
+    const broker2 = fakeBroker(broker.port);
+    cleanups.push(broker2.stop);
+    await load(server, a);
+    await until(() => broker2.acks.length > 0);
+    expect(broker2.acks).toEqual([7]);
+    await broker2.push("repoa", "m7", 7);
+    await until(() => broker2.acks.length > 1);
+    expect(broker2.acks).toEqual([7, 7]);
+    await server.prompt("ses_a", "again");
+    await Bun.sleep(50);
+    expect(server.prompts.filter((p) => p.text.includes("\nm7\n"))).toHaveLength(1);
+  });
+
+  test("H2: a message resent while its prompt is still in flight is not delivered twice", async () => {
+    const broker = withBroker();
+    const server = fakeV2Server();
+    const { a } = twoDirs();
+    const { ctx } = server.ctxFor(a);
+    let release = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const prompt = ctx.session.prompt;
+    ctx.session.prompt = async (input: any) => {
+      await gate;
+      return prompt(input);
+    };
+    const cleanup = await plugin.setup(ctx);
+    cleanups.push(() => cleanup?.());
+    await until(() => broker.connected().length === 1);
+    server.create("ses_a", a);
+    await server.prompt("ses_a", "hello");
+    await Bun.sleep(20);
+
+    await broker.push("repoa", "m9", 9);
+    await Bun.sleep(20);
+    // The broker resends it (a re-registration) before the prompt returns.
+    await broker.push("repoa", "m9", 9);
+    await Bun.sleep(20);
+    release();
+    await until(() => broker.acks.length > 0);
+    await Bun.sleep(50);
+    expect(server.prompts.filter((p) => p.text.includes("\nm9\n"))).toHaveLength(1);
+    expect(broker.acks).toEqual([9]);
   });
 
   test("cleanup unregisters only its own peer and disposes only its own hooks", async () => {
