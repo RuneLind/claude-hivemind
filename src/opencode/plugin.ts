@@ -254,6 +254,9 @@ async function setup(ctx: Plugin.Context): Promise<Plugin.Cleanup | void> {
     registrations.push(
       await ctx.session.hook("context", async (event) => {
         if (!(await scope.owns(event.sessionID)) || inbox.isChild(event.sessionID)) return;
+        // The inbox learns a session's parent from session.created or from the
+        // prompt hook's unawaited lookup, so it may not know it yet.
+        if (!(await scope.isRoot(event.sessionID))) return;
         event.system.push({ type: "text", text: instructions() });
       }),
     );
@@ -261,16 +264,24 @@ async function setup(ctx: Plugin.Context): Promise<Plugin.Cleanup | void> {
     void (async () => {
       try {
         for await (const e of ctx.event.subscribe({
-          types: ["session.created", "session.deleted"],
+          types: ["session.created", "session.deleted", "session.moved"],
           signal: controller.signal,
         })) {
           if (e.type === "session.created") {
-            if (scope.note(e.data.sessionID, e.data.location?.directory)) {
+            if (scope.note(e.data.sessionID, e.data.location?.directory, e.data.parentID ?? null)) {
               inbox.created({ id: e.data.sessionID, parentID: e.data.parentID });
             }
           } else if (e.type === "session.deleted") {
             if (scope.knownOwned(e.data.sessionID)) inbox.deleted(e.data.sessionID);
             scope.forget(e.data.sessionID);
+          } else if (e.type === "session.moved") {
+            // The old owner lets the session go: it stops being the target,
+            // and messages held for this peer wait for its next prompted root
+            // session. The new owner claims it on its next prompt.
+            const was = scope.knownOwned(e.data.sessionID);
+            const mine = scope.note(e.data.sessionID, e.data.location?.directory);
+            if (was && !mine) inbox.deleted(e.data.sessionID);
+            if (was !== mine) log(`session ${e.data.sessionID} moved ${mine ? "here" : "away"}`);
           }
         }
       } catch (err) {

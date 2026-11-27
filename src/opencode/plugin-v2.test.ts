@@ -103,11 +103,12 @@ function fakeV2Server() {
         },
       },
       event: {
-        subscribe({ signal }: { types?: string[]; signal?: AbortSignal } = {}) {
+        subscribe({ types, signal }: { types?: string[]; signal?: AbortSignal } = {}) {
           if (signal) signals.push(signal);
           const queue: any[] = [];
           let wake: (() => void) | null = null;
           const sub = (e: any) => {
+            if (types && !types.includes(e.type)) return;
             queue.push(e);
             wake?.();
           };
@@ -148,6 +149,12 @@ function fakeV2Server() {
     create(sessionID: string, directory: string, parentID?: string) {
       sessions.set(sessionID, { directory, parentID });
       for (const s of subscribers) s({ type: "session.created", data: { sessionID, parentID, location: { directory } } });
+    },
+    /** v2's SessionDomain.move: the session's directory changes, and session.moved reports it. */
+    move(sessionID: string, directory: string) {
+      const s = sessions.get(sessionID)!;
+      s.directory = directory;
+      for (const sub of subscribers) sub({ type: "session.moved", data: { sessionID, location: { directory }, projectID: "prj" } });
     },
     remove(sessionID: string) {
       sessions.delete(sessionID);
@@ -414,6 +421,70 @@ describe("opencode plugin setup() (OpenCode 2.x entry)", () => {
     expect(root[0].type).toBe("text");
     expect(root[0].text).toContain("claude-hivemind network");
     expect(await server.context("ses_child")).toHaveLength(0);
+  });
+
+  test("H3: a child known only to session.get gets no instructions, even while the inbox's own lookup is in flight", async () => {
+    withBroker();
+    const server = fakeV2Server();
+    const { a } = twoDirs();
+    const { ctx } = server.ctxFor(a);
+    // The first lookup (ownership) answers at once; later ones (the inbox's
+    // root check from the unawaited prompt hook) are still in flight.
+    const get = ctx.session.get;
+    let calls = 0;
+    ctx.session.get = async (input: any) => {
+      if (calls++ > 0) await Bun.sleep(300);
+      return get(input);
+    };
+    const cleanup = await plugin.setup(ctx);
+    cleanups.push(() => cleanup?.());
+
+    server.sessions.set("ses_root", { directory: a });
+    server.sessions.set("ses_child", { directory: a, parentID: "ses_root" });
+    await server.prompt("ses_child", "sub task");
+    expect(await server.context("ses_child")).toHaveLength(0);
+    expect(await server.context("ses_root")).toHaveLength(1);
+  });
+
+  test("H1: a moved session is released by its old directory's instance and claimed by the new one", async () => {
+    const broker = withBroker();
+    const server = fakeV2Server();
+    const { a, b } = twoDirs();
+    await load(server, a);
+    await load(server, b);
+    await until(() => broker.connected().length === 2);
+
+    server.create("ses_x", a);
+    await server.prompt("ses_x", "hello");
+    await Bun.sleep(30);
+    expect((await server.context("ses_x"))[0].text).toContain('as peer "repoa"');
+
+    server.move("ses_x", b);
+    await Bun.sleep(20);
+    const sys = await server.context("ses_x");
+    expect(sys).toHaveLength(1);
+    expect(sys[0].text).toContain('as peer "repob"');
+
+    // a no longer targets the moved session: a's message waits for a's next root prompt.
+    await broker.push("repoa", "for a");
+    await Bun.sleep(50);
+    expect(server.prompts).toHaveLength(0);
+
+    // b claims the session on its next prompt; b's message reaches it.
+    await server.prompt("ses_x", "now in b");
+    await broker.push("repob", "for b");
+    await until(() => server.prompts.length >= 1);
+    await Bun.sleep(30);
+    expect(server.prompts.map((p) => [p.sessionID, p.via])).toEqual([["ses_x", b]]);
+    expect(server.prompts[0].text).toContain("\nfor b\n");
+
+    // a's held message is not lost: it goes to a's next prompted root session.
+    server.create("ses_a2", a);
+    await server.prompt("ses_a2", "back in a");
+    await until(() => server.prompts.length >= 2);
+    expect(server.prompts[1].sessionID).toBe("ses_a2");
+    expect(server.prompts[1].via).toBe(a);
+    expect(server.prompts[1].text).toContain("\nfor a\n");
   });
 
   test("a subagent's prompt never becomes the target; held messages go to the first prompted root", async () => {
