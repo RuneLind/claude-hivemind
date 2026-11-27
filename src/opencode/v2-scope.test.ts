@@ -160,7 +160,7 @@ describe("DirectoryScope.confirm / holds / unconfirm", () => {
     expect(scope.holds("s", t2)).toBe(false);
   });
 
-  test("A2: a lookup in flight across unconfirm answers not-owned and caches nothing", async () => {
+  test("R2-2: a lookup in flight across unconfirm discards its answer and asks again: a still-owned session stays owned", async () => {
     const g = gated(() => "/tmp");
     const scope = new DirectoryScope("/tmp", g.session);
     g.close();
@@ -168,8 +168,64 @@ describe("DirectoryScope.confirm / holds / unconfirm", () => {
     await Promise.resolve();
     scope.unconfirm();
     g.open();
-    expect(await p).toBe(false);
+    expect(await p).toBe(true);
+    expect(g.gets).toBe(2);
+    expect(scope.knownOwned("s")).toBe(true);
+  });
+
+  test("R2-1: a confirm in flight across unconfirm still returns a token that holds when the session is still owned", async () => {
+    const g = gated(() => "/tmp");
+    const scope = new DirectoryScope("/tmp", g.session);
+    g.close();
+    const p = scope.confirm("s");
+    await Promise.resolve();
+    scope.unconfirm();
+    g.open();
+    const token = await p;
+    expect(token).not.toBeNull();
+    expect(scope.holds("s", token!)).toBe(true);
+  });
+
+  test("R2: a session that moved while its lookup straddled unconfirm is not owned: the second ask sees the move", async () => {
+    let dir = "/tmp";
+    const g = gated(() => dir);
+    const scope = new DirectoryScope("/tmp", g.session);
+    g.close();
+    const owns = scope.owns("s");
+    const confirm = scope.confirm("s");
+    await Promise.resolve();
+    scope.unconfirm();
+    dir = "/elsewhere";
+    g.open();
+    expect(await owns).toBe(false);
+    expect(await confirm).toBeNull();
     expect(scope.knownOwned("s")).toBe(false);
+  });
+
+  test("R2: the second ask is bounded too: a lookup that hangs after unconfirm answers not-owned within lookupMs", async () => {
+    let calls = 0;
+    let release!: () => void;
+    const first = new Promise<void>((r) => (release = r));
+    const scope = new DirectoryScope(
+      "/tmp",
+      {
+        get: (async () => {
+          if (++calls === 1) await first;
+          else await new Promise(() => {});
+          return { location: { directory: "/tmp" } };
+        }) as any,
+      },
+      () => {},
+      30,
+    );
+    const p = scope.owns("s");
+    await Promise.resolve();
+    scope.unconfirm();
+    release();
+    const started = Date.now();
+    expect(await p).toBe(false);
+    expect(calls).toBe(2);
+    expect(Date.now() - started).toBeLessThan(500);
   });
 
   test("A1: a session deleted while confirm runs is not recorded as owned", async () => {

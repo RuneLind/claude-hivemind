@@ -274,17 +274,23 @@ async function setup(ctx: Plugin.Context): Promise<Plugin.Cleanup | void> {
     // @opencode/client's shared event stream finishes every subscriber when
     // its transport ends or throws, or when a subscriber falls 4096 events
     // behind. Events may be lost across the gap, so cached ownership is
-    // dropped when a stream ends and again when the next one delivers.
+    // dropped when a stream ends, again when the next one starts (an answer
+    // looked up in the gap may predate a lost move, and the next event may be
+    // hours away), and again when it first delivers.
     void (async () => {
       let backoff = RESUBSCRIBE_MIN_MS;
       for (let attempt = 0; !controller.signal.aborted; attempt++) {
         const started = Date.now();
         let first = true;
         try {
-          for await (const e of ctx.event.subscribe({
+          const stream = ctx.event.subscribe({
             types: ["session.created", "session.deleted", "session.moved"],
             signal: controller.signal,
-          })) {
+          });
+          // subscribe() returns a lazy iterable that starts pulling on the
+          // first next(), which for-await calls with no await in between.
+          if (attempt > 0) scope.unconfirm();
+          for await (const e of stream) {
             if (controller.signal.aborted) break;
             if (first && attempt > 0) scope.unconfirm();
             first = false;

@@ -62,6 +62,8 @@ function fakeV2Server() {
   const subscribers = new Set<(e: any) => void>();
   const enders = new Map<(e: any) => void, (how: "done" | "throw") => void>();
   const signals: AbortSignal[] = [];
+  let getGate: Promise<void> | null = null;
+  let gets = 0;
 
   function ctxFor(directory: string) {
     const inst = { directory, hooks: {} as Record<string, Hook>, tools: [] as any[], disposed: [] as string[] };
@@ -86,6 +88,8 @@ function fakeV2Server() {
           };
         },
         async get({ sessionID }: { sessionID: string }) {
+          gets++;
+          if (getGate) await getGate;
           const s = sessions.get(sessionID);
           if (!s) throw new Error(`no session ${sessionID}`);
           return { id: sessionID, ...(s.parentID ? { parentID: s.parentID } : {}), location: { directory: s.directory } };
@@ -173,6 +177,18 @@ function fakeV2Server() {
     },
     get subscriberCount() {
       return subscribers.size;
+    },
+    get gets() {
+      return gets;
+    },
+    /** session.get waits until the returned function runs. */
+    holdGets() {
+      let open = () => {};
+      getGate = new Promise<void>((r) => (open = r));
+      return () => {
+        getGate = null;
+        open();
+      };
     },
     /** Every current subscription ends, normally or by throwing. */
     endStreams(how: "done" | "throw") {
@@ -702,6 +718,54 @@ describe("opencode plugin setup() (OpenCode 2.x entry)", () => {
     const sys = await server.context("ses_y");
     expect(sys).toHaveLength(1);
     expect(sys[0].text).toContain('as peer "repob"');
+  });
+
+  test("R2-2: a tool call whose ownership lookup straddles a stream end is not refused as foreign", async () => {
+    const broker = withBroker();
+    const server = fakeV2Server();
+    const { a } = twoDirs();
+    const ia = await load(server, a);
+    await until(() => broker.connected().length === 1);
+    await until(() => server.subscriberCount === 1);
+    // Known to the server, never announced: the tool hook has to look it up.
+    server.sessions.set("ses_a", { directory: a });
+    const setA = ia.inst.tools.find((t) => t.name === "hivemind_set_summary");
+
+    const before = server.gets;
+    const release = server.holdGets();
+    const call = setA.execute({ summary: "porting" }, { sessionID: "ses_a" });
+    await until(() => server.gets > before, 500);
+    server.endStreams("done"); // the loop calls unconfirm() once the stream has ended
+    await until(() => server.subscriberCount === 0, 500);
+    await Bun.sleep(10);
+    release();
+    expect((await call).content).toBe('Summary updated: "porting"');
+  });
+
+  test("R2-3: a move during the gap is not answered from the cache once the next stream is live, with no event after it", async () => {
+    const broker = withBroker();
+    const server = fakeV2Server();
+    const { a, b } = twoDirs();
+    const ia = await load(server, a);
+    await load(server, b);
+    await until(() => broker.connected().length === 2);
+    await until(() => server.subscriberCount === 2);
+
+    server.create("ses_y", a);
+    await Bun.sleep(20);
+    server.endStreams("done");
+    await until(() => server.subscriberCount === 0, 500);
+    // Looked up (and cached) between streams, then moved while nobody listens.
+    expect((await server.context("ses_y"))[0].text).toContain('as peer "repoa"');
+    server.move("ses_y", b);
+    await until(() => server.subscriberCount === 2, 3000);
+    expect(server.subscriberCount).toBe(2);
+    // No event on the new streams.
+    const sys = await server.context("ses_y");
+    expect(sys).toHaveLength(1);
+    expect(sys[0].text).toContain('as peer "repob"');
+    const setA = ia.inst.tools.find((t) => t.name === "hivemind_set_summary");
+    expect((await setA.execute({ summary: "x" }, { sessionID: "ses_y" })).content).toContain("not in this hivemind peer's directory");
   });
 
   test("A2: an event the handler cannot read does not end the subscription", async () => {

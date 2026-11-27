@@ -148,7 +148,7 @@ export class DirectoryScope {
   /**
    * Drop every cached ownership answer (the event stream may have missed a
    * move or delete), so the next owns() looks each session up again. A lookup
-   * in flight caches nothing and answers not-owned.
+   * in flight discards its answer and asks once more.
    */
   unconfirm(): void {
     this.generation++;
@@ -182,7 +182,7 @@ export class DirectoryScope {
     return lookup;
   }
 
-  private async lookup(sessionID: string): Promise<boolean> {
+  private async lookup(sessionID: string, retry = true): Promise<boolean> {
     const epoch = this.epochs.get(sessionID) ?? 0;
     const generation = this.generation;
     this.inflight.set(sessionID, (this.inflight.get(sessionID) ?? 0) + 1);
@@ -193,8 +193,10 @@ export class DirectoryScope {
         this.log(`session.get ${sessionID} timed out; treated as another directory's`);
         return false;
       }
-      // Events may have been missed while it ran: the answer may predate a move.
-      if (this.generation !== generation) return false;
+      // unconfirm() ran meanwhile, so the answer may predate a missed move.
+      // That voids the answer, not the ownership: ask once more, within the
+      // same bound, rather than read a reconnect as "not ours".
+      if (this.generation !== generation) return retry ? this.lookup(sessionID, false) : false;
       // A session.moved (or deleted) that arrived meanwhile is newer than this
       // answer: keep its ownership. The parent still holds, as a move keeps it.
       if ((this.epochs.get(sessionID) ?? 0) !== epoch) {

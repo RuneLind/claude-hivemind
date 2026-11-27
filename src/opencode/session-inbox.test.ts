@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { SessionInbox, formatInbound, type OwnershipGuard, type SessionClient } from "./session-inbox.ts";
+import { DirectoryScope } from "./v2-scope.ts";
 
 type Call = { id: string; text: string; agent?: string; model?: unknown; variant?: string };
 
@@ -811,6 +812,64 @@ describe("SessionInbox with an ownership guard (OpenCode 2.x)", () => {
     open();
     await inbox.idle();
     expect(calls).toEqual([]);
+  });
+});
+
+describe("SessionInbox guarded by a real DirectoryScope (OpenCode 2.x)", () => {
+  /** The server always answers the instance's directory; get() waits while the gate is closed. */
+  function gatedScope() {
+    let gate: Promise<void> | null = null;
+    let open = () => {};
+    let gets = 0;
+    const scope = new DirectoryScope("/tmp", {
+      get: async () => {
+        gets++;
+        if (gate) await gate;
+        return { location: { directory: "/tmp" } };
+      },
+    });
+    return {
+      scope,
+      gets: () => gets,
+      close: () => void (gate = new Promise<void>((r) => (open = r))),
+      open: () => open(),
+    };
+  }
+
+  test("R2-1: an unconfirm during the send-time confirm of a still-owned target does not drop it; the message is sent", async () => {
+    const { client, calls } = fakeClient({ parents: { root: undefined } });
+    const g = gatedScope();
+    const inbox = new SessionInbox(client, () => {}, { tui: false, guard: g.scope });
+    await inbox.touch("root", {});
+    expect(inbox.active).toBe("root");
+    const before = g.gets();
+    g.close();
+    inbox.deliver("for a");
+    for (let i = 0; i < 100 && g.gets() === before; i++) await Promise.resolve();
+    expect(g.gets()).toBe(before + 1);
+    g.scope.unconfirm(); // a stream ended, or the next one started, mid-confirm
+    g.open();
+    await inbox.idle();
+    expect(calls.map((c) => c.text)).toEqual(["for a"]);
+    expect(inbox.active).toBe("root");
+    expect(inbox.pendingCount).toBe(0);
+  });
+
+  test("R2-1: an unconfirm during the activation confirm does not keep a still-owned session from becoming the target", async () => {
+    const { client, calls } = fakeClient({ parents: { root: undefined } });
+    const g = gatedScope();
+    const inbox = new SessionInbox(client, () => {}, { tui: false, guard: g.scope });
+    inbox.deliver("for a");
+    g.close();
+    const t = inbox.touch("root", {});
+    for (let i = 0; i < 100 && g.gets() === 0; i++) await Promise.resolve();
+    expect(g.gets()).toBe(1);
+    g.scope.unconfirm();
+    g.open();
+    await t;
+    await inbox.idle();
+    expect(inbox.active).toBe("root");
+    expect(calls.map((c) => c.text)).toEqual(["for a"]);
   });
 });
 
