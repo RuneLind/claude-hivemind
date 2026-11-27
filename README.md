@@ -33,14 +33,14 @@ graph TB
 
 **MCP Server** — One per Claude Code (or Copilot) instance, spawned as a stdio MCP server. Connects to the broker via WebSocket for real-time messaging. Agent type comes from `CLAUDE_HIVEMIND_AGENT_TYPE` (`claude-code` or `copilot`).
 
-**OpenCode plugin** — `src/opencode/plugin.ts` runs inside each OpenCode 1.x process instead of the MCP server. It registers with the broker over the same WebSocket protocol, gives the agent `hivemind_list_peers`, `hivemind_send_message`, `hivemind_set_summary` and `hivemind_register_service`, and hands inbound messages to the root session the user last prompted.
+**OpenCode plugin** — `src/opencode/plugin.ts` runs inside each OpenCode process (1.x through `server()`, one peer per process; 2.x through `setup()`, one peer per directory the server serves) instead of the MCP server. It registers with the broker over the same WebSocket protocol, gives the agent `hivemind_list_peers`, `hivemind_send_message`, `hivemind_set_summary` and `hivemind_register_service`, and hands inbound messages to the root session the user last prompted.
 
 **Push transport** — How an inbound message reaches the agent depends on its type:
 
 | Agent | Push mechanism | Interrupts mid-task? |
 |-------|----------------|----------------------|
 | Claude Code | `claude/channel` MCP notification → `<channel source="claude-hivemind">` block | Yes |
-| OpenCode | WebSocket → plugin → `client.session.promptAsync` into the root session last prompted, with that prompt's agent and model, wrapped in `<hivemind_message from_id=…>` (held in memory until a session is prompted; lost if OpenCode exits first) | No (queued for next turn) |
+| OpenCode | WebSocket → plugin → into the root session last prompted (1.x: `client.session.promptAsync` with that prompt's agent and model; 2.x: `ctx.session.prompt` with delivery `queue`, under the session's own agent and model), wrapped in `<hivemind_message from_id=…>` (held in memory until a session is prompted; lost if OpenCode exits first) | No (queued for next turn) |
 | Copilot | WebSocket → MCP (CLI extension `session.send()` planned) | No (queued) |
 
 ### Message flow
@@ -123,14 +123,21 @@ claude mcp add --scope user --transport stdio claude-hivemind -- bun ~/claude-hi
 CLAUDE_HIVEMIND=1 claude --dangerously-skip-permissions --dangerously-load-development-channels server:claude-hivemind
 ```
 
-**OpenCode (1.x):** install the plugin once per machine, then start OpenCode with the gate set:
+**OpenCode (1.x and 2.x):** install the plugin once per machine, then start OpenCode with the gate set:
 
 ```bash
 ln -s ~/claude-hivemind/src/opencode/plugin.ts ~/.config/opencode/plugins/claude-hivemind.ts
 CLAUDE_HIVEMIND=1 opencode
 ```
 
-The plugin needs a running broker (`bun start`, or any Claude Code peer starts one). Messages go to the session you last prompted, under that prompt's agent and model; in a fresh TUI they wait until your first prompt. OpenCode 2 runs plugins differently and is not supported yet.
+The plugin needs a running broker (`bun start`, or any Claude Code peer starts one). Messages go to the session you last prompted, under that prompt's agent and model; in a fresh 1.x TUI the first one is typed into the prompt box; on 2.x, whose plugins have no TUI calls, they wait until your first prompt. On 2.x one OpenCode server can serve several directories, and the plugin registers one peer per directory (same PID, each with its own cwd and git root); each peer's tools, instructions and messages reach only the sessions in its directory, and after the plugin reloads, messages wait for the next prompt in that directory. A session moved to another directory (`session.moved`) leaves the old directory's peer and is claimed by the new directory's peer on its next prompt. 2.x reports plugin load failures only in `GET /api/plugin`; set `CLAUDE_HIVEMIND_OPENCODE_LOG` to a file path to get the plugin's own log on 2.x.
+
+**Known limits on OpenCode 2.x** (delivery reliability is a follow-up, not handled yet):
+
+- Every message the plugin holds lives only in its memory, and is lost if the plugin reloads or OpenCode shuts down before it is delivered. A message is held whenever the directory's peer has no target session: before the directory's first prompt, after the target moved away or was deleted, after a failed send, after an ownership check timed out or failed (including one that event-stream reconnects kept interrupting for its whole 3 s bound), or when a reconnect lands between the ownership check and the send. It is released only by a prompt in a root session of that directory that passes the ownership check; a prompt in a subagent session or in another directory's session does not release it.
+- Two directories with the same basename in one OpenCode process can swap peer ids when the plugin reloads, so a message queued for one can reach the other.
+- After a broker restart within the disconnect grace period, a disconnected per-directory row can linger in the peer list as a ghost.
+- Every subdirectory a session starts in becomes its own peer, as a 1.19 TUI launched in a subdirectory already does.
 
 **Migrating from the MCP route:** older dashboard launches wrote a project `opencode.json` with a `claude-hivemind` MCP entry. With the plugin installed, such a project registers twice: once through the plugin and once as a legacy MCP peer, whose messages are typed into a cmux surface that may no longer exist when the entry has a `CMUX_SURFACE_ID`. Remove the `claude-hivemind` entry from those files (`grep -rl --include=opencode.json claude-hivemind ~/source`).
 
@@ -161,6 +168,7 @@ The dashboard follows your OS light/dark setting. The button in the top-right co
 | `CLAUDE_HIVEMIND_DB` | `~/.claude-hivemind.db` | SQLite database path |
 | `CLAUDE_HIVEMIND_AGENT_TYPE` | `claude-code` | MCP server agent type: `claude-code` or `copilot` (OpenCode uses the plugin) |
 | `OPENCODE_COMMAND` | `opencode` | OpenCode command the dashboard launcher runs |
+| `CLAUDE_HIVEMIND_OPENCODE_LOG` | (unset) | OpenCode 2.x only: file the plugin appends its log to (1.x logs through OpenCode's own log) |
 | `CMUX_SOCKET_PATH` | auto-detected | cmux Unix socket path |
 
 ## Running the broker manually

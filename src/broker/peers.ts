@@ -47,7 +47,9 @@ export function createPeerStatements(db: Database) {
     selectPeersByNamespace: db.prepare(
       `SELECT * FROM peers WHERE namespace = ?`
     ),
-    deleteByPidNs: db.prepare(`DELETE FROM peers WHERE pid = ? AND namespace = ?`),
+    // Keyed on cwd too: one OpenCode 2.x process registers a peer per
+    // directory, and those must not replace each other.
+    deleteByPidNsCwd: db.prepare(`DELETE FROM peers WHERE pid = ? AND namespace = ? AND cwd = ?`),
     selectPeerIdPid: db.prepare(`SELECT id, pid FROM peers`),
     upsertSummary: db.prepare(`
       INSERT INTO saved_summaries (cwd, summary, updated_at) VALUES (?, ?, ?)

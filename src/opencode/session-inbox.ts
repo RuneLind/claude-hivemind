@@ -17,10 +17,12 @@
  * typed message is held for up to CONFIRM_MS before it, too, goes by
  * prompt_async. Messages held with no TUI wait in memory, in order, until a
  * session is prompted. While no target exists, identical messages are kept
- * once.
+ * once. On OpenCode 2.x (`tui: false`) nothing is typed: every held message
+ * waits for the first prompt.
  */
 
 import type { InboundMessage } from "./broker-peer.ts";
+import { LOOKUP_MS, MAX_SESSIONS, withTimeout } from "./v2-scope.ts";
 
 export interface PromptPrefs {
   agent?: string;
@@ -44,6 +46,17 @@ export interface SessionClient {
   };
 }
 
+/**
+ * Whether a session is still this plugin instance's (OpenCode 2.x, where one
+ * server process holds one instance per directory and a session can move).
+ */
+export interface OwnershipGuard {
+  /** Ask afresh; resolves to a token when the session is this instance's, else null. */
+  confirm(id: string): Promise<string | null>;
+  /** Synchronous: nothing has changed the session's ownership since confirm() gave the token. */
+  holds(id: string, token: string): boolean;
+}
+
 export interface SessionInfoLike {
   id: string;
   parentID?: string;
@@ -64,6 +77,19 @@ interface Pending {
  */
 const CONFIRM_MS = 2_000;
 
+/** Re-insert `id` as newest and drop the oldest entries past `cap`, never one `keep` accepts. */
+function remember<V>(c: Set<string> | Map<string, V>, id: string, cap: number, keep: (k: string) => boolean, value?: V): void {
+  c.delete(id);
+  if (c instanceof Map) c.set(id, value as V);
+  else c.add(id);
+  for (const k of c.keys()) {
+    if (c.size <= cap) return;
+    if (!keep(k)) c.delete(k);
+  }
+}
+
+const keepNone = () => false;
+
 export class SessionInbox {
   active: string | null = null;
   private roots = new Set<string>();
@@ -79,14 +105,42 @@ export class SessionInbox {
   private activatedSeq = 0;
   /** Touches still running; nothing is typed while a prompt may be about to set the target. */
   private touching = 0;
+  /** Sessions with a touch running, by count: their prefs are never dropped before it decides. */
+  private touchingIds = new Map<string, number>();
   private confirmMs: number;
+  private lookupMs: number;
+  /**
+   * Bound on roots, children and prefs; the oldest are dropped first, never
+   * the prefs of the target or of a session whose touch is running.
+   */
+  private maxSessions: number;
+  /** False on OpenCode 2.x, whose plugin API has no TUI calls: held messages wait for a prompt. */
+  private tui: boolean;
+  /**
+   * When set, a session becomes the target, and each held message is sent,
+   * only after a fresh ownership check that still holds at that moment.
+   */
+  private guard?: OwnershipGuard;
+  /** Set by dispose(): no target is set and nothing is sent afterwards. */
+  private disposed = false;
 
   constructor(
     private client: SessionClient,
     private log: (msg: string) => void = () => {},
-    opts: { confirmMs?: number } = {},
+    opts: { confirmMs?: number; tui?: boolean; guard?: OwnershipGuard; lookupMs?: number; maxSessions?: number } = {},
   ) {
     this.confirmMs = opts.confirmMs ?? CONFIRM_MS;
+    this.lookupMs = opts.lookupMs ?? LOOKUP_MS;
+    this.maxSessions = opts.maxSessions ?? MAX_SESSIONS;
+    this.tui = opts.tui ?? true;
+    this.guard = opts.guard;
+  }
+
+  /** The plugin instance is unloading: work already running stops at its next await. */
+  dispose(): void {
+    this.disposed = true;
+    this.active = null;
+    this.wake?.();
   }
 
   get pendingCount(): number {
@@ -95,8 +149,15 @@ export class SessionInbox {
 
   /** Record a session seen in a session.created/updated event. */
   observe(info: SessionInfoLike): void {
-    if (info.parentID) this.children.add(info.id);
-    else this.roots.add(info.id);
+    remember(info.parentID ? this.children : this.roots, info.id, this.maxSessions, keepNone);
+  }
+
+  /**
+   * Whether a session is a root session, asking OpenCode (bounded) when it is
+   * not cached: a timed-out or failed lookup answers false.
+   */
+  async isRootSession(id: string): Promise<boolean> {
+    return this.isRoot(id);
   }
 
   isChild(id: string): boolean {
@@ -136,29 +197,50 @@ export class SessionInbox {
    * root lookup ran.
    */
   async touch(id: string, prefs?: PromptPrefs, promptText?: string): Promise<void> {
+    if (this.disposed) return;
     if (promptText !== undefined) this.confirmTyped(promptText);
-    if (prefs) this.prefs.set(id, prefs);
-    const seq = ++this.touchSeq;
-    this.touching++;
-    let root = false;
+    this.touchingIds.set(id, (this.touchingIds.get(id) ?? 0) + 1);
     try {
-      root = await this.isRoot(id);
+      if (prefs) remember(this.prefs, id, this.maxSessions, (k) => k === this.active || this.touchingIds.has(k), prefs);
+      const seq = ++this.touchSeq;
+      this.touching++;
+      let root = false;
+      let token: string | null = null;
+      try {
+        root = await this.isRoot(id);
+        if (root && this.guard && !this.disposed) token = await this.guard.confirm(id);
+      } finally {
+        this.touching--;
+      }
+      if (this.disposed) return;
+      // Checked now, not before the awaits: the session may have moved meanwhile.
+      if (root && this.guard && !(token !== null && this.guard.holds(id, token))) {
+        root = false;
+        if (this.active === id) this.loseTarget();
+      }
+      if (root && this.prefs.has(id) && seq >= this.activatedSeq) {
+        this.activatedSeq = seq;
+        this.active = id;
+      }
+      // Also when no target was set: typing skipped during the lookup resumes.
+      this.pump();
     } finally {
-      this.touching--;
+      const n = this.touchingIds.get(id)! - 1;
+      if (n > 0) this.touchingIds.set(id, n);
+      else this.touchingIds.delete(id);
     }
-    if (root && this.prefs.has(id) && seq >= this.activatedSeq) {
-      this.activatedSeq = seq;
-      this.active = id;
-    }
-    // Also when no target was set: typing skipped during the lookup resumes.
-    this.pump();
   }
 
+  /** A failed or timed-out lookup answers false and is not cached: the next prompt asks again. */
   private async isRoot(id: string): Promise<boolean> {
     if (this.roots.has(id)) return true;
     if (this.children.has(id)) return false;
     try {
-      const res = await this.client.session.get({ path: { id } });
+      const res = await withTimeout(this.client.session.get({ path: { id } }), this.lookupMs);
+      if (res === "timeout") {
+        this.log(`session.get ${id} timed out; treated as not a root session`);
+        return false;
+      }
       if (res.data) {
         this.observe(res.data);
         return !res.data.parentID;
@@ -204,16 +286,29 @@ export class SessionInbox {
    */
   private async step(): Promise<void> {
     while (this.pending.length > 0) {
+      if (this.disposed) return;
       const head = this.pending[0]!;
       const target = this.active;
       if (!target) {
-        if (head.typedAt === null && this.touching === 0) await this.typeHead(head);
+        if (this.tui && head.typedAt === null && this.touching === 0) await this.typeHead(head);
         return;
       }
       const wait = head.typedAt === null ? 0 : head.typedAt + this.confirmMs - Date.now();
       if (wait > 0) {
         await this.sleep(wait);
         continue;
+      }
+      if (this.guard) {
+        // A fresh check per message, then a synchronous one with no await
+        // between it and the send: a move or unconfirm in between voids it.
+        const token = await this.guard.confirm(target);
+        if (this.disposed) return;
+        if (this.active !== target) continue;
+        if (token === null || !this.guard.holds(target, token)) {
+          this.log(`session ${target} is no longer this peer's; holding messages for the next prompt`);
+          this.loseTarget();
+          continue;
+        }
       }
       if (await this.send(target, head)) {
         // By identity: a prompt may have confirmed this message meanwhile.
@@ -240,6 +335,7 @@ export class SessionInbox {
   }
 
   private async send(target: string, item: Pending): Promise<boolean> {
+    if (this.disposed) return false;
     try {
       const res = await this.client.session.promptAsync({
         path: { id: target },

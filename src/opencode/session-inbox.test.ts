@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test";
-import { SessionInbox, formatInbound, type SessionClient } from "./session-inbox.ts";
+import { SessionInbox, formatInbound, type OwnershipGuard, type SessionClient } from "./session-inbox.ts";
+import { DirectoryScope } from "./v2-scope.ts";
 
 type Call = { id: string; text: string; agent?: string; model?: unknown; variant?: string };
 
@@ -729,6 +730,149 @@ describe("SessionInbox collapses repeated messages", () => {
   });
 });
 
+describe("SessionInbox with an ownership guard (OpenCode 2.x)", () => {
+  /** owned: the server's answer; flipOnConfirm: an event that lands just after confirm resolves. */
+  function fakeGuard(state: { owned: boolean; flipOnConfirm?: boolean; gate?: Promise<void> }) {
+    let epoch = 0;
+    const confirms: string[] = [];
+    const guard: OwnershipGuard = {
+      async confirm(id) {
+        confirms.push(id);
+        await state.gate;
+        if (!state.owned) return null;
+        const token = String(epoch);
+        if (state.flipOnConfirm) {
+          // Resolves before the caller resumes: the move is handled in between.
+          queueMicrotask(() => {
+            state.owned = false;
+            epoch++;
+          });
+        }
+        return token;
+      },
+      holds: (_id, token) => state.owned && token === String(epoch),
+    };
+    return { guard, confirms };
+  }
+
+  test("A1: a session that moves between the send-time confirm and the send gets nothing", async () => {
+    const { client, calls } = fakeClient({ parents: { root: undefined } });
+    const state = { owned: true } as { owned: boolean; flipOnConfirm?: boolean };
+    const { guard } = fakeGuard(state);
+    const inbox = new SessionInbox(client, () => {}, { tui: false, guard });
+    await inbox.touch("root", {});
+    expect(inbox.active).toBe("root");
+    state.flipOnConfirm = true;
+    inbox.deliver("for a");
+    await inbox.idle();
+    expect(calls).toEqual([]);
+    expect(inbox.active).toBeNull();
+    expect(inbox.pendingCount).toBe(1);
+  });
+
+  test("A1: a session that moves between the activation confirm and setting the target does not become it", async () => {
+    const { client, calls } = fakeClient({ parents: { root: undefined } });
+    const { guard } = fakeGuard({ owned: true, flipOnConfirm: true });
+    const inbox = new SessionInbox(client, () => {}, { tui: false, guard });
+    inbox.deliver("for a");
+    await inbox.touch("root", {});
+    await inbox.idle();
+    expect(inbox.active).toBeNull();
+    expect(calls).toEqual([]);
+  });
+
+  test("A7: dispose while touch's root lookup runs: no target is set", async () => {
+    let open!: () => void;
+    const slow = new Promise<void>((r) => (open = r));
+    const { client, calls } = fakeClient({ parents: { root: undefined }, slowGet: { root: slow } });
+    const { guard } = fakeGuard({ owned: true });
+    const inbox = new SessionInbox(client, () => {}, { tui: false, guard });
+    inbox.deliver("for a");
+    const t = inbox.touch("root", {});
+    inbox.dispose();
+    open();
+    await t;
+    await inbox.idle();
+    expect(inbox.active).toBeNull();
+    expect(calls).toEqual([]);
+  });
+
+  test("A7: dispose while the send-time confirm runs: nothing is sent", async () => {
+    const { client, calls } = fakeClient({ parents: { root: undefined } });
+    let open!: () => void;
+    const state: { owned: boolean; gate?: Promise<void> } = { owned: true };
+    const { guard, confirms } = fakeGuard(state);
+    const inbox = new SessionInbox(client, () => {}, { tui: false, guard });
+    await inbox.touch("root", {});
+    state.gate = new Promise<void>((r) => (open = r));
+    inbox.deliver("for a");
+    for (let i = 0; i < 100 && confirms.length < 2; i++) await Promise.resolve();
+    expect(confirms).toEqual(["root", "root"]);
+    inbox.dispose();
+    open();
+    await inbox.idle();
+    expect(calls).toEqual([]);
+  });
+});
+
+describe("SessionInbox guarded by a real DirectoryScope (OpenCode 2.x)", () => {
+  /** The server always answers the instance's directory; get() waits while the gate is closed. */
+  function gatedScope() {
+    let gate: Promise<void> | null = null;
+    let open = () => {};
+    let gets = 0;
+    const scope = new DirectoryScope("/tmp", {
+      get: async () => {
+        gets++;
+        if (gate) await gate;
+        return { location: { directory: "/tmp" } };
+      },
+    });
+    return {
+      scope,
+      gets: () => gets,
+      close: () => void (gate = new Promise<void>((r) => (open = r))),
+      open: () => open(),
+    };
+  }
+
+  test("R2-1: an unconfirm during the send-time confirm of a still-owned target does not drop it; the message is sent", async () => {
+    const { client, calls } = fakeClient({ parents: { root: undefined } });
+    const g = gatedScope();
+    const inbox = new SessionInbox(client, () => {}, { tui: false, guard: g.scope });
+    await inbox.touch("root", {});
+    expect(inbox.active).toBe("root");
+    const before = g.gets();
+    g.close();
+    inbox.deliver("for a");
+    for (let i = 0; i < 100 && g.gets() === before; i++) await Promise.resolve();
+    expect(g.gets()).toBe(before + 1);
+    g.scope.unconfirm(); // a stream ended, or the next one started, mid-confirm
+    g.open();
+    await inbox.idle();
+    expect(calls.map((c) => c.text)).toEqual(["for a"]);
+    expect(inbox.active).toBe("root");
+    expect(inbox.pendingCount).toBe(0);
+  });
+
+  test("R2-1: an unconfirm during the activation confirm does not keep a still-owned session from becoming the target", async () => {
+    const { client, calls } = fakeClient({ parents: { root: undefined } });
+    const g = gatedScope();
+    const inbox = new SessionInbox(client, () => {}, { tui: false, guard: g.scope });
+    inbox.deliver("for a");
+    g.close();
+    const t = inbox.touch("root", {});
+    for (let i = 0; i < 100 && g.gets() === 0; i++) await Promise.resolve();
+    expect(g.gets()).toBe(1);
+    g.scope.unconfirm();
+    g.open();
+    await t;
+    await inbox.idle();
+    expect(inbox.active).toBe("root");
+    expect(calls.map((c) => c.text)).toEqual(["for a"]);
+  });
+});
+
 describe("formatInbound", () => {
   test("wraps the text with the sender attributes and a reply hint", () => {
     const text = formatInbound({
@@ -806,3 +950,57 @@ describe("formatInbound", () => {
   });
 });
 
+
+describe("SessionInbox: bounded lookups and memory", () => {
+  test("H3: a session.get that never answers counts as not-root within the bound; typing and pumping resume", async () => {
+    const { client, calls, tui } = fakeClient({ parents: { b: undefined }, slowGet: { a: new Promise<void>(() => {}) } });
+    const inbox = new SessionInbox(client, () => {}, { confirmMs: CONFIRM_MS, lookupMs: 30 });
+    const touched = await Promise.race([inbox.touch("a", build).then(() => "done"), Bun.sleep(1_000).then(() => "hung")]);
+    expect(touched).toBe("done");
+    expect(inbox.active).toBe(null);
+    inbox.deliver("m");
+    await inbox.idle();
+    // Nothing is typed while a touch is running, so this shows `touching` went back to 0.
+    expect(tui).toEqual(["append:m", "submit"]);
+    await inbox.touch("b", build);
+    await inbox.idle();
+    expect(calls.map((c) => [c.id, c.text])).toEqual([["b", "m"]]);
+  });
+
+  test("roots, children and prefs stay at 1,000 or fewer across 10,000 sessions; the target keeps its prefs", async () => {
+    const { client, calls } = fakeClient();
+    const inbox = newInbox(client);
+    inbox.created({ id: "t" });
+    await inbox.touch("t", { agent: "plan" });
+    for (let i = 0; i < 10_000; i++) {
+      inbox.observe({ id: `r${i}` });
+      inbox.created({ id: `c${i}`, parentID: "t" });
+      await inbox.touch(`c${i}`, build);
+    }
+    const s = inbox as any;
+    expect(Math.max(s.roots.size, s.children.size, s.prefs.size)).toBeLessThanOrEqual(1_000);
+    expect(inbox.active).toBe("t");
+    inbox.deliver("m");
+    await inbox.idle();
+    expect(calls).toEqual([{ id: "t", text: "m", agent: "plan" }]);
+  });
+
+  test("F2: the prefs of a session whose touch is still looking it up survive 1,000 other prompts", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const { client, calls } = fakeClient({ parents: { t: undefined }, slowGet: { t: held } });
+    const inbox = new SessionInbox(client, () => {}, { confirmMs: CONFIRM_MS, maxSessions: 1_000 });
+    const touched = inbox.touch("t", { agent: "plan" });
+    inbox.created({ id: "r" });
+    for (let i = 0; i < 1_000; i++) {
+      inbox.created({ id: `c${i}`, parentID: "r" });
+      await inbox.touch(`c${i}`, build);
+    }
+    release();
+    await touched;
+    expect(inbox.active).toBe("t");
+    inbox.deliver("m");
+    await inbox.idle();
+    expect(calls).toEqual([{ id: "t", text: "m", agent: "plan" }]);
+  });
+});

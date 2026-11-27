@@ -349,4 +349,35 @@ describe("baseline branch (live broker)", () => {
     expect(baseline).toBeNull();
     expect(offsets.length).toBe(0);
   });
+
+  test("one process registering peers for two directories in one namespace keeps both; the same directory replaces its row", async () => {
+    // OpenCode 2.x runs one plugin instance per directory in one server
+    // process, and each registers its own peer under the same pid.
+    const ns = "multi-dir-ns";
+    const register = async (cwd: string) => {
+      const ws = connect(`ws://127.0.0.1:${testPort}/ws/peer?namespace=${ns}`);
+      await waitForOpen(ws);
+      ws.send(JSON.stringify({
+        type: "register", pid: process.pid, cwd, git_root: null, git_branch: null, tty: null, summary: "", namespace: ns,
+      }));
+      return (await waitForMessage<{ type: "registered"; id: string }>(ws, "registered")).id;
+    };
+    const rows = () => {
+      const db = new Database(testDbPath, { readonly: true });
+      const r = db.query(`SELECT id, cwd FROM peers WHERE namespace = ? ORDER BY cwd`).all(ns) as { id: string; cwd: string }[];
+      db.close();
+      return r;
+    };
+
+    const a = await register("/tmp/hm-dir-a");
+    const b = await register("/tmp/hm-dir-b");
+    expect(rows()).toEqual([{ id: a, cwd: "/tmp/hm-dir-a" }, { id: b, cwd: "/tmp/hm-dir-b" }]);
+
+    // The same process re-registering for the same directory (a reconnect)
+    // still replaces that directory's row and leaves the other alone.
+    await register("/tmp/hm-dir-a");
+    const after = rows();
+    expect(after.filter((r) => r.cwd === "/tmp/hm-dir-a")).toHaveLength(1);
+    expect(after.filter((r) => r.cwd === "/tmp/hm-dir-b")).toEqual([{ id: b, cwd: "/tmp/hm-dir-b" }]);
+  });
 });
