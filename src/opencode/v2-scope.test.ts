@@ -113,3 +113,74 @@ describe("DirectoryScope: caching", () => {
     expect(gets).toBe(0);
   });
 });
+
+describe("DirectoryScope.confirm / holds / unconfirm", () => {
+  function gated(directory: () => string) {
+    let open!: () => void;
+    let gate: Promise<void> | null = null;
+    let gets = 0;
+    return {
+      get gets() {
+        return gets;
+      },
+      close() {
+        gate = new Promise<void>((r) => (open = r));
+      },
+      open: () => open(),
+      session: {
+        get: async () => {
+          gets++;
+          if (gate) await gate;
+          return { location: { directory: directory() } };
+        },
+      },
+    };
+  }
+
+  test("A1: confirm asks the server even when the cache says owned", async () => {
+    let dir = "/tmp";
+    const g = gated(() => dir);
+    const scope = new DirectoryScope("/tmp", g.session);
+    expect(await scope.owns("s")).toBe(true);
+    dir = "/elsewhere";
+    expect(await scope.confirm("s")).toBeNull();
+    expect(g.gets).toBe(2);
+    expect(scope.knownOwned("s")).toBe(false);
+  });
+
+  test("A1: holds fails once an event or unconfirm touches the session after confirm", async () => {
+    const scope = new DirectoryScope("/tmp", gated(() => "/tmp").session);
+    const t1 = (await scope.confirm("s"))!;
+    expect(t1).not.toBeNull();
+    expect(scope.holds("s", t1)).toBe(true);
+    scope.note("s", "/tmp"); // even a move that keeps it here voids the token
+    expect(scope.holds("s", t1)).toBe(false);
+    const t2 = (await scope.confirm("s"))!;
+    scope.unconfirm();
+    expect(scope.holds("s", t2)).toBe(false);
+  });
+
+  test("A2: a lookup in flight across unconfirm answers not-owned and caches nothing", async () => {
+    const g = gated(() => "/tmp");
+    const scope = new DirectoryScope("/tmp", g.session);
+    g.close();
+    const p = scope.owns("s");
+    await Promise.resolve();
+    scope.unconfirm();
+    g.open();
+    expect(await p).toBe(false);
+    expect(scope.knownOwned("s")).toBe(false);
+  });
+
+  test("A1: a session deleted while confirm runs is not recorded as owned", async () => {
+    const g = gated(() => "/tmp");
+    const scope = new DirectoryScope("/tmp", g.session);
+    g.close();
+    const p = scope.confirm("s");
+    await Promise.resolve();
+    scope.forget("s");
+    g.open();
+    expect(await p).toBeNull();
+    expect(scope.knownOwned("s")).toBe(false);
+  });
+});

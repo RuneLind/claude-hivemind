@@ -45,6 +45,17 @@ export interface SessionClient {
   };
 }
 
+/**
+ * Whether a session is still this plugin instance's (OpenCode 2.x, where one
+ * server process holds one instance per directory and a session can move).
+ */
+export interface OwnershipGuard {
+  /** Ask afresh; resolves to a token when the session is this instance's, else null. */
+  confirm(id: string): Promise<string | null>;
+  /** Synchronous: nothing has changed the session's ownership since confirm() gave the token. */
+  holds(id: string, token: string): boolean;
+}
+
 export interface SessionInfoLike {
   id: string;
   parentID?: string;
@@ -83,14 +94,29 @@ export class SessionInbox {
   private confirmMs: number;
   /** False on OpenCode 2.x, whose plugin API has no TUI calls: held messages wait for a prompt. */
   private tui: boolean;
+  /**
+   * When set, a session becomes the target, and each held message is sent,
+   * only after a fresh ownership check that still holds at that moment.
+   */
+  private guard?: OwnershipGuard;
+  /** Set by dispose(): no target is set and nothing is sent afterwards. */
+  private disposed = false;
 
   constructor(
     private client: SessionClient,
     private log: (msg: string) => void = () => {},
-    opts: { confirmMs?: number; tui?: boolean } = {},
+    opts: { confirmMs?: number; tui?: boolean; guard?: OwnershipGuard } = {},
   ) {
     this.confirmMs = opts.confirmMs ?? CONFIRM_MS;
     this.tui = opts.tui ?? true;
+    this.guard = opts.guard;
+  }
+
+  /** The plugin instance is unloading: work already running stops at its next await. */
+  dispose(): void {
+    this.disposed = true;
+    this.active = null;
+    this.wake?.();
   }
 
   get pendingCount(): number {
@@ -140,15 +166,24 @@ export class SessionInbox {
    * root lookup ran.
    */
   async touch(id: string, prefs?: PromptPrefs, promptText?: string): Promise<void> {
+    if (this.disposed) return;
     if (promptText !== undefined) this.confirmTyped(promptText);
     if (prefs) this.prefs.set(id, prefs);
     const seq = ++this.touchSeq;
     this.touching++;
     let root = false;
+    let token: string | null = null;
     try {
       root = await this.isRoot(id);
+      if (root && this.guard && !this.disposed) token = await this.guard.confirm(id);
     } finally {
       this.touching--;
+    }
+    if (this.disposed) return;
+    // Checked now, not before the awaits: the session may have moved meanwhile.
+    if (root && this.guard && !(token !== null && this.guard.holds(id, token))) {
+      root = false;
+      if (this.active === id) this.loseTarget();
     }
     if (root && this.prefs.has(id) && seq >= this.activatedSeq) {
       this.activatedSeq = seq;
@@ -208,6 +243,7 @@ export class SessionInbox {
    */
   private async step(): Promise<void> {
     while (this.pending.length > 0) {
+      if (this.disposed) return;
       const head = this.pending[0]!;
       const target = this.active;
       if (!target) {
@@ -218,6 +254,18 @@ export class SessionInbox {
       if (wait > 0) {
         await this.sleep(wait);
         continue;
+      }
+      if (this.guard) {
+        // A fresh check per message, then a synchronous one with no await
+        // between it and the send: a move or unconfirm in between voids it.
+        const token = await this.guard.confirm(target);
+        if (this.disposed) return;
+        if (this.active !== target) continue;
+        if (token === null || !this.guard.holds(target, token)) {
+          this.log(`session ${target} is no longer this peer's; holding messages for the next prompt`);
+          this.loseTarget();
+          continue;
+        }
       }
       if (await this.send(target, head)) {
         // By identity: a prompt may have confirmed this message meanwhile.
@@ -244,6 +292,7 @@ export class SessionInbox {
   }
 
   private async send(target: string, item: Pending): Promise<boolean> {
+    if (this.disposed) return false;
     try {
       const res = await this.client.session.promptAsync({
         path: { id: target },

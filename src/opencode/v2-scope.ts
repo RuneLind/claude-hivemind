@@ -9,7 +9,12 @@
  *
  * Ownership is cached per session until `session.deleted`, or until
  * `session.moved` reports the session's new directory. The lookup also
- * records each session's parent, which a move does not change.
+ * records each session's parent, which a move does not change. When the event
+ * stream may have missed events, `unconfirm()` drops every cached answer.
+ *
+ * Delivery does not trust the cache: `confirm()` asks the server afresh, and
+ * `holds()` tells, synchronously and right before a message is sent, whether
+ * any event or `unconfirm()` has touched the session since.
  */
 
 import { realpathSync } from "node:fs";
@@ -35,8 +40,12 @@ export class DirectoryScope {
   /** Parent session id, or null for a root session. */
   private parents = new Map<string, string | null>();
   private lookups = new Map<string, Promise<boolean>>();
+  /** session.get calls in flight per session, deduped or not. */
+  private inflight = new Map<string, number>();
   /** Bumped by note(), and by forget() during a lookup: a lookup that started before either does not overwrite it. */
   private epochs = new Map<string, number>();
+  /** Bumped by unconfirm(): every answer obtained before it is stale. */
+  private generation = 0;
 
   constructor(
     directory: string,
@@ -70,7 +79,7 @@ export class DirectoryScope {
 
   forget(sessionID: string): void {
     // Only a lookup in flight needs to see that the session changed.
-    if (this.lookups.has(sessionID)) this.epochs.set(sessionID, (this.epochs.get(sessionID) ?? 0) + 1);
+    if (this.inflight.has(sessionID)) this.epochs.set(sessionID, (this.epochs.get(sessionID) ?? 0) + 1);
     else this.epochs.delete(sessionID);
     this.owned.delete(sessionID);
     this.parents.delete(sessionID);
@@ -94,6 +103,34 @@ export class DirectoryScope {
     return this.lookupDeduped(sessionID);
   }
 
+  /**
+   * Drop every cached ownership answer (the event stream may have missed a
+   * move or delete), so the next owns() looks each session up again. A lookup
+   * in flight caches nothing and answers not-owned.
+   */
+  unconfirm(): void {
+    this.generation++;
+    this.owned.clear();
+  }
+
+  /**
+   * Ask the server afresh, bypassing the cache, whether the session is this
+   * instance's. Resolves to a token for holds() when it is, else null.
+   */
+  async confirm(sessionID: string): Promise<string | null> {
+    const mine = await this.lookup(sessionID);
+    return mine && this.knownOwned(sessionID) ? this.token(sessionID) : null;
+  }
+
+  /** True while the session is owned and nothing has changed its ownership since confirm() returned the token. */
+  holds(sessionID: string, token: string): boolean {
+    return this.knownOwned(sessionID) && this.token(sessionID) === token;
+  }
+
+  private token(sessionID: string): string {
+    return `${this.generation}:${this.epochs.get(sessionID) ?? 0}`;
+  }
+
   private lookupDeduped(sessionID: string): Promise<boolean> {
     let lookup = this.lookups.get(sessionID);
     if (!lookup) {
@@ -105,6 +142,8 @@ export class DirectoryScope {
 
   private async lookup(sessionID: string): Promise<boolean> {
     const epoch = this.epochs.get(sessionID) ?? 0;
+    const generation = this.generation;
+    this.inflight.set(sessionID, (this.inflight.get(sessionID) ?? 0) + 1);
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<"timeout">((r) => (timer = setTimeout(() => r("timeout"), this.lookupMs)));
     try {
@@ -114,6 +153,8 @@ export class DirectoryScope {
         this.log(`session.get ${sessionID} timed out; treated as another directory's`);
         return false;
       }
+      // Events may have been missed while it ran: the answer may predate a move.
+      if (this.generation !== generation) return false;
       // A session.moved (or deleted) that arrived meanwhile is newer than this
       // answer: keep its ownership. The parent still holds, as a move keeps it.
       if ((this.epochs.get(sessionID) ?? 0) !== epoch) {
@@ -126,6 +167,9 @@ export class DirectoryScope {
       return false;
     } finally {
       clearTimeout(timer);
+      const n = (this.inflight.get(sessionID) ?? 1) - 1;
+      if (n > 0) this.inflight.set(sessionID, n);
+      else this.inflight.delete(sessionID);
     }
   }
 }

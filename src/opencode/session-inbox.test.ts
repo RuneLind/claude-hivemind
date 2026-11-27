@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { SessionInbox, formatInbound, type SessionClient } from "./session-inbox.ts";
+import { SessionInbox, formatInbound, type OwnershipGuard, type SessionClient } from "./session-inbox.ts";
 
 type Call = { id: string; text: string; agent?: string; model?: unknown; variant?: string };
 
@@ -726,6 +726,91 @@ describe("SessionInbox collapses repeated messages", () => {
     inbox.deliver("start");
     await inbox.idle();
     expect(calls.map((c) => c.text)).toEqual(["start", "start"]);
+  });
+});
+
+describe("SessionInbox with an ownership guard (OpenCode 2.x)", () => {
+  /** owned: the server's answer; flipOnConfirm: an event that lands just after confirm resolves. */
+  function fakeGuard(state: { owned: boolean; flipOnConfirm?: boolean; gate?: Promise<void> }) {
+    let epoch = 0;
+    const confirms: string[] = [];
+    const guard: OwnershipGuard = {
+      async confirm(id) {
+        confirms.push(id);
+        await state.gate;
+        if (!state.owned) return null;
+        const token = String(epoch);
+        if (state.flipOnConfirm) {
+          // Resolves before the caller resumes: the move is handled in between.
+          queueMicrotask(() => {
+            state.owned = false;
+            epoch++;
+          });
+        }
+        return token;
+      },
+      holds: (_id, token) => state.owned && token === String(epoch),
+    };
+    return { guard, confirms };
+  }
+
+  test("A1: a session that moves between the send-time confirm and the send gets nothing", async () => {
+    const { client, calls } = fakeClient({ parents: { root: undefined } });
+    const state = { owned: true } as { owned: boolean; flipOnConfirm?: boolean };
+    const { guard } = fakeGuard(state);
+    const inbox = new SessionInbox(client, () => {}, { tui: false, guard });
+    await inbox.touch("root", {});
+    expect(inbox.active).toBe("root");
+    state.flipOnConfirm = true;
+    inbox.deliver("for a");
+    await inbox.idle();
+    expect(calls).toEqual([]);
+    expect(inbox.active).toBeNull();
+    expect(inbox.pendingCount).toBe(1);
+  });
+
+  test("A1: a session that moves between the activation confirm and setting the target does not become it", async () => {
+    const { client, calls } = fakeClient({ parents: { root: undefined } });
+    const { guard } = fakeGuard({ owned: true, flipOnConfirm: true });
+    const inbox = new SessionInbox(client, () => {}, { tui: false, guard });
+    inbox.deliver("for a");
+    await inbox.touch("root", {});
+    await inbox.idle();
+    expect(inbox.active).toBeNull();
+    expect(calls).toEqual([]);
+  });
+
+  test("A7: dispose while touch's root lookup runs: no target is set", async () => {
+    let open!: () => void;
+    const slow = new Promise<void>((r) => (open = r));
+    const { client, calls } = fakeClient({ parents: { root: undefined }, slowGet: { root: slow } });
+    const { guard } = fakeGuard({ owned: true });
+    const inbox = new SessionInbox(client, () => {}, { tui: false, guard });
+    inbox.deliver("for a");
+    const t = inbox.touch("root", {});
+    inbox.dispose();
+    open();
+    await t;
+    await inbox.idle();
+    expect(inbox.active).toBeNull();
+    expect(calls).toEqual([]);
+  });
+
+  test("A7: dispose while the send-time confirm runs: nothing is sent", async () => {
+    const { client, calls } = fakeClient({ parents: { root: undefined } });
+    let open!: () => void;
+    const state: { owned: boolean; gate?: Promise<void> } = { owned: true };
+    const { guard, confirms } = fakeGuard(state);
+    const inbox = new SessionInbox(client, () => {}, { tui: false, guard });
+    await inbox.touch("root", {});
+    state.gate = new Promise<void>((r) => (open = r));
+    inbox.deliver("for a");
+    for (let i = 0; i < 100 && confirms.length < 2; i++) await Promise.resolve();
+    expect(confirms).toEqual(["root", "root"]);
+    inbox.dispose();
+    open();
+    await inbox.idle();
+    expect(calls).toEqual([]);
   });
 });
 

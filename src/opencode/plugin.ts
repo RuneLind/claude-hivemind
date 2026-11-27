@@ -36,7 +36,7 @@ import type { Hooks, PluginInput } from "@opencode-ai/plugin";
 import type { Plugin } from "@opencode/plugin";
 import { appendFileSync } from "node:fs";
 import { BrokerPeer } from "./broker-peer.ts";
-import { SessionInbox, formatInbound, type SessionClient } from "./session-inbox.ts";
+import { SessionInbox, formatInbound, type OwnershipGuard, type SessionClient } from "./session-inbox.ts";
 import { peerTools, v1ToolMap, v2ToolInfos } from "./peer-tools.ts";
 import { v2SessionClient } from "./v2-session.ts";
 import { DirectoryScope } from "./v2-scope.ts";
@@ -67,10 +67,16 @@ function run(cmd: string[], cwd: string): string | null {
 }
 
 /** The peer, its inbox and its tools, shared by both entry points. */
-async function startPeer(directory: string, client: SessionClient, log: (m: string) => void, tui: boolean) {
+async function startPeer(
+  directory: string,
+  client: SessionClient,
+  log: (m: string) => void,
+  tui: boolean,
+  guard?: OwnershipGuard,
+) {
   const namespace = resolveNamespace(directory, await loadNamespaceConfig());
   const correlation = new CorrelationTracker();
-  const inbox = new SessionInbox(client, log, { tui });
+  const inbox = new SessionInbox(client, log, { tui, guard });
 
   const peer = new BrokerPeer({
     port: parseInt(process.env.CLAUDE_HIVEMIND_PORT ?? "7899", 10),
@@ -161,6 +167,23 @@ function v2Log(message: string): void {
   } catch {}
 }
 
+/** Re-subscribe backoff after the event stream ends; reset once a stream has lasted RESUBSCRIBE_RESET_MS. */
+const RESUBSCRIBE_MIN_MS = 250;
+const RESUBSCRIBE_MAX_MS = 30_000;
+const RESUBSCRIBE_RESET_MS = 10_000;
+
+function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal.addEventListener("abort", done, { once: true });
+  });
+}
+
 /** OpenCode 2.x entry, once per directory (1.19 also calls it, with a reduced context). */
 async function setup(ctx: Plugin.Context): Promise<Plugin.Cleanup | void> {
   if (!process.env.CLAUDE_HIVEMIND) return;
@@ -174,7 +197,10 @@ async function setup(ctx: Plugin.Context): Promise<Plugin.Cleanup | void> {
   const registrations: { dispose: () => Promise<void> }[] = [];
   const controller = new AbortController();
   let stopPeer = () => {};
+  let disposeInbox = () => {};
   const cleanup = async () => {
+    // First, before any await: a prompt already in flight must not deliver after unload.
+    disposeInbox();
     controller.abort();
     for (const r of registrations.splice(0)) await r.dispose().catch(() => {});
     stopPeer();
@@ -182,8 +208,11 @@ async function setup(ctx: Plugin.Context): Promise<Plugin.Cleanup | void> {
   };
 
   try {
-    const { peer, inbox, instructions, tools } = await startPeer(directory, v2SessionClient(ctx.session), log, false);
+    const { peer, inbox, instructions, tools } = await startPeer(directory, v2SessionClient(ctx.session), log, false, scope);
     stopPeer = () => peer.stop();
+    disposeInbox = () => inbox.dispose();
+    // cleanup() ran while startPeer was awaited.
+    if (controller.signal.aborted) inbox.dispose();
 
     const foreign = "This session is not in this hivemind peer's directory.";
     registrations.push(
@@ -204,7 +233,9 @@ async function setup(ctx: Plugin.Context): Promise<Plugin.Cleanup | void> {
       await ctx.session.hook("prompt", (event) => {
         // Not awaited: the lookups must not hold up the prompt's admission.
         void (async () => {
-          if (await scope.owns(event.sessionID)) await inbox.touch(event.sessionID, {}, event.prompt.text);
+          if (await scope.owns(event.sessionID)) {
+            if (!controller.signal.aborted) await inbox.touch(event.sessionID, {}, event.prompt.text);
+          }
         })();
       }),
     );
@@ -219,32 +250,59 @@ async function setup(ctx: Plugin.Context): Promise<Plugin.Cleanup | void> {
       }),
     );
 
-    void (async () => {
-      try {
-        for await (const e of ctx.event.subscribe({
-          types: ["session.created", "session.deleted", "session.moved"],
-          signal: controller.signal,
-        })) {
-          if (e.type === "session.created") {
-            if (scope.note(e.data.sessionID, e.data.location?.directory, e.data.parentID ?? null)) {
-              inbox.created({ id: e.data.sessionID, parentID: e.data.parentID });
-            }
-          } else if (e.type === "session.deleted") {
-            if (scope.knownOwned(e.data.sessionID)) inbox.deleted(e.data.sessionID);
-            scope.forget(e.data.sessionID);
-          } else if (e.type === "session.moved") {
-            // The old owner lets the session go: it stops being the target,
-            // and messages held for this peer wait in its inbox's memory for
-            // its next prompted root session (lost if the plugin unloads
-            // first). The new owner claims it on its next prompt.
-            const was = scope.knownOwned(e.data.sessionID);
-            const mine = scope.note(e.data.sessionID, e.data.location?.directory);
-            if (was && !mine) inbox.deleted(e.data.sessionID);
-            if (was !== mine) log(`session ${e.data.sessionID} moved ${mine ? "here" : "away"}`);
-          }
+    const handle = (e: any) => {
+      if (e.type === "session.created") {
+        if (scope.note(e.data.sessionID, e.data.location?.directory, e.data.parentID ?? null)) {
+          inbox.created({ id: e.data.sessionID, parentID: e.data.parentID });
         }
-      } catch (err) {
-        if (!controller.signal.aborted) log(`event stream ended: ${err}`);
+      } else if (e.type === "session.deleted") {
+        // Unconditional: after unconfirm() the cache may not know the session was ours.
+        inbox.deleted(e.data.sessionID);
+        scope.forget(e.data.sessionID);
+      } else if (e.type === "session.moved") {
+        // The old owner lets the session go: it stops being the target,
+        // and messages held for this peer wait in its inbox's memory for
+        // its next prompted root session (lost if the plugin unloads
+        // first). The new owner claims it on its next prompt.
+        const was = scope.knownOwned(e.data.sessionID);
+        const mine = scope.note(e.data.sessionID, e.data.location?.directory);
+        if (!mine) inbox.deleted(e.data.sessionID);
+        if (was !== mine) log(`session ${e.data.sessionID} moved ${mine ? "here" : "away"}`);
+      }
+    };
+
+    // @opencode/client's shared event stream finishes every subscriber when
+    // its transport ends or throws, or when a subscriber falls 4096 events
+    // behind. Events may be lost across the gap, so cached ownership is
+    // dropped when a stream ends and again when the next one delivers.
+    void (async () => {
+      let backoff = RESUBSCRIBE_MIN_MS;
+      for (let attempt = 0; !controller.signal.aborted; attempt++) {
+        const started = Date.now();
+        let first = true;
+        try {
+          for await (const e of ctx.event.subscribe({
+            types: ["session.created", "session.deleted", "session.moved"],
+            signal: controller.signal,
+          })) {
+            if (controller.signal.aborted) break;
+            if (first && attempt > 0) scope.unconfirm();
+            first = false;
+            try {
+              handle(e);
+            } catch (err) {
+              log(`event ${e?.type} not handled: ${err}`);
+            }
+          }
+          if (!controller.signal.aborted) log("event stream ended");
+        } catch (err) {
+          if (!controller.signal.aborted) log(`event stream ended: ${err}`);
+        }
+        if (controller.signal.aborted) break;
+        scope.unconfirm();
+        if (Date.now() - started >= RESUBSCRIBE_RESET_MS) backoff = RESUBSCRIBE_MIN_MS;
+        await abortableSleep(backoff, controller.signal);
+        backoff = Math.min(backoff * 2, RESUBSCRIBE_MAX_MS);
       }
     })();
 

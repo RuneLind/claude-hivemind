@@ -60,6 +60,7 @@ function fakeV2Server() {
   const instances: { directory: string; hooks: Record<string, Hook>; tools: any[]; disposed: string[] }[] = [];
   const prompts: any[] = [];
   const subscribers = new Set<(e: any) => void>();
+  const enders = new Map<(e: any) => void, (how: "done" | "throw") => void>();
   const signals: AbortSignal[] = [];
 
   function ctxFor(directory: string) {
@@ -101,16 +102,24 @@ function fakeV2Server() {
           if (signal) signals.push(signal);
           const queue: any[] = [];
           let wake: (() => void) | null = null;
+          let ended: "done" | "throw" | null = null;
           const sub = (e: any) => {
             if (types && !types.includes(e.type)) return;
             queue.push(e);
             wake?.();
           };
+          enders.set(sub, (how) => {
+            ended = how;
+            wake?.();
+          });
           subscribers.add(sub);
           return {
             async *[Symbol.asyncIterator]() {
               try {
                 while (!signal?.aborted) {
+                  // @opencode/client's shared stream ends every subscriber when its transport does.
+                  if (ended === "throw") throw new Error("transport closed");
+                  if (ended === "done") return;
                   if (queue.length === 0) {
                     await new Promise<void>((r) => {
                       wake = r;
@@ -123,6 +132,7 @@ function fakeV2Server() {
                 }
               } finally {
                 subscribers.delete(sub);
+                enders.delete(sub);
               }
             },
           };
@@ -146,9 +156,27 @@ function fakeV2Server() {
     },
     /** v2's SessionDomain.move: the session's directory changes, and session.moved reports it. */
     move(sessionID: string, directory: string) {
+      server.moveHeld(sessionID, directory)();
+    },
+    /**
+     * The move is committed now; its session.moved reaches subscribers only when
+     * the returned function runs (the event stream is a transport, the prompt
+     * hook is in-process, so a prompt can overtake the event).
+     */
+    moveHeld(sessionID: string, directory: string) {
       const s = sessions.get(sessionID)!;
       s.directory = directory;
-      for (const sub of subscribers) sub({ type: "session.moved", data: { sessionID, location: { directory }, projectID: "prj" } });
+      return () => server.emit({ type: "session.moved", data: { sessionID, location: { directory }, projectID: "prj" } });
+    },
+    emit(e: any) {
+      for (const sub of subscribers) sub(e);
+    },
+    get subscriberCount() {
+      return subscribers.size;
+    },
+    /** Every current subscription ends, normally or by throwing. */
+    endStreams(how: "done" | "throw") {
+      for (const end of enders.values()) end(how);
     },
     remove(sessionID: string) {
       sessions.delete(sessionID);
@@ -516,4 +544,232 @@ describe("opencode plugin setup() (OpenCode 2.x entry)", () => {
     await Bun.sleep(20);
     expect(server.streamsAborted).toBe(true);
   });
+
+  test("A1: a session.moved handled after the prompt hook's ownership check, before touch, never lets the old instance send to it", async () => {
+    const broker = withBroker();
+    const server = fakeV2Server();
+    const { a, b } = twoDirs();
+    const ia = await load(server, a);
+    await load(server, b);
+    await until(() => broker.connected().length === 2);
+    await broker.push("repoa", "for a");
+    await Bun.sleep(30);
+
+    // Sweep the gap between the move and A's prompt hook: the moved event
+    // lands at a different point of the hook's await chain for each n.
+    for (let n = 0; n <= 8; n++) {
+      const id = `ses_x${n}`;
+      server.create(id, a);
+      await Bun.sleep(10);
+      server.move(id, b);
+      for (let k = 0; k < n; k++) await Promise.resolve();
+      ia.inst.hooks.prompt!({ sessionID: id, prompt: { text: "late" }, delivery: "steer" });
+      await Bun.sleep(30);
+    }
+    expect(server.prompts.map((p) => [p.sessionID, p.via === a])).toEqual([]);
+
+    // The held message still reaches A's next prompted root session.
+    server.create("ses_a2", a);
+    await server.prompt("ses_a2", "back in a");
+    await until(() => server.prompts.length >= 1);
+    expect(server.prompts.map((p) => p.sessionID)).toEqual(["ses_a2"]);
+    expect(server.prompts[0].text).toContain("\nfor a\n");
+  });
+
+  test("A1: a prompt that overtakes the session.moved event neither keeps nor makes the moved session the old instance's target", async () => {
+    const broker = withBroker();
+    const server = fakeV2Server();
+    const { a, b } = twoDirs();
+    await load(server, a);
+    await load(server, b);
+    await until(() => broker.connected().length === 2);
+
+    server.create("ses_x", a);
+    await server.prompt("ses_x", "hello");
+    await Bun.sleep(20);
+    await broker.push("repoa", "first");
+    await until(() => server.prompts.length >= 1);
+    expect(server.prompts.map((p) => [p.sessionID, p.via])).toEqual([["ses_x", a]]);
+    server.prompts.length = 0;
+
+    // Moved on the server; the event has not reached either instance yet.
+    const deliver = server.moveHeld("ses_x", b);
+    // A message for the still-cached target is checked at send time.
+    await broker.push("repoa", "for a");
+    await Bun.sleep(60);
+    expect(server.prompts.filter((p) => p.via === a)).toEqual([]);
+    // A prompt in the moved session does not make it A's target again.
+    await server.prompt("ses_x", "typed in b");
+    await Bun.sleep(30);
+    await broker.push("repoa", "for a again");
+    await Bun.sleep(60);
+    expect(server.prompts.filter((p) => p.via === a)).toEqual([]);
+
+    // Once the event arrives, B claims the session on its next prompt.
+    deliver();
+    await Bun.sleep(20);
+    await server.prompt("ses_x", "again in b");
+    await broker.push("repob", "for b");
+    await until(() => server.prompts.length >= 1);
+    await Bun.sleep(30);
+    expect(server.prompts.map((p) => [p.sessionID, p.via])).toEqual([["ses_x", b]]);
+    expect(server.prompts[0].text).toContain("\nfor b\n");
+  });
+
+  test("A1: a prompt in a session moved away does not displace the old instance's own target", async () => {
+    const broker = withBroker();
+    const server = fakeV2Server();
+    const { a, b } = twoDirs();
+    await load(server, a);
+    await load(server, b);
+    await until(() => broker.connected().length === 2);
+
+    server.create("ses_x", a);
+    server.create("ses_a", a);
+    await Bun.sleep(10);
+    await server.prompt("ses_x", "x first");
+    await Bun.sleep(20);
+    await server.prompt("ses_a", "a is the target");
+    await Bun.sleep(20);
+
+    server.moveHeld("ses_x", b);
+    await server.prompt("ses_x", "typed in b");
+    await Bun.sleep(30);
+    await broker.push("repoa", "for a");
+    await until(() => server.prompts.length >= 1);
+    expect(server.prompts.map((p) => [p.sessionID, p.via])).toEqual([["ses_a", a]]);
+  });
+
+  for (const how of ["done", "throw"] as const) {
+    test(`A2: after the event stream ends (${how}), the instance re-subscribes and still follows session.moved`, async () => {
+      const broker = withBroker();
+      const server = fakeV2Server();
+      const { a, b } = twoDirs();
+      await load(server, a);
+      await load(server, b);
+      await until(() => broker.connected().length === 2);
+      await until(() => server.subscriberCount === 2);
+
+      server.create("ses_x", a);
+      await server.prompt("ses_x", "hello");
+      await Bun.sleep(20);
+      expect((await server.context("ses_x"))[0].text).toContain('as peer "repoa"');
+
+      server.endStreams(how);
+      await until(() => server.subscriberCount === 0, 500);
+      await until(() => server.subscriberCount === 2, 3000);
+      expect(server.subscriberCount).toBe(2);
+
+      server.move("ses_x", b);
+      await Bun.sleep(30);
+      const sys = await server.context("ses_x");
+      expect(sys).toHaveLength(1);
+      expect(sys[0].text).toContain('as peer "repob"');
+    });
+  }
+
+  test("A2: a move missed while the stream was down is not trusted from the cache after re-subscribing", async () => {
+    const broker = withBroker();
+    const server = fakeV2Server();
+    const { a, b } = twoDirs();
+    await load(server, a);
+    await load(server, b);
+    await until(() => broker.connected().length === 2);
+    await until(() => server.subscriberCount === 2);
+
+    server.create("ses_x", a);
+    server.create("ses_y", a);
+    await server.prompt("ses_x", "hello");
+    await Bun.sleep(20);
+    expect((await server.context("ses_x"))[0].text).toContain('as peer "repoa"');
+    expect((await server.context("ses_y"))[0].text).toContain('as peer "repoa"');
+
+    server.endStreams("done");
+    await until(() => server.subscriberCount === 0, 500);
+    // Committed while nobody listens: the event is lost. Between streams the
+    // cache is not trusted.
+    server.move("ses_x", b);
+    const gap = await server.context("ses_x");
+    expect(gap).toHaveLength(1);
+    expect(gap[0].text).toContain('as peer "repob"');
+    // An answer looked up between streams is not trusted after them either.
+    expect((await server.context("ses_y"))[0].text).toContain('as peer "repoa"');
+    server.move("ses_y", b);
+    await until(() => server.subscriberCount === 2, 3000);
+    server.emit({ type: "session.created", data: { sessionID: "ses_other", location: { directory: "/elsewhere" } } });
+    await Bun.sleep(30);
+
+    const sys = await server.context("ses_y");
+    expect(sys).toHaveLength(1);
+    expect(sys[0].text).toContain('as peer "repob"');
+  });
+
+  test("A2: an event the handler cannot read does not end the subscription", async () => {
+    const broker = withBroker();
+    const server = fakeV2Server();
+    const { a, b } = twoDirs();
+    await load(server, a);
+    await load(server, b);
+    await until(() => broker.connected().length === 2);
+    await until(() => server.subscriberCount === 2);
+
+    server.create("ses_x", a);
+    await Bun.sleep(20);
+    server.emit({ type: "session.moved", data: null });
+    await Bun.sleep(20);
+    // Still the same subscriptions: none ended and re-subscribed.
+    expect(server.subscriberCount).toBe(2);
+    server.move("ses_x", b);
+    await Bun.sleep(30);
+    const sys = await server.context("ses_x");
+    expect(sys).toHaveLength(1);
+    expect(sys[0].text).toContain('as peer "repob"');
+  });
+
+  for (const where of ["ownership check", "touch"] as const) {
+    test(`A7: an unload while a prompt's lookup is gated (${where}) sets no target and sends nothing`, async () => {
+      const broker = withBroker();
+      const server = fakeV2Server();
+      const { a } = twoDirs();
+      const { ctx } = server.ctxFor(a);
+      const get = ctx.session.get;
+      let gate = false;
+      let open!: () => void;
+      const opened = new Promise<void>((r) => (open = r));
+      ctx.session.get = async (input: any) => {
+        if (gate) await opened;
+        return get(input);
+      };
+      const cleanup = await plugin.setup(ctx);
+      let done = false;
+      const once = async () => {
+        if (!done) {
+          done = true;
+          await cleanup?.();
+        }
+      };
+      cleanups.push(once);
+      await until(() => broker.connected().length === 1);
+      await broker.push("repoa", "for a");
+      await Bun.sleep(30);
+
+      if (where === "ownership check") {
+        // Unknown to the instance: the prompt hook's ownership lookup runs.
+        server.sessions.set("ses_x", { directory: a });
+      } else {
+        // Moved here: ownership is cached, so the hook passes, but the inbox
+        // has not seen the session and touch's own root lookup runs.
+        server.sessions.set("ses_x", { directory: "/elsewhere" });
+        server.move("ses_x", a);
+        await Bun.sleep(10);
+      }
+      gate = true;
+      await server.prompt("ses_x", "hello");
+      await Bun.sleep(20);
+      await once();
+      open();
+      await Bun.sleep(80);
+      expect(server.prompts).toEqual([]);
+    });
+  }
 });
