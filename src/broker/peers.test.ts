@@ -28,6 +28,7 @@ const {
   createMessageStatements,
   generateId,
   deliverOrQueue,
+  parseGraceMs,
 } = await import("./peers.ts");
 const { initDatabase } = await import("./db.ts");
 
@@ -217,5 +218,20 @@ describe("OpenCode delivery routing", () => {
     } finally {
       ctx.peerSockets.delete("oc-plugin");
     }
+  });
+});
+
+describe("parseGraceMs", () => {
+  test("takes a positive whole number of ms; refuses a negative, zero or non-integer value for the 30 s default", () => {
+    const warnings: string[] = [];
+    const warn = (m: string) => warnings.push(m);
+    expect(parseGraceMs(undefined, warn)).toBe(30_000);
+    expect(parseGraceMs("250", warn)).toBe(250);
+    expect(warnings).toEqual([]);
+    expect(parseGraceMs("-5", warn)).toBe(30_000);
+    expect(parseGraceMs("0", warn)).toBe(30_000);
+    expect(parseGraceMs("1.5", warn)).toBe(30_000);
+    expect(parseGraceMs("abc", warn)).toBe(30_000);
+    expect(warnings).toHaveLength(4);
   });
 });

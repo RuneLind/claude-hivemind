@@ -73,8 +73,21 @@ export function createMessageStatements(db: Database) {
       INSERT INTO messages (from_id, to_id, text, sent_at, delivered, correlation_id)
       VALUES (?, ?, ?, ?, ?, ?)
     `),
-    selectUndelivered: db.prepare(
-      `SELECT * FROM messages WHERE to_id = ? AND delivered = 0 ORDER BY sent_at ASC`
+    insertHeldMessage: db.prepare(`
+      INSERT INTO messages (from_id, to_id, text, sent_at, delivered, correlation_id, to_cwd, to_namespace)
+      VALUES (?, ?, ?, ?, 0, ?, ?, ?)
+    `),
+    // Args: to_id, registrant acks (1/0), registrant cwd, registrant namespace.
+    // A message held for an acking peer's directory goes only to an acking
+    // registrant of that directory, not to another directory that later took
+    // the id.
+    selectUndelivered: db.prepare(`
+      SELECT * FROM messages WHERE to_id = ? AND delivered = 0
+        AND (to_cwd IS NULL OR (? = 1 AND to_cwd = ? AND to_namespace = ?))
+      ORDER BY sent_at ASC, id ASC
+    `),
+    holdForDirectory: db.prepare(
+      `UPDATE messages SET to_cwd = ?, to_namespace = ? WHERE id = ? AND to_cwd IS NULL`
     ),
     markDelivered: db.prepare(
       `UPDATE messages SET delivered = 1 WHERE id = ?`
@@ -273,11 +286,15 @@ export function deliverOrQueue(
   const targetWs = ctx.peerSockets.get(toId);
   // A peer that acks (the OpenCode plugin) gets the row id, and the row stays
   // undelivered until the ack, so a message the peer held in memory when it
-  // stopped or crashed is resent on its next registration.
+  // stopped or crashed is resent on its next registration from the same
+  // directory (the row records it).
   if (targetWs && targetWs.readyState === WS_OPEN && (targetWs.data as { ack?: boolean } | undefined)?.ack) {
     let messageId: number;
     try {
-      messageId = Number(msgStmts.insertMessage.run(fromId, toId, text, now, 0, correlationId).lastInsertRowid);
+      messageId = Number(
+        msgStmts.insertHeldMessage.run(fromId, toId, text, now, correlationId, target?.cwd ?? null, target?.namespace ?? null)
+          .lastInsertRowid,
+      );
     } catch (e) {
       log(`Failed to queue message for ${toId}: ${e}`);
       return "failed";
@@ -335,6 +352,19 @@ export function deliverOrQueue(
     log(`Failed to queue message for ${toId}: ${e}`);
     return "failed";
   }
+}
+
+/**
+ * The grace period from CLAUDE_HIVEMIND_GRACE_MS: a positive whole number of
+ * milliseconds, else the 30 s default (a zero or negative value would reap a
+ * reloading peer at once and spin the stale-peer timer).
+ */
+export function parseGraceMs(raw: string | undefined, warn: (m: string) => void = () => {}): number {
+  if (raw === undefined || raw === "") return 30_000;
+  const ms = Number(raw);
+  if (Number.isInteger(ms) && ms > 0) return ms;
+  warn(`CLAUDE_HIVEMIND_GRACE_MS=${JSON.stringify(raw)} refused (want a positive whole number of ms); using 30000`);
+  return 30_000;
 }
 
 export function cleanStalePeers(

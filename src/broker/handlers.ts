@@ -269,6 +269,7 @@ export function handlePeerMessage(
     case "register": {
       const now = new Date().toISOString();
       const namespace = sanitizeNamespace(msg.namespace);
+      const agentType = normalizeAgentType(msg.agent_type);
       // The same process re-registering for the same directory (a reconnect,
       // or an OpenCode 2.x instance reload) gets back the id its row held, so
       // messages queued for that id reach this directory and no other.
@@ -286,11 +287,15 @@ export function handlePeerMessage(
           try { old.close(); } catch {}
         }
       } else {
-        // The same process's disconnected rows for other directories are
-        // instances mid-reload: keep their ids free for them.
+        // A disconnected row is a peer expected back within its grace period
+        // (an OpenCode 2.x instance mid-reload, a reconnecting MCP server):
+        // another directory, from any process, does not take its id. A
+        // registrant of the same directory and agent type may (a restart under
+        // a new pid), and so gets the messages queued for that id.
         const reserved = new Set(
           getAllPeers(peerStmts)
-            .filter((p) => p.pid === msg.pid && !p.connected && !ctx.peerSockets.has(p.id))
+            .filter((p) => !p.connected && !ctx.peerSockets.has(p.id))
+            .filter((p) => !(p.namespace === namespace && p.cwd === msg.cwd && p.agent_type === agentType))
             .map((p) => p.id),
         );
         id = generateId(peerStmts, ctx.peerSockets, msg.cwd, reserved);
@@ -312,7 +317,6 @@ export function handlePeerMessage(
       const saved = peerStmts.selectSavedSummary.get(msg.cwd) as { summary: string } | null;
       const summary = msg.summary || saved?.summary || "";
 
-      const agentType = normalizeAgentType(msg.agent_type);
       const surfaceId = msg.surface_id ?? null;
 
       peerStmts.insertPeer.run(
@@ -348,7 +352,7 @@ export function handlePeerMessage(
       };
       ws.send(JSON.stringify(reply));
 
-      const queued = msgStmts.selectUndelivered.all(id) as import("../shared/types.ts").Message[];
+      const queued = msgStmts.selectUndelivered.all(id, ws.data.ack ? 1 : 0, msg.cwd, namespace) as import("../shared/types.ts").Message[];
       for (const m of queued) {
         const sender = getPeer(peerStmts, m.from_id);
         const deliverMsg: BrokerMessage = {
@@ -362,8 +366,10 @@ export function handlePeerMessage(
           ...(ws.data.ack ? { message_id: m.id } : {}),
         };
         ws.send(JSON.stringify(deliverMsg));
-        // An acking peer marks it delivered itself, once it has handed it on.
-        if (!ws.data.ack) msgStmts.markDelivered.run(m.id);
+        // An acking peer marks it delivered itself, once it has handed it on;
+        // until then it is held for this directory.
+        if (ws.data.ack) msgStmts.holdForDirectory.run(msg.cwd, namespace, m.id);
+        else msgStmts.markDelivered.run(m.id);
       }
 
       const peer = getPeer(peerStmts, id)!;

@@ -35,6 +35,8 @@ export class DirectoryScope {
   /** Parent session id, or null for a root session. */
   private parents = new Map<string, string | null>();
   private lookups = new Map<string, Promise<boolean>>();
+  /** Bumped by note(), and by forget() during a lookup: a lookup that started before either does not overwrite it. */
+  private epochs = new Map<string, number>();
 
   constructor(
     directory: string,
@@ -54,6 +56,7 @@ export class DirectoryScope {
    * parent when the source carries one (`session.moved` does not).
    */
   note(sessionID: string, directory: string | undefined, parentID?: string | null): boolean {
+    this.epochs.set(sessionID, (this.epochs.get(sessionID) ?? 0) + 1);
     const mine = this.matches(directory);
     this.owned.set(sessionID, mine);
     if (parentID !== undefined) this.parents.set(sessionID, parentID);
@@ -66,6 +69,9 @@ export class DirectoryScope {
   }
 
   forget(sessionID: string): void {
+    // Only a lookup in flight needs to see that the session changed.
+    if (this.lookups.has(sessionID)) this.epochs.set(sessionID, (this.epochs.get(sessionID) ?? 0) + 1);
+    else this.epochs.delete(sessionID);
     this.owned.delete(sessionID);
     this.parents.delete(sessionID);
   }
@@ -98,6 +104,7 @@ export class DirectoryScope {
   }
 
   private async lookup(sessionID: string): Promise<boolean> {
+    const epoch = this.epochs.get(sessionID) ?? 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<"timeout">((r) => (timer = setTimeout(() => r("timeout"), this.lookupMs)));
     try {
@@ -106,6 +113,12 @@ export class DirectoryScope {
       if (res === "timeout") {
         this.log(`session.get ${sessionID} timed out; treated as another directory's`);
         return false;
+      }
+      // A session.moved (or deleted) that arrived meanwhile is newer than this
+      // answer: keep its ownership. The parent still holds, as a move keeps it.
+      if ((this.epochs.get(sessionID) ?? 0) !== epoch) {
+        if (this.owned.has(sessionID) && !this.parents.has(sessionID)) this.parents.set(sessionID, res.parentID ?? null);
+        return this.knownOwned(sessionID);
       }
       return this.note(sessionID, res.location?.directory, res.parentID ?? null);
     } catch (e) {

@@ -607,6 +607,148 @@ describe("opencode plugin setup() (OpenCode 2.x entry)", () => {
     expect(broker.acks).toEqual([9]);
   });
 
+  /** An instance that counts its session.get calls. */
+  async function loadCounting(server: ReturnType<typeof fakeV2Server>, directory: string) {
+    const { ctx, inst } = server.ctxFor(directory);
+    const get = ctx.session.get;
+    const counter = { gets: 0 };
+    ctx.session.get = (input: any) => (counter.gets++, get(input));
+    const cleanup = await plugin.setup(ctx);
+    cleanups.push(() => cleanup?.());
+    return { inst, counter };
+  }
+
+  test("a child's parent comes from session.created, with no lookup", async () => {
+    withBroker();
+    const server = fakeV2Server();
+    const { a } = twoDirs();
+    const { counter } = await loadCounting(server, a);
+    server.create("ses_root", a);
+    server.create("ses_child", a, "ses_root");
+    await Bun.sleep(10);
+    expect(await server.context("ses_child")).toHaveLength(0);
+    expect(await server.context("ses_root")).toHaveLength(1);
+    expect(counter.gets).toBe(0);
+  });
+
+  test("the instance a session moves to owns it from session.moved, with no lookup", async () => {
+    const broker = withBroker();
+    const server = fakeV2Server();
+    const { a, b } = twoDirs();
+    await load(server, a);
+    const nb = await loadCounting(server, b);
+    await until(() => broker.connected().length === 2);
+    server.create("ses_x", a);
+    await Bun.sleep(10);
+    server.move("ses_x", b);
+    await Bun.sleep(20);
+    const setB = nb.inst.tools.find((t: any) => t.name === "hivemind_set_summary");
+    expect((await setB.execute({ summary: "moved in" }, { sessionID: "ses_x" })).content).toBe('Summary updated: "moved in"');
+    expect(nb.counter.gets).toBe(0);
+  });
+
+  /** An instance whose session.prompt waits for release(): a prompt in flight across a reload. */
+  async function loadGated(server: ReturnType<typeof fakeV2Server>, directory: string) {
+    const { ctx } = server.ctxFor(directory);
+    let release = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const prompt = ctx.session.prompt;
+    const sent: string[] = [];
+    ctx.session.prompt = async (input: any) => {
+      sent.push(input.text);
+      await gate;
+      return prompt(input);
+    };
+    const cleanup = await plugin.setup(ctx);
+    let done = false;
+    const once = async () => {
+      if (done) return;
+      done = true;
+      await cleanup?.();
+    };
+    cleanups.push(once);
+    return { cleanup: once, release: () => release(), sent };
+  }
+
+  const count = (server: ReturnType<typeof fakeV2Server>, text: string) =>
+    server.prompts.filter((p) => p.text.includes(`\n${text}\n`)).length;
+
+  test("F2: a prompt in flight at cleanup acks through the next instance, and the broker's resend is not delivered again", async () => {
+    const broker = withBroker();
+    const server = fakeV2Server();
+    const { a } = twoDirs();
+    const first = await loadGated(server, a);
+    await until(() => broker.connected().length === 1);
+    server.create("ses_a", a);
+    await server.prompt("ses_a", "hello");
+    await broker.push("repoa", "m11", 11);
+    await Bun.sleep(30);
+
+    await first.cleanup();
+    first.release();
+    await Bun.sleep(30);
+    await load(server, a);
+    await until(() => broker.acks.includes(11));
+    expect(broker.acks).toContain(11);
+    await broker.push("repoa", "m11", 11);
+    await server.prompt("ses_a", "again");
+    await Bun.sleep(100);
+    expect(count(server, "m11")).toBe(1);
+  });
+
+  test("F2: a resend that reaches the next instance while the old prompt is still in flight is delivered once, and acked when that prompt returns", async () => {
+    const broker = withBroker();
+    const server = fakeV2Server();
+    const { a } = twoDirs();
+    const first = await loadGated(server, a);
+    await until(() => broker.connected().length === 1);
+    server.create("ses_a", a);
+    await server.prompt("ses_a", "hello");
+    await broker.push("repoa", "m12", 12);
+    await Bun.sleep(30);
+
+    await first.cleanup();
+    await load(server, a);
+    await until(() => broker.connected().length === 1);
+    await broker.push("repoa", "m12", 12);
+    await server.prompt("ses_a", "after reload");
+    await Bun.sleep(50);
+    first.release();
+    await until(() => broker.acks.includes(12));
+    await Bun.sleep(50);
+    expect(broker.acks).toEqual([12]);
+    expect(count(server, "m12")).toBe(1);
+  });
+
+  test("F2: a stopped instance sends nothing after its prompt in flight; the messages it still held go to the next instance, once each", async () => {
+    const broker = withBroker();
+    const server = fakeV2Server();
+    const { a } = twoDirs();
+    const first = await loadGated(server, a);
+    await until(() => broker.connected().length === 1);
+    server.create("ses_a", a);
+    await server.prompt("ses_a", "hello");
+    await broker.push("repoa", "m13", 13);
+    await broker.push("repoa", "m14", 14);
+    await Bun.sleep(30);
+
+    await first.cleanup();
+    await load(server, a);
+    await until(() => broker.connected().length === 1);
+    await broker.push("repoa", "m13", 13);
+    await broker.push("repoa", "m14", 14);
+    await server.prompt("ses_a", "after reload");
+    await Bun.sleep(30);
+    first.release();
+    await until(() => broker.acks.includes(13) && broker.acks.includes(14));
+    await Bun.sleep(100);
+    expect(count(server, "m13")).toBe(1);
+    expect(count(server, "m14")).toBe(1);
+    // The old instance sent only the prompt that was in flight.
+    expect(first.sent.map((t) => t.includes("\nm13\n"))).toEqual([true]);
+    expect([...broker.acks].sort()).toEqual([13, 14]);
+  });
+
   test("cleanup unregisters only its own peer and disposes only its own hooks", async () => {
     const broker = withBroker();
     const server = fakeV2Server();

@@ -38,7 +38,7 @@
 import type { Hooks, PluginInput } from "@opencode-ai/plugin";
 import type { Plugin } from "@opencode/plugin";
 import { appendFileSync } from "node:fs";
-import { BrokerPeer } from "./broker-peer.ts";
+import { BrokerPeer, type InboundMessage } from "./broker-peer.ts";
 import { SessionInbox, formatInbound, type SessionClient } from "./session-inbox.ts";
 import { peerTools, v1ToolMap, v2ToolInfos } from "./peer-tools.ts";
 import { v2SessionClient } from "./v2-session.ts";
@@ -58,10 +58,41 @@ function claim(): boolean {
   return true;
 }
 
-// Acks a stopped peer could not send (broker unreachable), by port and
-// directory, for the next instance of the same directory in this process.
-const UNSENT_ACKS = Symbol.for("claude-hivemind.opencode-plugin.unsent-acks");
-const unsentAcks = (g[UNSENT_ACKS] ??= new Map<string, number[]>()) as Map<string, number[]>;
+/**
+ * Per (broker port, directory), shared by every instance of that directory in
+ * this process, so a reload neither loses an ack nor delivers a message twice:
+ * - `held`: ids an inbox has queued and not yet put into a session, with the
+ *   message. An instance skips a resend of one; an instance that stops with
+ *   one unsent hands it to the live instance (`redeliver`).
+ * - `handedOn`: ids put into a session. A resend of one is only acked again.
+ * - `peer`: the live instance's peer, read when an ack is sent, so an ack from
+ *   a stopped instance's in-flight prompt goes out through its successor.
+ * - `unsent`: acks no live peer could take, sent once the next one registers.
+ * - `redeliver`: the live instance's handler, for messages a stopped one released.
+ */
+interface DirectoryState {
+  held: Map<number, InboundMessage>;
+  handedOn: Set<number>;
+  peer: BrokerPeer | null;
+  unsent: Set<number>;
+  redeliver: ((msg: InboundMessage) => void) | null;
+}
+const DIRECTORIES = Symbol.for("claude-hivemind.opencode-plugin.directories");
+const directories = (g[DIRECTORIES] ??= new Map<string, DirectoryState>()) as Map<string, DirectoryState>;
+
+function directoryState(key: string): DirectoryState {
+  let state = directories.get(key);
+  if (!state) {
+    state = { held: new Map(), handedOn: new Set(), peer: null, unsent: new Set(), redeliver: null };
+    directories.set(key, state);
+  }
+  return state;
+}
+
+function sendAck(state: DirectoryState, id: number): void {
+  if (state.peer) state.peer.ack(id);
+  else state.unsent.add(id);
+}
 
 function run(cmd: string[], cwd: string): string | null {
   try {
@@ -80,16 +111,39 @@ async function startPeer(directory: string, client: SessionClient, log: (m: stri
   const correlation = new CorrelationTracker();
   const inbox = new SessionInbox(client, log, { tui });
   const port = parseInt(process.env.CLAUDE_HIVEMIND_PORT ?? "7899", 10);
-  const ackKey = `${port}\0${directory}`;
-  const inheritedAcks = unsentAcks.get(ackKey) ?? [];
-  unsentAcks.delete(ackKey);
+  const state = directoryState(`${port}\0${directory}`);
+  const inheritedAcks = [...state.unsent];
+  state.unsent.clear();
 
   // The broker keeps a message undelivered until it is acked here, which is
   // once the inbox has put it into a session; it resends unacked messages when
   // this directory's peer registers again (reconnect, reload, restart). Ids
-  // already held or handed on are not taken twice; a handed-on one is acked again.
-  const held = new Set<number>();
-  const handedOn = new Set<number>(inheritedAcks);
+  // held or handed on by any instance of this directory are not taken twice;
+  // a handed-on one is acked again.
+  const mine = new Set<number>();
+  let stopped = false;
+
+  const onMessage = (msg: InboundMessage) => {
+    const mid = msg.message_id;
+    if (mid !== undefined) {
+      if (state.handedOn.has(mid)) return sendAck(state, mid);
+      if (state.held.has(mid)) return;
+      state.held.set(mid, msg);
+      mine.add(mid);
+    }
+    correlation.recordInbound(msg.from_id, msg.correlation_id);
+    inbox.deliver(
+      formatInbound(msg),
+      mid === undefined
+        ? undefined
+        : () => {
+            mine.delete(mid);
+            state.held.delete(mid);
+            state.handedOn.add(mid);
+            sendAck(state, mid);
+          },
+    );
+  };
 
   const peer: BrokerPeer = new BrokerPeer({
     port,
@@ -107,32 +161,32 @@ async function startPeer(directory: string, client: SessionClient, log: (m: stri
       ack: true,
     },
     onMessage: (msg) => {
-      const mid = msg.message_id;
-      if (mid !== undefined) {
-        if (handedOn.has(mid)) return peer.ack(mid);
-        if (held.has(mid)) return;
-        held.add(mid);
-      }
-      correlation.recordInbound(msg.from_id, msg.correlation_id);
-      inbox.deliver(
-        formatInbound(msg),
-        mid === undefined
-          ? undefined
-          : () => {
-              held.delete(mid);
-              handedOn.add(mid);
-              peer.ack(mid);
-            },
-      );
+      if (!stopped) onMessage(msg);
     },
     log,
   });
+  state.peer = peer;
+  state.redeliver = onMessage;
   peer.start();
 
+  // A prompt in flight finishes and acks through the successor's peer (see
+  // DirectoryState); the inbox sends nothing after it. Messages it still held
+  // go to the successor, or wait for the broker's resend to the next one.
   const stop = () => {
+    if (stopped) return;
+    stopped = true;
     peer.stop();
-    const left = peer.pendingAcks;
-    if (left.length > 0) unsentAcks.set(ackKey, left);
+    if (state.peer === peer) state.peer = null;
+    if (state.redeliver === onMessage) state.redeliver = null;
+    for (const id of peer.pendingAcks) sendAck(state, id);
+    void inbox.close().then(() => {
+      for (const id of [...mine]) {
+        const msg = state.held.get(id);
+        mine.delete(id);
+        state.held.delete(id);
+        if (msg && state.redeliver) state.redeliver(msg);
+      }
+    });
   };
 
   const instructions = () =>

@@ -75,6 +75,7 @@ export class SessionInbox {
   private work: Promise<void> = Promise.resolve();
   /** Ends the confirmation wait early. */
   private wake: (() => void) | null = null;
+  private closed = false;
   /** Touches are numbered by start; a touch never overrides one that started later. */
   private touchSeq = 0;
   private activatedSeq = 0;
@@ -178,6 +179,7 @@ export class SessionInbox {
    * exists, a message identical to one still held is not queued again.
    */
   deliver(text: string, onDelivered?: () => void): void {
+    if (this.closed) return;
     const same = this.active ? undefined : this.pending.find((p) => p.text === text);
     if (same) {
       if (onDelivered) same.callbacks.push(onDelivered);
@@ -185,6 +187,16 @@ export class SessionInbox {
       this.pending.push({ text, callbacks: onDelivered ? [onDelivered] : [], typedAt: null });
     }
     this.pump();
+  }
+
+  /**
+   * Stop sending: a send in flight finishes (and settles), nothing after it is
+   * sent. Resolves once that send is done; what is still pending stays unsent.
+   */
+  close(): Promise<void> {
+    this.closed = true;
+    this.wake?.();
+    return this.idle();
   }
 
   /** Resolves once the work chain has run dry (used by tests). */
@@ -207,7 +219,7 @@ export class SessionInbox {
    * lookup is running (that prompt may be about to set the target).
    */
   private async step(): Promise<void> {
-    while (this.pending.length > 0) {
+    while (this.pending.length > 0 && !this.closed) {
       const head = this.pending[0]!;
       const target = this.active;
       if (!target) {

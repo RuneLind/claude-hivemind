@@ -33,6 +33,7 @@ import {
   deliverOrQueue,
   cleanStalePeers,
   log,
+  parseGraceMs,
 } from "./broker/peers.ts";
 import { createServiceStatements, createServicePollState, pollServiceHealth } from "./broker/services.ts";
 import {
@@ -68,7 +69,7 @@ const DB_PATH =
   process.env.CLAUDE_HIVEMIND_DB ?? `${process.env.HOME}/.claude-hivemind.db`;
 // How long a disconnected peer's row (and its id) is kept for it to come back.
 // The override exists for tests.
-const GRACE_PERIOD_MS = parseInt(process.env.CLAUDE_HIVEMIND_GRACE_MS ?? "30000", 10) || 30_000;
+const GRACE_PERIOD_MS = parseGraceMs(process.env.CLAUDE_HIVEMIND_GRACE_MS, log);
 
 // --- Origin protection (CSRF / DNS-rebinding) ---
 //

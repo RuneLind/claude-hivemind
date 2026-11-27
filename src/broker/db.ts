@@ -64,7 +64,9 @@ export function initDatabase(dbPath: string): Database {
       text TEXT NOT NULL,
       sent_at TEXT NOT NULL,
       delivered INTEGER NOT NULL DEFAULT 0,
-      correlation_id TEXT
+      correlation_id TEXT,
+      to_cwd TEXT,
+      to_namespace TEXT
     )
   `);
 
@@ -72,6 +74,11 @@ export function initDatabase(dbPath: string): Database {
   // sender attaches to a message; persisted so a queued (offline-peer) message
   // still carries it on redelivery.
   try { db.run(`ALTER TABLE messages ADD COLUMN correlation_id TEXT`); } catch {}
+  // The directory (cwd, namespace) of the acking peer a message was sent to
+  // and is held for until its ack. Null for every other message. Such a
+  // message is resent only to a registration of that id from that directory.
+  try { db.run(`ALTER TABLE messages ADD COLUMN to_cwd TEXT`); } catch {}
+  try { db.run(`ALTER TABLE messages ADD COLUMN to_namespace TEXT`); } catch {}
 
   db.run(`
     CREATE TABLE IF NOT EXISTS services (

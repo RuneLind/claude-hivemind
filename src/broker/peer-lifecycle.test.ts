@@ -225,6 +225,160 @@ describe("peer lifecycle (live broker)", () => {
   });
 });
 
+/** A live process standing in for another peer's pid; kill() makes the pid dead. */
+function otherPid() {
+  const proc = Bun.spawn(["sleep", "60"], { stdout: "ignore", stderr: "ignore" });
+  return { pid: proc.pid, kill: async () => { proc.kill(); await proc.exited; } };
+}
+
+describe("held messages stay with their directory (live broker)", () => {
+  let port: number;
+  let dbPath: string;
+  let broker: Subprocess;
+  const procs: { kill: () => Promise<void> }[] = [];
+  const spawnPid = () => {
+    const p = otherPid();
+    procs.push(p);
+    return p;
+  };
+  const oc = { ack: true, agent_type: "opencode" };
+
+  beforeAll(async () => {
+    port = await freePort();
+    dbPath = join(tmpdir(), `hivemind-held-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
+    broker = await startBroker(port, dbPath);
+  });
+
+  afterAll(async () => {
+    for (const p of procs) await p.kill();
+    await stopBroker(broker);
+    removeDb(dbPath);
+  });
+
+  test("F1 (E): during a reload, another directory from another process neither takes the id nor gets the held message; the reload gets both", async () => {
+    const ns = "f1-e";
+    const opencode = spawnPid();
+    const other = spawnPid();
+    const e1 = await peerSocket(port, ns);
+    const id = await e1.register("/tmp/emp-e1/web", oc, opencode.pid);
+    await send(port, id, "e-held");
+    await e1.until(() => e1.messages().length > 0);
+    await e1.close();
+    await Bun.sleep(50);
+
+    const e2 = await peerSocket(port, ns);
+    const otherId = await e2.register("/tmp/emp-e2/web", {}, other.pid);
+    await Bun.sleep(150);
+    expect(otherId).not.toBe(id);
+    expect(e2.messages()).toEqual([]);
+
+    const e1b = await peerSocket(port, ns);
+    expect(await e1b.register("/tmp/emp-e1/web", oc, opencode.pid)).toBe(id);
+    await e1b.until(() => e1b.messages().length > 0);
+    expect(e1b.messages().map((m) => m.text)).toEqual(["e-held"]);
+    expect(e2.messages()).toEqual([]);
+  });
+
+  test("F1 (D): after a dead acking peer's grace period, another directory that takes the id does not get its held message; the directory gets it once it has the id again", async () => {
+    const ns = "f1-d";
+    const dead = spawnPid();
+    const d1 = await peerSocket(port, ns);
+    const id = await d1.register("/tmp/emp-d1/app", oc, dead.pid);
+    await send(port, id, "d-held");
+    await d1.until(() => d1.messages().length > 0);
+    await d1.close();
+    await dead.kill();
+    await Bun.sleep(GRACE_MS + 500);
+    expect(rows(dbPath, ns)).toEqual([]);
+
+    const cc = spawnPid();
+    const d2 = await peerSocket(port, ns);
+    expect(await d2.register("/tmp/emp-d2/app", {}, cc.pid)).toBe(id);
+    await Bun.sleep(150);
+    expect(d2.messages()).toEqual([]);
+    expect(delivered(dbPath, "d-held")).toBe(0);
+    await d2.close();
+    await cc.kill();
+    await Bun.sleep(GRACE_MS + 500);
+
+    // The directory restarts under a new pid and takes the id back.
+    const again = spawnPid();
+    const d3 = await peerSocket(port, ns);
+    expect(await d3.register("/tmp/emp-d1/app", oc, again.pid)).toBe(id);
+    await d3.until(() => d3.messages().length > 0);
+    expect(d3.messages().map((m) => m.text)).toEqual(["d-held"]);
+  }, 20_000);
+
+  test("F1: a message queued while the acking peer was offline is held for its directory once resent to it", async () => {
+    const ns = "f1-q";
+    const dead = spawnPid();
+    const q1 = await peerSocket(port, ns);
+    const id = await q1.register("/tmp/emp-q1/lib", oc, dead.pid);
+    await q1.close();
+    await Bun.sleep(50);
+    await send(port, id, "q-offline");
+    const q2 = await peerSocket(port, ns);
+    expect(await q2.register("/tmp/emp-q1/lib", oc, dead.pid)).toBe(id);
+    await q2.until(() => q2.messages().length > 0);
+    await q2.close();
+    await dead.kill();
+    await Bun.sleep(GRACE_MS + 500);
+
+    const cc = spawnPid();
+    const q3 = await peerSocket(port, ns);
+    expect(await q3.register("/tmp/emp-q3/lib", {}, cc.pid)).toBe(id);
+    await Bun.sleep(150);
+    expect(q3.messages()).toEqual([]);
+    expect(delivered(dbPath, "q-offline")).toBe(0);
+  }, 20_000);
+
+  test("F1: a Claude Code peer in the reloading directory takes neither its id nor, after the grace period, its held message", async () => {
+    const ns = "f1-same";
+    const opencode = spawnPid();
+    const s1 = await peerSocket(port, ns);
+    const id = await s1.register("/tmp/emp-same/repo", oc, opencode.pid);
+    await send(port, id, "s-held");
+    await s1.until(() => s1.messages().length > 0);
+    await s1.close();
+    await Bun.sleep(50);
+
+    // Within the grace period: same directory, other agent type and pid.
+    const cc1 = spawnPid();
+    const c1 = await peerSocket(port, ns);
+    expect(await c1.register("/tmp/emp-same/repo", {}, cc1.pid)).not.toBe(id);
+    await c1.close();
+    await cc1.kill();
+    await opencode.kill();
+    await Bun.sleep(GRACE_MS + 500);
+
+    // After it: the id is free, but a peer that does not ack gets no held message.
+    const cc2 = spawnPid();
+    const c2 = await peerSocket(port, ns);
+    expect(await c2.register("/tmp/emp-same/repo", {}, cc2.pid)).toBe(id);
+    await Bun.sleep(150);
+    expect(c2.messages()).toEqual([]);
+    expect(delivered(dbPath, "s-held")).toBe(0);
+  }, 20_000);
+
+  test("F1: a Claude Code peer restarting under a new pid in the same directory gets its id back and its queued message", async () => {
+    const ns = "f1-cc";
+    const first = spawnPid();
+    const c1 = await peerSocket(port, ns);
+    const id = await c1.register("/tmp/emp-cc/svc", {}, first.pid);
+    await c1.close();
+    await Bun.sleep(50);
+    await send(port, id, "cc-offline");
+    await first.kill();
+
+    const second = spawnPid();
+    const c2 = await peerSocket(port, ns);
+    expect(await c2.register("/tmp/emp-cc/svc", {}, second.pid)).toBe(id);
+    await c2.until(() => c2.messages().length > 0);
+    expect(c2.messages().map((m) => m.text)).toEqual(["cc-offline"]);
+    expect(delivered(dbPath, "cc-offline")).toBe(1);
+  });
+});
+
 describe("broker restart (live broker)", () => {
   test("H5: a directory that disconnected just before a broker restart leaves no ghost row, though its process lives on", async () => {
     const port = await freePort();
