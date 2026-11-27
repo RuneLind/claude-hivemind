@@ -142,7 +142,9 @@ async function server({ client, directory }: PluginInput): Promise<Hooks> {
     },
 
     "experimental.chat.system.transform": async (input, output) => {
-      if (input.sessionID && inbox.isChild(input.sessionID)) return;
+      // Only a session known or looked up (bounded) as a root: a child evicted
+      // from the inbox's cache, or a failed or timed-out lookup, gets none.
+      if (input.sessionID && !(await inbox.isRootSession(input.sessionID))) return;
       output.system.push(instructions());
     },
 

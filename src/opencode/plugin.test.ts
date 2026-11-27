@@ -257,6 +257,57 @@ describe("opencode plugin message target", () => {
   });
 });
 
+describe("opencode plugin 1.x system instructions", () => {
+  const saved = process.env.CLAUDE_HIVEMIND;
+  const savedPort = process.env.CLAUDE_HIVEMIND_PORT;
+  afterEach(() => {
+    if (saved === undefined) delete process.env.CLAUDE_HIVEMIND;
+    else process.env.CLAUDE_HIVEMIND = saved;
+    if (savedPort === undefined) delete process.env.CLAUDE_HIVEMIND_PORT;
+    else process.env.CLAUDE_HIVEMIND_PORT = savedPort;
+  });
+
+  for (const lookup of ["answers with its parent", "fails"] as const) {
+    test(`F1: a subagent child evicted by 1,000 newer children gets no instructions when its lookup ${lookup}; a root still does`, async () => {
+      const client = {
+        app: { log: async () => ({}) },
+        session: {
+          async promptAsync() {
+            return {};
+          },
+          async get({ path }: any) {
+            if (path.id.startsWith("child")) {
+              if (lookup === "fails") throw new Error("unreachable");
+              return { data: { id: path.id, parentID: "root" } };
+            }
+            return { data: { id: path.id } };
+          },
+        },
+      };
+      process.env.CLAUDE_HIVEMIND = "1";
+      process.env.CLAUDE_HIVEMIND_PORT = "1"; // nothing listens; the peer just retries
+      const hooks = await pluginModule.default.server({ client, directory: "/tmp", worktree: "/tmp" } as any);
+      try {
+        const created = (info: object) => hooks.event!({ event: { type: "session.created", properties: { info } } as any });
+        await created({ id: "root" });
+        await created({ id: "child-0", parentID: "root" });
+        for (let i = 1; i <= 1_000; i++) await created({ id: `child-${i}`, parentID: "root" });
+        const systemFor = async (sessionID: string) => {
+          const output = { system: [] as string[] };
+          await hooks["experimental.chat.system.transform"]!({ sessionID } as any, output as any);
+          return output.system;
+        };
+        expect(await systemFor("child-0")).toEqual([]);
+        const rootSystem = await systemFor("root");
+        expect(rootSystem).toHaveLength(1);
+        expect(rootSystem[0]).toContain("claude-hivemind network");
+      } finally {
+        await hooks.dispose?.();
+      }
+    });
+  }
+});
+
 describe("buildOpenCodeCommand", () => {
   const saved = process.env.OPENCODE_COMMAND;
   afterEach(() => {

@@ -77,16 +77,18 @@ interface Pending {
  */
 const CONFIRM_MS = 2_000;
 
-/** Re-insert `id` as newest and drop the oldest entries past `cap`, never `keep`. */
-function remember<V>(c: Set<string> | Map<string, V>, id: string, cap: number, keep: string | null, value?: V): void {
+/** Re-insert `id` as newest and drop the oldest entries past `cap`, never one `keep` accepts. */
+function remember<V>(c: Set<string> | Map<string, V>, id: string, cap: number, keep: (k: string) => boolean, value?: V): void {
   c.delete(id);
   if (c instanceof Map) c.set(id, value as V);
   else c.add(id);
   for (const k of c.keys()) {
     if (c.size <= cap) return;
-    if (k !== keep) c.delete(k);
+    if (!keep(k)) c.delete(k);
   }
 }
+
+const keepNone = () => false;
 
 export class SessionInbox {
   active: string | null = null;
@@ -103,9 +105,14 @@ export class SessionInbox {
   private activatedSeq = 0;
   /** Touches still running; nothing is typed while a prompt may be about to set the target. */
   private touching = 0;
+  /** Sessions with a touch running, by count: their prefs are never dropped before it decides. */
+  private touchingIds = new Map<string, number>();
   private confirmMs: number;
   private lookupMs: number;
-  /** Bound on roots, children and prefs; the oldest are dropped first, never the target's prefs. */
+  /**
+   * Bound on roots, children and prefs; the oldest are dropped first, never
+   * the prefs of the target or of a session whose touch is running.
+   */
   private maxSessions: number;
   /** False on OpenCode 2.x, whose plugin API has no TUI calls: held messages wait for a prompt. */
   private tui: boolean;
@@ -142,7 +149,15 @@ export class SessionInbox {
 
   /** Record a session seen in a session.created/updated event. */
   observe(info: SessionInfoLike): void {
-    remember(info.parentID ? this.children : this.roots, info.id, this.maxSessions, null);
+    remember(info.parentID ? this.children : this.roots, info.id, this.maxSessions, keepNone);
+  }
+
+  /**
+   * Whether a session is a root session, asking OpenCode (bounded) when it is
+   * not cached: a timed-out or failed lookup answers false.
+   */
+  async isRootSession(id: string): Promise<boolean> {
+    return this.isRoot(id);
   }
 
   isChild(id: string): boolean {
@@ -184,29 +199,36 @@ export class SessionInbox {
   async touch(id: string, prefs?: PromptPrefs, promptText?: string): Promise<void> {
     if (this.disposed) return;
     if (promptText !== undefined) this.confirmTyped(promptText);
-    if (prefs) remember(this.prefs, id, this.maxSessions, this.active, prefs);
-    const seq = ++this.touchSeq;
-    this.touching++;
-    let root = false;
-    let token: string | null = null;
+    this.touchingIds.set(id, (this.touchingIds.get(id) ?? 0) + 1);
     try {
-      root = await this.isRoot(id);
-      if (root && this.guard && !this.disposed) token = await this.guard.confirm(id);
+      if (prefs) remember(this.prefs, id, this.maxSessions, (k) => k === this.active || this.touchingIds.has(k), prefs);
+      const seq = ++this.touchSeq;
+      this.touching++;
+      let root = false;
+      let token: string | null = null;
+      try {
+        root = await this.isRoot(id);
+        if (root && this.guard && !this.disposed) token = await this.guard.confirm(id);
+      } finally {
+        this.touching--;
+      }
+      if (this.disposed) return;
+      // Checked now, not before the awaits: the session may have moved meanwhile.
+      if (root && this.guard && !(token !== null && this.guard.holds(id, token))) {
+        root = false;
+        if (this.active === id) this.loseTarget();
+      }
+      if (root && this.prefs.has(id) && seq >= this.activatedSeq) {
+        this.activatedSeq = seq;
+        this.active = id;
+      }
+      // Also when no target was set: typing skipped during the lookup resumes.
+      this.pump();
     } finally {
-      this.touching--;
+      const n = this.touchingIds.get(id)! - 1;
+      if (n > 0) this.touchingIds.set(id, n);
+      else this.touchingIds.delete(id);
     }
-    if (this.disposed) return;
-    // Checked now, not before the awaits: the session may have moved meanwhile.
-    if (root && this.guard && !(token !== null && this.guard.holds(id, token))) {
-      root = false;
-      if (this.active === id) this.loseTarget();
-    }
-    if (root && this.prefs.has(id) && seq >= this.activatedSeq) {
-      this.activatedSeq = seq;
-      this.active = id;
-    }
-    // Also when no target was set: typing skipped during the lookup resumes.
-    this.pump();
   }
 
   /** A failed or timed-out lookup answers false and is not cached: the next prompt asks again. */

@@ -984,4 +984,23 @@ describe("SessionInbox: bounded lookups and memory", () => {
     await inbox.idle();
     expect(calls).toEqual([{ id: "t", text: "m", agent: "plan" }]);
   });
+
+  test("F2: the prefs of a session whose touch is still looking it up survive 1,000 other prompts", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const { client, calls } = fakeClient({ parents: { t: undefined }, slowGet: { t: held } });
+    const inbox = new SessionInbox(client, () => {}, { confirmMs: CONFIRM_MS, maxSessions: 1_000 });
+    const touched = inbox.touch("t", { agent: "plan" });
+    inbox.created({ id: "r" });
+    for (let i = 0; i < 1_000; i++) {
+      inbox.created({ id: `c${i}`, parentID: "r" });
+      await inbox.touch(`c${i}`, build);
+    }
+    release();
+    await touched;
+    expect(inbox.active).toBe("t");
+    inbox.deliver("m");
+    await inbox.idle();
+    expect(calls).toEqual([{ id: "t", text: "m", agent: "plan" }]);
+  });
 });

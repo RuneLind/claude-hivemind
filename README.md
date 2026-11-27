@@ -134,7 +134,7 @@ The plugin needs a running broker (`bun start`, or any Claude Code peer starts o
 
 **Known limits on OpenCode 2.x** (delivery reliability is a follow-up, not handled yet):
 
-- Every message the plugin holds lives only in its memory, and is lost if the plugin reloads or OpenCode shuts down before it is delivered: one held before the directory's first prompt, and equally one held later because its session moved away, was deleted or failed a send and no session has been prompted since.
+- Every message the plugin holds lives only in its memory, and is lost if the plugin reloads or OpenCode shuts down before it is delivered. A message is held whenever the directory's peer has no target session: before the directory's first prompt, after the target moved away or was deleted, after a failed send, after an ownership check timed out or failed, or after an event-stream reconnect dropped cached ownership. It is released only by a prompt in a root session of that directory that passes the ownership check; a prompt in a subagent session or in another directory's session does not release it.
 - Two directories with the same basename in one OpenCode process can swap peer ids when the plugin reloads, so a message queued for one can reach the other.
 - After a broker restart within the disconnect grace period, a disconnected per-directory row can linger in the peer list as a ghost.
 - Every subdirectory a session starts in becomes its own peer, as a 1.19 TUI launched in a subdirectory already does.
