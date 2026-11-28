@@ -20,7 +20,11 @@
  * OpenCode 1.19 calls `setup()` too, with a context that has no session, tool
  * or event domain; `setup()` returns at once there.
  *
- * Inert unless CLAUDE_HIVEMIND is set, the same gate as the MCP server.
+ * On 1.x, inert unless CLAUDE_HIVEMIND is set, the same gate as the MCP
+ * server. On 2.x always on: one shared server runs every session and keeps
+ * the environment of whatever started it, so a per-launch switch cannot work.
+ * CLAUDE_HIVEMIND_PORT and CLAUDE_HIVEMIND_OPENCODE_LOG come from the plugin
+ * settings file, then the environment (./plugin-settings.ts).
  * The broker must be running (`bun start`, or any Claude Code peer starts it).
  *
  * INSTALL (per machine):
@@ -40,6 +44,7 @@ import { SessionInbox, formatInbound, type OwnershipGuard, type SessionClient } 
 import { peerTools, v1ToolMap, v2ToolInfos } from "./peer-tools.ts";
 import { v2SessionClient } from "./v2-session.ts";
 import { DirectoryScope } from "./v2-scope.ts";
+import { loadSettings, type Settings } from "./plugin-settings.ts";
 import { CorrelationTracker } from "../correlation-tracker.ts";
 import { loadNamespaceConfig, resolveNamespace } from "../shared/namespace.ts";
 
@@ -72,6 +77,7 @@ async function startPeer(
   client: SessionClient,
   log: (m: string) => void,
   tui: boolean,
+  settings: Settings,
   guard?: OwnershipGuard,
 ) {
   const namespace = resolveNamespace(directory, await loadNamespaceConfig());
@@ -79,7 +85,7 @@ async function startPeer(
   const inbox = new SessionInbox(client, log, { tui, guard });
 
   const peer = new BrokerPeer({
-    port: parseInt(process.env.CLAUDE_HIVEMIND_PORT ?? "7899", 10),
+    port: parseInt(settings("CLAUDE_HIVEMIND_PORT") ?? "7899", 10),
     namespace,
     register: {
       pid: process.pid,
@@ -124,6 +130,7 @@ async function server({ client, directory }: PluginInput): Promise<Hooks> {
     client as unknown as SessionClient,
     log,
     true,
+    loadSettings(),
   );
 
   return {
@@ -161,8 +168,7 @@ async function server({ client, directory }: PluginInput): Promise<Hooks> {
  * OpenCode 2.x has no log call in the plugin context, and stderr would draw
  * over the TUI, so the log goes to a file only when one is named.
  */
-function v2Log(message: string): void {
-  const file = process.env.CLAUDE_HIVEMIND_OPENCODE_LOG;
+function v2Log(file: string | undefined, message: string): void {
   if (!file) return;
   try {
     appendFileSync(file, `${new Date().toISOString()} [claude-hivemind] ${message}\n`);
@@ -188,12 +194,13 @@ function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
 
 /** OpenCode 2.x entry, once per directory (1.19 also calls it, with a reduced context). */
 async function setup(ctx: Plugin.Context): Promise<Plugin.Cleanup | void> {
-  if (!process.env.CLAUDE_HIVEMIND) return;
-  // 1.19's reduced context: its peer comes from server().
+  // No CLAUDE_HIVEMIND gate on 2.x (always on). 1.19's reduced context: its peer comes from server().
   if (!ctx.session || !ctx.tool || !ctx.event) return;
 
+  const settings = loadSettings();
+  const logFile = settings("CLAUDE_HIVEMIND_OPENCODE_LOG");
   const directory = ctx.location.directory;
-  const log = (m: string) => v2Log(`${directory}: ${m}`);
+  const log = (m: string) => v2Log(logFile, `${directory}: ${m}`);
   const scope = new DirectoryScope(directory, ctx.session, log);
 
   const registrations: { dispose: () => Promise<void> }[] = [];
@@ -210,7 +217,7 @@ async function setup(ctx: Plugin.Context): Promise<Plugin.Cleanup | void> {
   };
 
   try {
-    const { peer, inbox, instructions, tools } = await startPeer(directory, v2SessionClient(ctx.session), log, false, scope);
+    const { peer, inbox, instructions, tools } = await startPeer(directory, v2SessionClient(ctx.session), log, false, settings, scope);
     stopPeer = () => peer.stop();
     disposeInbox = () => inbox.dispose();
     // cleanup() ran while startPeer was awaited.

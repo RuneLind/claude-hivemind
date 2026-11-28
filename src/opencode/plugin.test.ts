@@ -1,4 +1,7 @@
-import { describe, test, expect, afterEach } from "bun:test";
+import { describe, test, expect, afterEach, beforeEach } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import * as pluginModule from "./plugin.ts";
 import { buildOpenCodeCommand } from "../cmux/opencode-command.ts";
 
@@ -8,6 +11,18 @@ const fakeInput = (directory = "/tmp") =>
     directory,
     worktree: directory,
   }) as any;
+
+// Every test that loads the plugin reads the settings file: point it at an
+// empty temp dir so the machine's real ~/.config/opencode/plugin-settings.json
+// never leaks in.
+const savedXdg = process.env.XDG_CONFIG_HOME;
+beforeEach(() => {
+  process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), "hm-xdg-"));
+});
+afterEach(() => {
+  if (savedXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+  else process.env.XDG_CONFIG_HOME = savedXdg;
+});
 
 describe("opencode plugin module", () => {
   const saved = process.env.CLAUDE_HIVEMIND;

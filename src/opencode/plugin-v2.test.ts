@@ -1,5 +1,5 @@
-import { describe, test, expect, afterEach } from "bun:test";
-import { mkdtempSync, realpathSync } from "node:fs";
+import { describe, test, expect, afterEach, beforeEach } from "bun:test";
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import plugin from "./plugin.ts";
@@ -236,6 +236,18 @@ function twoDirs() {
   return { a: join(root, "repoa"), b: join(root, "repob") };
 }
 
+// Every test that loads the plugin reads the settings file: point it at an
+// empty temp dir so the machine's real ~/.config/opencode/plugin-settings.json
+// never leaks in.
+const savedXdg = process.env.XDG_CONFIG_HOME;
+beforeEach(() => {
+  process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), "hm-xdg-"));
+});
+afterEach(() => {
+  if (savedXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+  else process.env.XDG_CONFIG_HOME = savedXdg;
+});
+
 describe("opencode plugin setup() (OpenCode 2.x entry)", () => {
   const saved = process.env.CLAUDE_HIVEMIND;
   const savedPort = process.env.CLAUDE_HIVEMIND_PORT;
@@ -269,12 +281,45 @@ describe("opencode plugin setup() (OpenCode 2.x entry)", () => {
     return { cleanup: cleanup ? once : undefined, inst };
   }
 
-  test("is inert without CLAUDE_HIVEMIND", async () => {
+  test("D10: registers without CLAUDE_HIVEMIND, port from the settings file with no env port", async () => {
+    const broker = fakeBroker();
+    cleanups.push(broker.stop);
     delete process.env.CLAUDE_HIVEMIND;
-    const { ctx, inst } = fakeV2Server().ctxFor("/tmp");
-    expect(await plugin.setup(ctx)).toBeUndefined();
-    expect(inst.tools).toHaveLength(0);
-    expect(Object.keys(inst.hooks)).toHaveLength(0);
+    delete process.env.CLAUDE_HIVEMIND_PORT;
+    const dir = join(process.env.XDG_CONFIG_HOME!, "opencode");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "plugin-settings.json"), JSON.stringify({ CLAUDE_HIVEMIND_PORT: String(broker.port) }));
+    const { a } = twoDirs();
+    const { cleanup, inst } = await load(fakeV2Server(), a);
+    expect(cleanup).toBeDefined();
+    expect(inst.tools).toHaveLength(4);
+    await until(() => broker.registers.length > 0);
+    expect(broker.registers[0].cwd).toBe(a);
+  });
+
+  test("D9: the settings file's port beats the environment's", async () => {
+    const broker = fakeBroker();
+    cleanups.push(broker.stop);
+    process.env.CLAUDE_HIVEMIND_PORT = "1"; // nothing listens there
+    const dir = join(process.env.XDG_CONFIG_HOME!, "opencode");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "plugin-settings.json"), JSON.stringify({ CLAUDE_HIVEMIND_PORT: String(broker.port) }));
+    const { a } = twoDirs();
+    await load(fakeV2Server(), a);
+    await until(() => broker.registers.length > 0);
+    expect(broker.registers).toHaveLength(1);
+  });
+
+  test("a malformed settings file falls back to the environment and setup() does not throw", async () => {
+    const broker = withBroker();
+    const dir = join(process.env.XDG_CONFIG_HOME!, "opencode");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "plugin-settings.json"), "{ not json");
+    const { a } = twoDirs();
+    const { cleanup } = await load(fakeV2Server(), a);
+    expect(cleanup).toBeDefined();
+    await until(() => broker.registers.length > 0);
+    expect(broker.registers).toHaveLength(1);
   });
 
   test("1.19's reduced context registers nothing, before or after server(); server() keeps one peer per process", async () => {
