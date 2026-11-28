@@ -74,7 +74,16 @@ export class BrokerPeer {
 
   private connect(): void {
     const url = `ws://127.0.0.1:${this.opts.port}/ws/peer?namespace=${encodeURIComponent(this.opts.namespace)}`;
-    const ws = new this.WS(url);
+    let ws: WebSocket;
+    try {
+      ws = new this.WS(url);
+    } catch (e) {
+      // Never throw out of start() (a 2.x setup() that rejects fails the plugin
+      // for every session) or out of a reconnect timer.
+      this.log(`cannot connect to ${url}: ${e}`);
+      if (!this.stopped) this.scheduleReconnect();
+      return;
+    }
     this.ws = ws;
 
     ws.addEventListener("open", () => {

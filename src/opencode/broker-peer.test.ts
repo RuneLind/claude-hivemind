@@ -68,6 +68,32 @@ describe("BrokerPeer", () => {
     expect(reg.surface_id).toBeUndefined();
   });
 
+  test("a WebSocket constructor that throws does not escape start() or a reconnect; the peer keeps retrying", async () => {
+    let calls = 0;
+    const logs: string[] = [];
+    class Throwing {
+      static OPEN = 1;
+      constructor() {
+        calls++;
+        throw new SyntaxError("bad url");
+      }
+    }
+    peer = new BrokerPeer({
+      port: 1,
+      namespace: "default",
+      register,
+      onMessage: () => {},
+      log: (m) => logs.push(m),
+      WebSocketImpl: Throwing as unknown as typeof WebSocket,
+    });
+    expect(() => peer!.start()).not.toThrow();
+    expect(calls).toBe(1);
+    expect(logs[0]).toContain("cannot connect to ws://127.0.0.1:1/");
+    // The first reconnect fires after 1-1.5 s; it must throw nowhere either.
+    await until(() => calls >= 2, 2500);
+    expect(calls).toBe(2);
+  });
+
   test("passes inbound messages to onMessage", async () => {
     const got: InboundMessage[] = [];
     broker = fakeBroker();

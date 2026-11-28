@@ -123,14 +123,23 @@ claude mcp add --scope user --transport stdio claude-hivemind -- bun ~/claude-hi
 CLAUDE_HIVEMIND=1 claude --dangerously-skip-permissions --dangerously-load-development-channels server:claude-hivemind
 ```
 
-**OpenCode (1.x and 2.x):** install the plugin once per machine, then start OpenCode with the gate set:
+**OpenCode (1.x and 2.x):** install the plugin once per machine:
 
 ```bash
 ln -s ~/claude-hivemind/src/opencode/plugin.ts ~/.config/opencode/plugins/claude-hivemind.ts
-CLAUDE_HIVEMIND=1 opencode
 ```
 
-The plugin needs a running broker (`bun start`, or any Claude Code peer starts one). Messages go to the session you last prompted, under that prompt's agent and model; in a fresh 1.x TUI the first one is typed into the prompt box; on 2.x, whose plugins have no TUI calls, they wait until your first prompt. On 2.x one OpenCode server can serve several directories, and the plugin registers one peer per directory (same PID, each with its own cwd and git root); each peer's tools, instructions and messages reach only the sessions in its directory, and after the plugin reloads, messages wait for the next prompt in that directory. A session moved to another directory (`session.moved`) leaves the old directory's peer and is claimed by the new directory's peer on its next prompt. 2.x reports plugin load failures only in `GET /api/plugin`; set `CLAUDE_HIVEMIND_OPENCODE_LOG` to a file path to get the plugin's own log on 2.x.
+On 1.x, start OpenCode with the gate set (`CLAUDE_HIVEMIND=1 opencode`); without it the plugin stays dormant. On 2.x the plugin is on in every session, whatever the environment: 2.x runs every session in one shared background server that keeps the environment of whatever process started it, so a per-launch variable cannot switch the plugin on or off. For the same reason the 2.x peer sends no cmux workspace id, so launching OpenCode 2.x from the dashboard does not rename its cmux workspace to the peer id.
+
+Both versions read the broker port from a settings file before the environment, and 2.x reads its log file setting there too: `$XDG_CONFIG_HOME/opencode/plugin-settings.json` (an `XDG_CONFIG_HOME` that is empty or not an absolute path is ignored, and the default is `~/.config/opencode/plugin-settings.json`). It is one flat JSON object of environment-variable names to string values, shared with other OpenCode plugins:
+
+```json
+{ "CLAUDE_HIVEMIND_PORT": "7899", "CLAUDE_HIVEMIND_OPENCODE_LOG": "/tmp/claude-hivemind-opencode.log" }
+```
+
+A key counts when its value is a non-empty string; otherwise the environment variable of the same name is used. A missing or malformed file counts as empty. A port that is not an integer from 1 to 65535 is skipped (and logged), first in the file, then in the environment, ending at 7899. Each plugin instance reads the file once, when it starts: on 1.x that is the OpenCode process; on 2.x it is each directory the server opens, so an edit while the server runs applies to directories opened afterwards. Restart the 2.x server to apply it everywhere.
+
+The plugin needs a running broker (`bun start`, or any Claude Code peer starts one). Messages go to the session you last prompted, under that prompt's agent and model; in a fresh 1.x TUI the first one is typed into the prompt box; on 2.x, whose plugins have no TUI calls, they wait until your first prompt. On 2.x one OpenCode server can serve several directories, and the plugin registers one peer per directory (same PID, each with its own cwd and git root); each peer's tools, instructions and messages reach only the sessions in its directory, and after the plugin reloads, messages wait for the next prompt in that directory. A session moved to another directory (`session.moved`) leaves the old directory's peer and is claimed by the new directory's peer on its next prompt. 2.x reports plugin load failures only in `GET /api/plugin`; set `CLAUDE_HIVEMIND_OPENCODE_LOG` (settings file or the server's environment) to a file path to get the plugin's own log on 2.x.
 
 **Known limits on OpenCode 2.x** (delivery reliability is a follow-up, not handled yet):
 
@@ -141,7 +150,7 @@ The plugin needs a running broker (`bun start`, or any Claude Code peer starts o
 
 **Migrating from the MCP route:** older dashboard launches wrote a project `opencode.json` with a `claude-hivemind` MCP entry. With the plugin installed, such a project registers twice: once through the plugin and once as a legacy MCP peer, whose messages are typed into a cmux surface that may no longer exist when the entry has a `CMUX_SURFACE_ID`. Remove the `claude-hivemind` entry from those files (`grep -rl --include=opencode.json claude-hivemind ~/source`).
 
-The `CLAUDE_HIVEMIND=1` env var activates the broker connection. Without it, the MCP server and the OpenCode plugin stay dormant and the instance won't register — so regular agent sessions are unaffected.
+The `CLAUDE_HIVEMIND=1` env var activates the broker connection. Without it, the MCP server and the OpenCode 1.x plugin stay dormant and the instance won't register — so regular agent sessions are unaffected. The OpenCode 2.x plugin does not read it: with the plugin installed, every 2.x session is a hivemind peer.
 
 Tip: create an alias for convenience:
 ```bash
@@ -163,12 +172,12 @@ The dashboard follows your OS light/dark setting. The button in the top-right co
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CLAUDE_HIVEMIND` | (unset) | Set to `1` to activate the broker connection |
-| `CLAUDE_HIVEMIND_PORT` | `7899` | Broker port |
+| `CLAUDE_HIVEMIND` | (unset) | Set to `1` to activate the broker connection (the OpenCode 2.x plugin does not read it and is always on) |
+| `CLAUDE_HIVEMIND_PORT` | `7899` | Broker port (the OpenCode plugin reads `plugin-settings.json` first) |
 | `CLAUDE_HIVEMIND_DB` | `~/.claude-hivemind.db` | SQLite database path |
 | `CLAUDE_HIVEMIND_AGENT_TYPE` | `claude-code` | MCP server agent type: `claude-code` or `copilot` (OpenCode uses the plugin) |
 | `OPENCODE_COMMAND` | `opencode` | OpenCode command the dashboard launcher runs |
-| `CLAUDE_HIVEMIND_OPENCODE_LOG` | (unset) | OpenCode 2.x only: file the plugin appends its log to (1.x logs through OpenCode's own log) |
+| `CLAUDE_HIVEMIND_OPENCODE_LOG` | (unset) | OpenCode 2.x only: file the plugin appends its log to, read from `plugin-settings.json` first (1.x logs through OpenCode's own log and ignores this key) |
 | `CMUX_SOCKET_PATH` | auto-detected | cmux Unix socket path |
 
 ## Running the broker manually
@@ -224,7 +233,7 @@ Docker monitoring is enabled automatically when Docker is installed. If Docker i
 
 ## cmux integration (optional)
 
-If you have [cmux](https://cmux.com) installed, the dashboard shows a **+ Agents** button that lets you launch new Claude Code or OpenCode instances directly from the browser. Each instance opens in a new cmux workspace with the hivemind transport pre-configured (Claude Code via the development channel, OpenCode with the plugin passed in `OPENCODE_CONFIG_CONTENT`, so the global install is not needed and the project's `opencode.json` is not touched).
+If you have [cmux](https://cmux.com) installed, the dashboard shows a **+ Agents** button that lets you launch new Claude Code or OpenCode instances directly from the browser. Each instance opens in a new cmux workspace with the hivemind transport pre-configured (Claude Code via the development channel, OpenCode with the plugin passed in `OPENCODE_CONFIG_CONTENT`, so on 1.x the global install is not needed and the project's `opencode.json` is not touched). OpenCode 2.x does not load the plugin from that entry (measured on 2.4.2: neither the `plugin` key the launcher writes nor a `plugins` entry loads a local file), and the launched TUI may attach to a server that is already running, so on 2.x the launcher relies on the global install.
 
 cmux is a macOS terminal multiplexer designed for managing multiple AI agent sessions. The hivemind broker connects to cmux via its Unix socket API (`/tmp/cmux.sock`) and polls for availability every 15 seconds. When cmux is detected, the launch button appears; when it's not, the button is hidden.
 
