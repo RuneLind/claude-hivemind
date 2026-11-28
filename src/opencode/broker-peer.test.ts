@@ -94,6 +94,14 @@ describe("BrokerPeer", () => {
     expect(calls).toBe(2);
   });
 
+  test("a namespace encodeURIComponent rejects (lone surrogate) does not escape start()", () => {
+    const logs: string[] = [];
+    peer = new BrokerPeer({ port: 1, namespace: "\ud800", register, onMessage: () => {}, log: (m) => logs.push(m) });
+    expect(() => peer!.start()).not.toThrow();
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain("URIError");
+  });
+
   test("passes inbound messages to onMessage", async () => {
     const got: InboundMessage[] = [];
     broker = fakeBroker();

@@ -10,6 +10,7 @@
  *   claude --dangerously-load-development-channels server:claude-hivemind
  */
 
+import { envPort } from "./shared/port.ts";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -32,7 +33,7 @@ import { formatPeerPrompt } from "./shared/message-prompt.ts";
 import { sendText, sendKey } from "./cmux/client.ts";
 import { CorrelationTracker } from "./correlation-tracker.ts";
 
-const BROKER_PORT = parseInt(process.env.CLAUDE_HIVEMIND_PORT ?? "7899", 10);
+const BROKER_PORT = envPort();
 const BROKER_URL = `http://127.0.0.1:${BROKER_PORT}`;
 const BROKER_WS_URL = `ws://127.0.0.1:${BROKER_PORT}`;
 const BROKER_SCRIPT = new URL("./broker.ts", import.meta.url).pathname;

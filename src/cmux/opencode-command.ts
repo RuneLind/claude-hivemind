@@ -10,7 +10,8 @@ export function shellQuote(s: string): string {
  * opencode.json is left alone. OpenCode 2.x ignores this entry (measured on
  * 2.4.2) and loads only the global install, once per directory.
  * `permission` mirrors the --dangerously-skip-permissions the Claude launcher
- * passes. cmux sets CMUX_WORKSPACE_ID in the new terminal itself (sent by the
+ * passes, but only on 1.x is it per launch: a 2.x server this command starts
+ * keeps it and applies it to every directory it serves. cmux sets CMUX_WORKSPACE_ID in the new terminal itself (sent by the
  * 1.x plugin only).
  */
 export function buildOpenCodeCommand(prompt?: string): string {

@@ -22,8 +22,9 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
+import { DEFAULT_PORT, parsePort } from "../shared/port.ts";
 
-export const DEFAULT_PORT = 7899;
+export { DEFAULT_PORT };
 
 export function settingsPath(env: NodeJS.ProcessEnv = process.env): string {
   const xdg = env.XDG_CONFIG_HOME;
@@ -54,15 +55,15 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
 }
 
 function asPort(v: string): number | null {
-  if (!/^[0-9]+$/.test(v)) return null;
-  const n = Number(v);
+  const n = parsePort(v);
   return n >= 1 && n <= 65535 ? n : null;
 }
 
 /**
  * CLAUDE_HIVEMIND_PORT: the file's value, else the environment's, else 7899.
- * A value that is not an integer in 1..65535 is skipped and logged: passed on,
- * it made `new WebSocket` throw and the 2.x plugin fail to load.
+ * Parsed as the broker parses it (`parsePort`); a value that parses to NaN or
+ * lands outside 1..65535 is skipped and logged: passed on, it made
+ * `new WebSocket` throw and the 2.x plugin fail to load.
  */
 export function brokerPort(settings: Settings, log: (m: string) => void): number {
   const key = "CLAUDE_HIVEMIND_PORT";

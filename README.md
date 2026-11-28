@@ -137,7 +137,7 @@ Both versions read the broker port from a settings file before the environment, 
 { "CLAUDE_HIVEMIND_PORT": "7899", "CLAUDE_HIVEMIND_OPENCODE_LOG": "/tmp/claude-hivemind-opencode.log" }
 ```
 
-A key counts when its value is a non-empty string; otherwise the environment variable of the same name is used. A missing or malformed file counts as empty. A port that is not an integer from 1 to 65535 is skipped (and logged), first in the file, then in the environment, ending at 7899. Each plugin instance reads the file once, when it starts: on 1.x that is the OpenCode process; on 2.x it is each directory the server opens, so an edit while the server runs applies to directories opened afterwards. Restart the 2.x server to apply it everywhere.
+A key counts when its value is a non-empty string; otherwise the environment variable of the same name is used. A missing or malformed file counts as empty. A port is read the way the broker reads `CLAUDE_HIVEMIND_PORT` (`parseInt`, so `"7950 "` and `"+7950"` mean 7950); one that does not parse or falls outside 1 to 65535 is skipped, first in the file, then in the environment, ending at 7899. The skip is logged on 1.x, and on 2.x only when `CLAUDE_HIVEMIND_OPENCODE_LOG` is set. A port set only in the settings file is seen by the OpenCode plugin alone: the broker, the CLI and the Claude Code MCP server read only the environment, so a broker on another port needs `CLAUDE_HIVEMIND_PORT` in its own environment too. Each plugin instance reads the file once, when it starts: on 1.x that is the OpenCode process; on 2.x it is each directory the server opens, so an edit while the server runs applies to directories opened afterwards. Restart the 2.x server to apply it everywhere.
 
 The plugin needs a running broker (`bun start`, or any Claude Code peer starts one). Messages go to the session you last prompted, under that prompt's agent and model; in a fresh 1.x TUI the first one is typed into the prompt box; on 2.x, whose plugins have no TUI calls, they wait until your first prompt. On 2.x one OpenCode server can serve several directories, and the plugin registers one peer per directory (same PID, each with its own cwd and git root); each peer's tools, instructions and messages reach only the sessions in its directory, and after the plugin reloads, messages wait for the next prompt in that directory. A session moved to another directory (`session.moved`) leaves the old directory's peer and is claimed by the new directory's peer on its next prompt. 2.x reports plugin load failures only in `GET /api/plugin`; set `CLAUDE_HIVEMIND_OPENCODE_LOG` (settings file or the server's environment) to a file path to get the plugin's own log on 2.x.
 
@@ -147,6 +147,12 @@ The plugin needs a running broker (`bun start`, or any Claude Code peer starts o
 - Two directories with the same basename in one OpenCode process can swap peer ids when the plugin reloads, so a message queued for one can reach the other.
 - After a broker restart within the disconnect grace period, a disconnected per-directory row can linger in the peer list as a ghost.
 - Every subdirectory a session starts in becomes its own peer, as a 1.19 TUI launched in a subdirectory already does.
+- A 2.x peer competes with a Claude Code peer in the same directory for the bare basename id and for the cwd-keyed saved summary.
+- Every 2.x session gets the hivemind instructions and can receive peer messages as user turns, headless `opencode run` included.
+- A server started by a dashboard launch keeps the launcher's `OPENCODE_CONFIG_CONTENT`, including `permission: {"*":"allow"}`, and applies it to every directory it serves, not only the launched one (`GET /api/config?directory=<other dir>` returns the allow-all). Any local peer can then drive any session on that server without a permission prompt.
+- `opencode-plugin-check.sh` registers a short-lived scratch peer on the real broker each time it runs.
+- Two always-on peers that follow the instruction text can trade acknowledgements back and forth.
+- Per-directory peers share the server PID, so a peer leaves only when OpenCode disposes its directory instance, not when a TUI closes.
 
 **Migrating from the MCP route:** older dashboard launches wrote a project `opencode.json` with a `claude-hivemind` MCP entry. With the plugin installed, such a project registers twice: once through the plugin and once as a legacy MCP peer, whose messages are typed into a cmux surface that may no longer exist when the entry has a `CMUX_SURFACE_ID`. Remove the `claude-hivemind` entry from those files (`grep -rl --include=opencode.json claude-hivemind ~/source`).
 
@@ -247,7 +253,7 @@ To enable:
 3. Start the hivemind broker (`bun dev`)
 4. Open the dashboard — the "+ Agents" button appears in the header
 
-The launch modal lets you specify a working directory, agent type (Claude Code or OpenCode), and an optional initial prompt. The broker creates a cmux workspace, sends the appropriate launch command, and the new instance auto-connects back to hivemind as a peer.
+The launch modal lets you specify a working directory, agent type (Claude Code or OpenCode), and an optional initial prompt. The broker creates a cmux workspace, sends the appropriate launch command, and the new instance connects back to hivemind as a peer. On OpenCode 2.x that needs the global plugin install (step 3): 2.x ignores the plugin the launcher passes in `OPENCODE_CONFIG_CONTENT`.
 
 You can also check cmux status via the API:
 ```bash
