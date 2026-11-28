@@ -12,9 +12,10 @@
  *   bun cli.ts kill-broker     — Stop the broker daemon
  */
 
+import { envPort } from "./shared/port.ts";
 import type { Peer } from "./shared/types.ts";
 
-const BROKER_PORT = parseInt(process.env.CLAUDE_HIVEMIND_PORT ?? "7899", 10);
+const BROKER_PORT = envPort();
 const BROKER_URL = `http://127.0.0.1:${BROKER_PORT}`;
 
 async function brokerFetch<T>(path: string, body?: unknown): Promise<T> {

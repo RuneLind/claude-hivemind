@@ -1,6 +1,89 @@
 import { describe, test, expect, afterEach } from "bun:test";
 import * as pluginModule from "./plugin.ts";
 import { buildOpenCodeCommand } from "../cmux/opencode-command.ts";
+import { isolatePluginEnv } from "./plugin-test-env.ts";
+
+const env = isolatePluginEnv();
+
+/** A broker that records register payloads. */
+function recordingBroker() {
+  const registers: any[] = [];
+  const srv = Bun.serve({
+    port: 0,
+    fetch(req, s) {
+      if (s.upgrade(req)) return;
+      return new Response("no", { status: 400 });
+    },
+    websocket: {
+      message(ws, data) {
+        const msg = JSON.parse(String(data));
+        if (msg.type === "register") {
+          registers.push(msg);
+          ws.send(JSON.stringify({ type: "registered", id: "oc", namespace: "default" }));
+        }
+      },
+    },
+  });
+  return { port: srv.port, registers, stop: () => srv.stop(true) };
+}
+
+const until = async (cond: () => boolean, ms = 2000) => {
+  const deadline = Date.now() + ms;
+  while (!cond() && Date.now() < deadline) await Bun.sleep(5);
+};
+
+describe("opencode plugin 1.x settings and registration", () => {
+  test("D9: server() takes the broker port from the settings file before the environment", async () => {
+    const broker = recordingBroker();
+    const dead = recordingBroker();
+    dead.stop();
+    process.env.CLAUDE_HIVEMIND = "1";
+    process.env.CLAUDE_HIVEMIND_PORT = String(dead.port);
+    env.writeSettings({ CLAUDE_HIVEMIND_PORT: String(broker.port) });
+    const hooks = await pluginModule.default.server(fakeInput());
+    try {
+      await until(() => broker.registers.length > 0);
+      expect(broker.registers).toHaveLength(1);
+    } finally {
+      await hooks.dispose?.();
+      broker.stop();
+    }
+  });
+
+  test("server() logs an invalid file port through app.log and uses the env port", async () => {
+    const broker = recordingBroker();
+    const logs: string[] = [];
+    process.env.CLAUDE_HIVEMIND = "1";
+    process.env.CLAUDE_HIVEMIND_PORT = String(broker.port);
+    env.writeSettings({ CLAUDE_HIVEMIND_PORT: "abc" });
+    const input = fakeInput();
+    input.client.app.log = async ({ body }: any) => void logs.push(body.message);
+    const hooks = await pluginModule.default.server(input);
+    try {
+      await until(() => broker.registers.length > 0);
+      expect(broker.registers).toHaveLength(1);
+      expect(logs.some((m) => m.includes('CLAUDE_HIVEMIND_PORT "abc"'))).toBe(true);
+    } finally {
+      await hooks.dispose?.();
+      broker.stop();
+    }
+  });
+
+  test("the 1.x register still carries CMUX_WORKSPACE_ID (per launch there)", async () => {
+    const broker = recordingBroker();
+    process.env.CLAUDE_HIVEMIND = "1";
+    process.env.CLAUDE_HIVEMIND_PORT = String(broker.port);
+    process.env.CMUX_WORKSPACE_ID = "ws-1";
+    const hooks = await pluginModule.default.server(fakeInput());
+    try {
+      await until(() => broker.registers.length > 0);
+      expect(broker.registers[0].workspace_id).toBe("ws-1");
+    } finally {
+      await hooks.dispose?.();
+      broker.stop();
+    }
+  });
+});
 
 const fakeInput = (directory = "/tmp") =>
   ({

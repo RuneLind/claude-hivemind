@@ -9,6 +9,7 @@
  * Run directly: bun broker.ts
  */
 
+import { envPort } from "./shared/port.ts";
 import type {
   ClientMessage,
   DashboardClientMessage,
@@ -63,7 +64,7 @@ import {
 // --- Configuration ---
 
 const dashboardHtml = renderDashboardPage();
-const PORT = parseInt(process.env.CLAUDE_HIVEMIND_PORT ?? "7899", 10);
+const PORT = envPort();
 const DB_PATH =
   process.env.CLAUDE_HIVEMIND_DB ?? `${process.env.HOME}/.claude-hivemind.db`;
 const GRACE_PERIOD_MS = 30_000;

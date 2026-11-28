@@ -7,7 +7,7 @@ Peer discovery and messaging for AI coding agents (Claude Code, OpenCode, Copilo
 - `src/broker.ts` — Entry point for the broker daemon (HTTP + WebSocket on localhost:7899). Wires together modules from `src/broker/`.
 - `src/broker/` — Broker internals: database schema (`db.ts`), peer lifecycle (`peers.ts`), service health (`services.ts`), Docker monitoring (`docker.ts`), log tailing (`logs.ts`), WS message handlers (`handlers.ts`). See `src/broker/CLAUDE.md`.
 - `src/server.ts` — MCP stdio server, one per Claude Code / Copilot instance. Connects to broker via WebSocket. Agent type detected from `CLAUDE_HIVEMIND_AGENT_TYPE` env var.
-- `src/opencode/` — OpenCode plugin (`plugin.ts`): the OpenCode peer, one default export with the 1.x `server()` (one peer per process) and the 2.x `setup()` entry (one peer per directory, `v2-scope.ts` keeps each to its directory's sessions). Broker WebSocket client (`broker-peer.ts`), the hivemind_* tools for both APIs (`peer-tools.ts`), session targeting + delivery (`session-inbox.ts`; 1.x `promptAsync`, 2.x `ctx.session.prompt` via `v2-session.ts`). Install: symlink `plugin.ts` into `~/.config/opencode/plugins/`; gated by `CLAUDE_HIVEMIND=1`.
+- `src/opencode/` — OpenCode plugin (`plugin.ts`): the OpenCode peer, one default export with the 1.x `server()` (one peer per process) and the 2.x `setup()` entry (one peer per directory, `v2-scope.ts` keeps each to its directory's sessions). Broker WebSocket client (`broker-peer.ts`), the hivemind_* tools for both APIs (`peer-tools.ts`), session targeting + delivery (`session-inbox.ts`; 1.x `promptAsync`, 2.x `ctx.session.prompt` via `v2-session.ts`). Install: symlink `plugin.ts` into `~/.config/opencode/plugins/`; 1.x gated by `CLAUDE_HIVEMIND=1`, 2.x always on (its shared server keeps the environment of whatever started it, so the 2.x peer also sends no `CMUX_WORKSPACE_ID`). Port (both) and log file (2.x) come from `$XDG_CONFIG_HOME/opencode/plugin-settings.json` (absolute `XDG_CONFIG_HOME` only, else `~/.config`), then env; read once per plugin instance (`plugin-settings.ts`).
 - `src/cli.ts` — CLI utility for inspecting broker state and managing peers.
 - `src/dashboard/` — Web dashboard (vanilla TypeScript, server-rendered HTML) showing peers grouped by namespace, Docker containers grouped by Compose project, service health, and log streaming.
 - `src/cmux/` — JSON-RPC client for cmux terminal multiplexer. Creates workspaces and launches Claude Code or OpenCode instances from the dashboard. See `src/cmux/CLAUDE.md`.
@@ -38,12 +38,12 @@ bun kill
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CLAUDE_HIVEMIND` | (unset) | Set to `1` to activate broker connection. Without it, MCP server stays dormant. |
-| `CLAUDE_HIVEMIND_PORT` | `7899` | Broker port |
+| `CLAUDE_HIVEMIND` | (unset) | Set to `1` to activate broker connection. Without it, the MCP server and the OpenCode 1.x plugin stay dormant; the 2.x plugin does not read it. |
+| `CLAUDE_HIVEMIND_PORT` | `7899` | Broker port (OpenCode plugin: `plugin-settings.json` first; an invalid port is skipped) |
 | `CLAUDE_HIVEMIND_DB` | `~/.claude-hivemind.db` | SQLite database path |
 | `CLAUDE_HIVEMIND_AGENT_TYPE` | `claude-code` | MCP server agent type: `claude-code` or `copilot` (OpenCode uses the plugin) |
 | `OPENCODE_COMMAND` | `opencode` | OpenCode command the dashboard launcher runs |
-| `CLAUDE_HIVEMIND_OPENCODE_LOG` | (unset) | OpenCode 2.x only: file the plugin appends its log to |
+| `CLAUDE_HIVEMIND_OPENCODE_LOG` | (unset) | OpenCode 2.x only: file the plugin appends its log to (`plugin-settings.json` first; 1.x ignores it) |
 | `CMUX_SOCKET_PATH` | `/tmp/cmux.sock` | cmux Unix socket path |
 
 ## Bun

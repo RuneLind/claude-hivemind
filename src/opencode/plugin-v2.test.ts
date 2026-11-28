@@ -1,8 +1,11 @@
 import { describe, test, expect, afterEach } from "bun:test";
-import { mkdtempSync, realpathSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import plugin from "./plugin.ts";
+import { isolatePluginEnv } from "./plugin-test-env.ts";
+
+const env = isolatePluginEnv();
 
 /** A fake broker: one socket per registered peer, each given an id from its cwd's basename. */
 function fakeBroker() {
@@ -269,12 +272,83 @@ describe("opencode plugin setup() (OpenCode 2.x entry)", () => {
     return { cleanup: cleanup ? once : undefined, inst };
   }
 
-  test("is inert without CLAUDE_HIVEMIND", async () => {
-    delete process.env.CLAUDE_HIVEMIND;
-    const { ctx, inst } = fakeV2Server().ctxFor("/tmp");
-    expect(await plugin.setup(ctx)).toBeUndefined();
-    expect(inst.tools).toHaveLength(0);
-    expect(Object.keys(inst.hooks)).toHaveLength(0);
+  test("D10: registers with no CLAUDE_HIVEMIND* in the environment, on the port from the settings file", async () => {
+    const broker = fakeBroker();
+    cleanups.push(broker.stop);
+    env.writeSettings({ CLAUDE_HIVEMIND_PORT: String(broker.port) });
+    const { a } = twoDirs();
+    const { inst } = await load(fakeV2Server(), a);
+    expect(inst.tools).toHaveLength(4);
+    await until(() => broker.registers.length > 0);
+    expect(broker.registers.map((r) => r.cwd)).toEqual([a]);
+  });
+
+  test("D9: the file's port beats the environment's", async () => {
+    const broker = fakeBroker();
+    cleanups.push(broker.stop);
+    const dead = fakeBroker();
+    dead.stop();
+    process.env.CLAUDE_HIVEMIND_PORT = String(dead.port);
+    env.writeSettings({ CLAUDE_HIVEMIND_PORT: String(broker.port) });
+    const { a } = twoDirs();
+    await load(fakeV2Server(), a);
+    await until(() => broker.registers.length > 0);
+    expect(broker.registers).toHaveLength(1);
+  });
+
+  test("D9: a malformed settings file falls back to the environment's port", async () => {
+    const broker = fakeBroker();
+    cleanups.push(broker.stop);
+    process.env.CLAUDE_HIVEMIND_PORT = String(broker.port);
+    env.writeSettings('{"CLAUDE_HIVEMIND_PORT": ');
+    const { a } = twoDirs();
+    await load(fakeV2Server(), a);
+    await until(() => broker.registers.length > 0);
+    expect(broker.registers).toHaveLength(1);
+  });
+
+  for (const bad of ["abc", "99999", ""]) {
+    test(`an invalid file port ${JSON.stringify(bad)} does not fail setup(); the env port is used`, async () => {
+      const broker = fakeBroker();
+      cleanups.push(broker.stop);
+      process.env.CLAUDE_HIVEMIND_PORT = String(broker.port);
+      env.writeSettings({ CLAUDE_HIVEMIND_PORT: bad });
+      const { a } = twoDirs();
+      const { inst } = await load(fakeV2Server(), a);
+      expect(inst.tools).toHaveLength(4);
+      await until(() => broker.registers.length > 0);
+      expect(broker.registers.map((r) => r.cwd)).toEqual([a]);
+    });
+  }
+
+  test("an empty env port does not fail setup(); it falls to 7899 and says so in the log", async () => {
+    const log = join(env.tempDir(), "plugin.log");
+    env.writeSettings({ CLAUDE_HIVEMIND_OPENCODE_LOG: log });
+    process.env.CLAUDE_HIVEMIND_PORT = "";
+    const { a } = twoDirs();
+    const { cleanup, inst } = await load(fakeV2Server(), a);
+    // Unload before the socket opens: nothing registers on a real broker at 7899.
+    await cleanup?.();
+    expect(inst.tools).toHaveLength(4);
+    expect(readFileSync(log, "utf8")).toContain('CLAUDE_HIVEMIND_PORT "" in the environment is not a port (1-65535); using 7899');
+  });
+
+  test("D9: the log file comes from the settings file", async () => {
+    const log = join(env.tempDir(), "plugin.log");
+    env.writeSettings({ CLAUDE_HIVEMIND_PORT: "1", CLAUDE_HIVEMIND_OPENCODE_LOG: log });
+    const { a } = twoDirs();
+    await load(fakeV2Server(), a);
+    expect(readFileSync(log, "utf8")).toContain(`${a}: loaded on OpenCode 2.4.2`);
+  });
+
+  test("the v2 register carries no workspace_id, even with CMUX_WORKSPACE_ID set on the server", async () => {
+    const broker = withBroker();
+    process.env.CMUX_WORKSPACE_ID = "ws-of-whoever-started-the-server";
+    const { a } = twoDirs();
+    await load(fakeV2Server(), a);
+    await until(() => broker.registers.length > 0);
+    expect(broker.registers).toHaveLength(1);
+    expect(broker.registers[0].workspace_id).toBeUndefined();
   });
 
   test("1.19's reduced context registers nothing, before or after server(); server() keeps one peer per process", async () => {
